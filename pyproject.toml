@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "inference"
+authors = [
+    {name = "Rosario Di Sommma", email = "rosario.disomma@dreamhost.com"},
+]
+description = "Event Inference Base Worker Classes"
+readme = "README.md"
+version = "0.0.0"
+requires-python = ">=3.13"
+license = {text = "Apache Software License 2.0"}
+dependencies = [
+    "confluent-kafka",
+    "redis",
+    "python-dotenv",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/inference"]
+
+[project.optional-dependencies]
+dev = []
+
+[tool.ruff]
+line-length = 100
+respect-gitignore = true

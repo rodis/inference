@@ -1,0 +1,10 @@
+.env
+workers/**/.env
+workers/**/certs/
+__pycache__/
+*.pyc
+.venv/
+dist/
+*.egg-info/
+helm/inference-worker/charts/
+helm/inference-worker/*.tgz
