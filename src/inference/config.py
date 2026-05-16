@@ -21,8 +21,8 @@ VECTOR_BASE_URL = _require("VECTOR_BASE_URL")
 
 # Kafka SSL cert file paths — default to the K8s Secret volume mount location.
 # Override via env vars when running locally (point to cert files on disk).
-KAFKA_SSL_CA_PATH   = os.environ.get("KAFKA_SSL_CA_PATH",   "/etc/kafka/ssl/ca.pem")
-KAFKA_SSL_CERT_PATH = os.environ.get("KAFKA_SSL_CERT_PATH", "/etc/kafka/ssl/access.pem")
+KAFKA_SSL_CA_PATH   = os.environ.get("KAFKA_SSL_CA_PATH",   "/etc/kafka/ssl/ca-cert.pem")
+KAFKA_SSL_CERT_PATH = os.environ.get("KAFKA_SSL_CERT_PATH", "/etc/kafka/ssl/access-cert.pem")
 KAFKA_SSL_KEY_PATH  = os.environ.get("KAFKA_SSL_KEY_PATH",  "/etc/kafka/ssl/access-key.pem")
 
 REDIS_CONFIG = {
