@@ -10,4 +10,7 @@ RUN pip install --no-cache-dir .
 # Copy the worker entrypoint
 COPY workers/home_arrival/main.py ./main.py
 
+RUN useradd -u 1000 -m worker
+USER 1000
+
 CMD ["python", "main.py"]
