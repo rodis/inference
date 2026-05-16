@@ -49,10 +49,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - id: slug
+        name: Slugify worker name for image tag
+        env:
+          WORKER: ${{ matrix.worker }}
+        run: echo "name=${WORKER//_/-}" >> "$GITHUB_OUTPUT"
+
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/inference-${{ matrix.worker }}
+          images: ghcr.io/${{ github.repository_owner }}/inference-${{ steps.slug.outputs.name }}
           tags: |
             type=raw,value=latest
             type=sha,format=short
