@@ -18,7 +18,6 @@ RULES = {
     "weights": {
         "device_connected_to_carplay": 10,
         "connect_to_home_wifi": 7,
-        "garage_door_opened": 5,
     },
 }
 
