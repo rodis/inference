@@ -3,13 +3,12 @@ import logging
 from confluent_kafka import Consumer
 
 from inference import config
+from inference.engines.weighted_window import WeightedWindowEngine
 from inference.observers.logging_observer import InferenceObserver
 from inference.transport.kafka_handler import KafkaStreamHandler
 from inference.transport.vector_http_emitter import VectorHttpEmitter
-from inference.utils import load_class
 
 
-ENGINE_CLASS = "inference.engines.weighted_window.WeightedWindowEngine"
 RULES = {
     "name": "home_arrival",
     "threshold": 10,
@@ -58,8 +57,7 @@ if __name__ == "__main__":
         url=f"{config.VECTOR_BASE_URL}/{EVENT_DOMAIN}/{APPLICATION}/{KAFKA_SINK_TOPIC}"
     )
 
-    engine_class = load_class(ENGINE_CLASS)
-    engine = engine_class(rules=RULES)
+    engine = WeightedWindowEngine(rules=RULES)
 
     stream_handler = KafkaStreamHandler(
         kafka_consumer=kafka_consumer,

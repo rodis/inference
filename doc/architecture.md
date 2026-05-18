@@ -97,7 +97,7 @@ Cluster-wide values, sourced from env vars / K8s Secrets, identical across every
 
 ### `workers/<name>/main.py` — per-worker config
 
-Each worker declares its own `ENGINE_CLASS`, `RULES`, `KAFKA_SOURCE_TOPICS`, `KAFKA_SINK_TOPIC`, `KAFKA_CONSUMER_GROUP`, `EVENT_DOMAIN`, `APPLICATION`. These are worker-specific with no shared default.
+Each worker imports its engine class directly and declares its own `RULES`, `KAFKA_SOURCE_TOPICS`, `KAFKA_SINK_TOPIC`, `KAFKA_CONSUMER_GROUP`, `EVENT_DOMAIN`, `APPLICATION`. These are worker-specific with no shared default.
 
 ### Engine module — engine-internal infra
 

@@ -43,7 +43,7 @@ The engine owns its internal state (Redis, windowing logic) and has no reference
 
 If an engine needs Redis, Postgres, or any other backend, it resolves that connection itself (typically via a helper in the engine module that reads env vars). `config.py` exposes only the infrastructure that the wiring layer needs directly — Kafka, SSL certs, Vector. Engine-internal config (e.g. `REDIS_*` env vars) is read by the engine itself and never appears in `config.py` or in `main.py`.
 
-**Why:** Different engines may use different backends. Forcing every backend through `config.py` and `main.py` creates a leaky abstraction where the worker has to know each engine's internal implementation. Engines should be swappable via `load_class()` without changing the worker.
+**Why:** Different engines may use different backends. Forcing every backend through `config.py` and `main.py` creates a leaky abstraction where the worker has to know each engine's internal implementation. Swapping engines should be a localized change to the worker's import + instantiation lines — not a ripple through shared config.
 
 **How to apply:** A worker constructing an engine should never pass connection config (`redis_config=...`, `db_url=...`, etc.). It passes only the engine's *logical* config — rules, thresholds, weights. For testability, engine `__init__` may accept an optional override (`redis_config: dict | None = None`); production code passes nothing.
 
@@ -83,15 +83,7 @@ A message is never retried indefinitely. If a message cannot be processed, it is
 **Shared infra config lives in `config.py`. Per-worker config lives in `workers/<name>/main.py`. Engine-internal infra lives in the engine module.**
 
 - `config.py` holds only the cluster-shared infrastructure that the wiring layer touches directly: Kafka bootstrap servers, SSL cert paths, Vector base URL. Sourced from env vars / K8s Secrets and identical across all workers.
-- Each worker's `main.py` declares its own per-worker config: `ENGINE_CLASS`, `RULES`, source/sink topics, consumer group, event domain, application name. Worker-specific, no meaningful shared default.
+- Each worker's `main.py` imports its engine class directly and declares its own per-worker config: `RULES`, source/sink topics, consumer group, event domain, application name. Worker-specific, no meaningful shared default.
 - Engine-internal infra (Redis connection, future Postgres connection, etc.) lives in the engine module — see **Engine-Owned Infrastructure**. It must not appear in `config.py` or `main.py`.
 
 `main.py` is still only wiring — it does not contain logic. The per-worker constants at the top of the file are the worker's ConfigMap-equivalent.
-
----
-
-## Dynamic Engine Loading
-
-**The engine class is never imported directly in `main.py`.**
-
-`load_class(ENGINE_CLASS)` resolves the engine at runtime from a fully qualified string declared in the worker's `main.py`. This allows swapping engine implementations without changing the import graph.
