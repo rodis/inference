@@ -1,0 +1,24 @@
+name: Mirror deploy-state
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/**'
+
+concurrency:
+  group: mirror-deploy-state-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Force-push main to deploy-state
+        run: git push --force origin HEAD:deploy-state

@@ -108,15 +108,18 @@ jobs:
             echo "Bumped $values -> sha-${short}"
           done
 
-      - name: Commit and push
+      - name: Commit bump and force-push to deploy-state
         run: |
           set -euo pipefail
-          if git diff --quiet -- deploy/; then
-            echo "No manifest changes to commit"
-            exit 0
-          fi
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- deploy/; then
+            # No image actually changed (e.g. re-run on same SHA) — still mirror main to deploy-state
+            git push --force origin HEAD:deploy-state
+            exit 0
+          fi
           git add deploy/
-          git commit -m "chore(deploy): bump image tags to sha-${GITHUB_SHA:0:7}"
-          git push origin HEAD:main
+          git commit \
+            -m "deploy: image tags @ sha-${GITHUB_SHA:0:7}" \
+            --trailer "Code-Commit:${GITHUB_SHA}"
+          git push --force origin HEAD:deploy-state
