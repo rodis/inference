@@ -54,15 +54,17 @@ Engines must read from `message` only. See `doc/invariants.md`.
 ## Deployment Model
 
 - One pod per inference type (e.g., `home_arrival`, `car_departure`)
-- Engine class and rules are injected at runtime via Kubernetes ConfigMap
-- Credentials (Kafka SSL, Redis) are injected via Kubernetes Secrets (currently hardcoded in `config.py` for local testing)
+- Engine class and rules are baked into each worker's `main.py` (see the **Configuration Source** invariant)
+- Cluster-shared infra env vars (`KAFKA_BOOTSTRAP_SERVERS`, `VECTOR_BASE_URL`) come from a Kubernetes ConfigMap
+- Credentials are injected via Kubernetes Secrets: Kafka mTLS certs are mounted as files and read by `config.py`; Redis credentials (`REDIS_HOST`/`PORT`/`DB`/`USERNAME`/`PASSWORD`) are mounted as env vars and read directly by the engine
+- Locally, all env vars come from `workers/.env` (loaded via `dotenv` at `config.py` import)
 - Redis is used for distributed windowed state — multiple replicas of the same engine share the same ZSET buffer and cooldown lock
 
 ## Data Flow
 
 1. `KafkaStreamHandler` polls `source_topics` in a blocking loop
 2. Each message is decoded from JSON and passed to `InferenceEngine.process()`
-3. If `process()` returns a result dict, it is logged via `Observer` and produced to `inference_topic`
+3. If `process()` returns a result dict, it is logged via `Observer` and forwarded to the sink via `Emitter.emit()` (HTTP POST to Vector → Kafka `high_level_events`)
 4. The consumer offset is manually committed after every message (success or skip)
 
 ## Components
@@ -76,18 +78,27 @@ Engines must read from `message` only. See `doc/invariants.md`.
 | `InferenceObserver` | `observers/logging_observer.py` | Structured logging implementation |
 | `Emitter` | `transport/protocol.py` | Protocol defining the emitter contract |
 | `VectorHttpEmitter` | `transport/vector_http_emitter.py` | HTTP POST to Vector |
-| `config.py` | `src/inference/config.py` | ConfigMap emulation for local development |
+| `config.py` | `src/inference/config.py` | Reads cluster-shared infra env vars (Kafka, Vector) sourced from ConfigMap in prod / `workers/.env` locally |
 | `workers/home_arrival/main.py` | `workers/home_arrival/main.py` | Worker entrypoint — wires all components together |
 
-## Configuration (`config.py`)
+## Configuration
 
-`config.py` emulates values that would be injected via Kubernetes ConfigMap in production. It is not committed with real credentials in production deployments.
+Three layers, each owning a different scope (see `doc/invariants.md` → **Configuration Source** and **Engine-Owned Infrastructure**):
+
+### `src/inference/config.py` — shared infra used by the wiring layer
+
+Cluster-wide values, sourced from env vars / K8s Secrets, identical across every worker:
 
 | Key | Description |
 |---|---|
-| `ENGINE_CLASS` | Fully qualified class name, loaded dynamically via `load_class()` |
-| `SOURCE_TOPICS` | List of Kafka topics to consume from |
-| `CONSUMER_GROUP` | Kafka consumer group ID |
-| `VECTOR_URL` | HTTP endpoint of the Vector instance that receives inference results |
-| `REDIS_CONFIG` | Redis connection parameters |
-| `RULES` | Engine-specific configuration (weights, threshold, window, cooldown) |
+| `KAFKA_BOOTSTRAP_SERVERS` | Kafka broker list |
+| `KAFKA_SSL_CA_PATH` / `KAFKA_SSL_CERT_PATH` / `KAFKA_SSL_KEY_PATH` | Kafka mTLS cert paths (default to K8s Secret mount locations) |
+| `VECTOR_BASE_URL` | Base URL of the Vector instance that receives inference results |
+
+### `workers/<name>/main.py` — per-worker config
+
+Each worker declares its own `ENGINE_CLASS`, `RULES`, `KAFKA_SOURCE_TOPICS`, `KAFKA_SINK_TOPIC`, `KAFKA_CONSUMER_GROUP`, `EVENT_DOMAIN`, `APPLICATION`. These are worker-specific with no shared default.
+
+### Engine module — engine-internal infra
+
+The engine resolves its own backend connection from env vars. `WeightedWindowEngine` reads `REDIS_HOST` / `REDIS_PORT` / `REDIS_DB` / `REDIS_USERNAME` / `REDIS_PASSWORD` via `_redis_config_from_env()` inside `weighted_window.py`. Other engines may use different backends; the worker layer never plumbs them through.

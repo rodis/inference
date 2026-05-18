@@ -1,10 +1,21 @@
+import os
 import time
 
 import redis
 
 
+def _redis_config_from_env() -> dict:
+    return {
+        "host":     os.environ["REDIS_HOST"],
+        "port":     int(os.environ["REDIS_PORT"]),
+        "db":       int(os.environ.get("REDIS_DB", "0")),
+        "username": os.environ.get("REDIS_USERNAME", "default"),
+        "password": os.environ["REDIS_PASSWORD"],
+    }
+
+
 class WeightedWindowEngine:
-    def __init__(self, rules: dict, redis_config: dict):
+    def __init__(self, rules: dict, redis_config: dict | None = None):
         self.weights = rules.get("weights", {})
         self.threshold = rules["threshold"]
         self.window = rules["window_seconds"]
@@ -15,8 +26,9 @@ class WeightedWindowEngine:
         self.zset_key = f"inference:{name}:buffer"
         self.lock_key = f"inference:{name}:lock"
 
+        cfg = redis_config if redis_config is not None else _redis_config_from_env()
         # decode_responses=True so Redis returns str instead of bytes
-        self.redis = redis.Redis(**redis_config, decode_responses=True, ssl=True)
+        self.redis = redis.Redis(**cfg, decode_responses=True, ssl=True)
 
     def process(self, payload: dict) -> dict | None:
         message = payload.get("message", {})

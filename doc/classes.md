@@ -31,10 +31,14 @@ Returns an inference result dict when the engine triggers, `None` when it does n
 Structural protocol for observing engine lifecycle events.
 
 ```python
+def on_start(self, topics: list[str]) -> None
 def on_received(self, payload: dict) -> None
 def on_inference(self, result: dict) -> None
 def on_error(self, error: Exception, context: str | None = None) -> None
+def on_shutdown(self) -> None
 ```
+
+`on_start` fires once when `KafkaStreamHandler.start()` subscribes to topics; `on_shutdown` fires on SIGTERM/SIGINT.
 
 ---
 
@@ -46,8 +50,10 @@ Time-windowed, weighted threshold inference engine backed by Redis.
 
 **Constructor:**
 ```python
-WeightedWindowEngine(rules: dict, redis_config: dict)
+WeightedWindowEngine(rules: dict, redis_config: dict | None = None)
 ```
+
+`redis_config` is optional. When omitted (the production default), the engine builds its own connection from `REDIS_HOST` / `REDIS_PORT` / `REDIS_DB` / `REDIS_USERNAME` / `REDIS_PASSWORD` env vars via `_redis_config_from_env()`. Tests may pass an explicit dict to inject a fake Redis. See the **Engine-Owned Infrastructure** invariant.
 
 **`rules` keys:**
 

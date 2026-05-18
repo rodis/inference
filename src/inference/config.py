@@ -24,11 +24,3 @@ VECTOR_BASE_URL = _require("VECTOR_BASE_URL")
 KAFKA_SSL_CA_PATH   = os.environ.get("KAFKA_SSL_CA_PATH",   "/etc/kafka/ssl/ca-cert.pem")
 KAFKA_SSL_CERT_PATH = os.environ.get("KAFKA_SSL_CERT_PATH", "/etc/kafka/ssl/access-cert.pem")
 KAFKA_SSL_KEY_PATH  = os.environ.get("KAFKA_SSL_KEY_PATH",  "/etc/kafka/ssl/access-key.pem")
-
-REDIS_CONFIG = {
-    "host":     _require("REDIS_HOST"),
-    "port":     int(_require("REDIS_PORT")),
-    "db":       int(os.environ.get("REDIS_DB", "0")),
-    "username": os.environ.get("REDIS_USERNAME", "default"),
-    "password": _require("REDIS_PASSWORD"),
-}

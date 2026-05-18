@@ -59,7 +59,7 @@ if __name__ == "__main__":
     )
 
     engine_class = load_class(ENGINE_CLASS)
-    engine = engine_class(rules=RULES, redis_config=config.REDIS_CONFIG)
+    engine = engine_class(rules=RULES)
 
     stream_handler = KafkaStreamHandler(
         kafka_consumer=kafka_consumer,
