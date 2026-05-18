@@ -16,8 +16,10 @@ RULES = {
     "window_seconds": 600,
     "cooldown_seconds": 10,
     "weights": {
-        "device_connected_to_carplay": 10,
-        "connect_to_home_wifi": 7,
+        "car_lock_state_change": 4,
+        "device_disconnected_from_power": 3,
+        "device_disconnected_from_carplay": 4,
+        #"connect_to_home_wifi": 7,
     },
 }
 
