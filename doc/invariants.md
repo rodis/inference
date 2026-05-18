@@ -83,7 +83,8 @@ A message is never retried indefinitely. If a message cannot be processed, it is
 **Shared infra config lives in `config.py`. Per-worker config lives in `workers/<name>/main.py`. Engine-internal infra lives in the engine module.**
 
 - `config.py` holds only the cluster-shared infrastructure that the wiring layer touches directly: Kafka bootstrap servers, SSL cert paths, Vector base URL. Sourced from env vars / K8s Secrets and identical across all workers.
-- Each worker's `main.py` imports its engine class directly and declares its own per-worker config: `RULES`, source/sink topics, consumer group, event domain, application name. Worker-specific, no meaningful shared default.
+- Each worker's `main.py` imports its engine class directly and declares its own per-worker config: `RULES`, source/sink topics, consumer group, event domain. Worker-specific, no meaningful shared default.
+- The worker's identity — `RULES["name"]` and `APPLICATION` — must be derived from the directory name via `WORKER_NAME = Path(__file__).parent.name`, never declared as a literal. The directory layout is the source of truth; this prevents copy-paste drift across workers.
 - Engine-internal infra (Redis connection, future Postgres connection, etc.) lives in the engine module — see **Engine-Owned Infrastructure**. It must not appear in `config.py` or `main.py`.
 
 `main.py` is still only wiring — it does not contain logic. The per-worker constants at the top of the file are the worker's ConfigMap-equivalent.

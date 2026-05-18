@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 
 from confluent_kafka import Consumer
 
@@ -9,8 +10,10 @@ from inference.transport.kafka_handler import KafkaStreamHandler
 from inference.transport.vector_http_emitter import VectorHttpEmitter
 
 
+WORKER_NAME = Path(__file__).parent.name
+
 RULES = {
-    "name": "home_arrival",
+    "name": WORKER_NAME,
     "threshold": 10,
     "window_seconds": 600,
     "cooldown_seconds": 10,
@@ -23,7 +26,7 @@ RULES = {
 }
 
 EVENT_DOMAIN = "sensors"
-APPLICATION = "home_arrival"
+APPLICATION = WORKER_NAME
 
 KAFKA_CONSUMER_GROUP = "inference-engine-v1"
 KAFKA_SOURCE_TOPICS = ["raw_sensors"]
