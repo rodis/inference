@@ -1,7 +1,7 @@
 deployment:
   image:
     repository: ghcr.io/rodis/inference-home-arrival
-    tag: "sha-c61af3c"
+    tag: "sha-af4cb82"
     pullPolicy: IfNotPresent
   env:
     KAFKA_BOOTSTRAP_SERVERS:
