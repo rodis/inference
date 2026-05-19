@@ -97,7 +97,7 @@ Cluster-wide values, sourced from env vars / K8s Secrets, identical across every
 
 ### `workers/<name>/main.py` — per-worker config
 
-Each worker imports its engine class directly and declares its own `RULES`, `KAFKA_SOURCE_TOPICS`, `KAFKA_SINK_TOPIC`, `KAFKA_CONSUMER_GROUP`, `EVENT_DOMAIN`. These are worker-specific with no shared default. The worker's identity (`RULES["name"]` and `APPLICATION`) is derived from the directory name via `WORKER_NAME = Path(__file__).parent.name`, not declared as a literal.
+Each worker imports its engine class directly and declares its own `RULES`, `KAFKA_SOURCE_TOPICS`, `KAFKA_SINK_TOPIC`, `EVENT_DOMAIN`. These are worker-specific with no shared default. The worker's identity is derived from the directory name in two forms: `WORKER_NAME = Path(__file__).parent.name` (snake_case, used for `RULES["name"]`, `APPLICATION`, and other data-layer references) and `WORKER_SLUG = WORKER_NAME.replace("_", "-")` (kebab-case, used in `KAFKA_CONSUMER_GROUP` and other infra-layer identifiers). See `doc/invariants.md` for the full rule.
 
 ### Engine module — engine-internal infra
 

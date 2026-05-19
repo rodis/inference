@@ -10,7 +10,8 @@ from inference.transport.kafka_handler import KafkaStreamHandler
 from inference.transport.vector_http_emitter import VectorHttpEmitter
 
 
-WORKER_NAME = Path(__file__).parent.name
+WORKER_NAME = Path(__file__).parent.name        # snake_case — data layer (Redis keys, payloads, logs)
+WORKER_SLUG = WORKER_NAME.replace("_", "-")     # kebab-case — infra layer (K8s, Docker, Kafka group)
 
 RULES = {
     "name": WORKER_NAME,
@@ -28,7 +29,7 @@ RULES = {
 EVENT_DOMAIN = "sensors"
 APPLICATION = WORKER_NAME
 
-KAFKA_CONSUMER_GROUP = "inference-engine-v1"
+KAFKA_CONSUMER_GROUP = f"inference-{WORKER_SLUG}-v1"
 KAFKA_SOURCE_TOPICS = ["raw_sensors"]
 KAFKA_SINK_TOPIC = "high_level_events"
 
