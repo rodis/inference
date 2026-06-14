@@ -9,6 +9,7 @@ The [`doc/`](doc/) folder is the source of truth for architecture and design rul
 - [`doc/architecture.md`](doc/architecture.md) — pipeline diagram, payload envelope, deployment model, configuration layers.
 - [`doc/invariants.md`](doc/invariants.md) — design rules that must hold across the codebase. Verify these still hold when adding engines, observers, or transport adapters.
 - [`doc/classes.md`](doc/classes.md) — per-class reference (protocols, algorithm, result shape).
+- [`doc/adr/`](doc/adr/) — architecture decision records. [`0001-message-shaping-pipeline.md`](doc/adr/0001-message-shaping-pipeline.md) is a **design-only** target (decide → enrich → emit, capability model, future persistence); not yet implemented.
 
 When you modify behavior that one of these documents describes, update the document in the same change.
 
