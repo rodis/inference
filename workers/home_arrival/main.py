@@ -6,6 +6,8 @@ from confluent_kafka import Consumer
 from inference import config
 from inference.engines.weighted_window import WeightedWindowEngine
 from inference.observers.logging_observer import InferenceObserver
+from inference.pipeline.enrichers import GeoEnricher, LineageEnricher
+from inference.pipeline.runner import EnrichmentPipeline
 from inference.transport.kafka_handler import KafkaStreamHandler
 from inference.transport.vector_http_emitter import VectorHttpEmitter
 
@@ -25,6 +27,14 @@ RULES = {
         #"connect_to_home_wifi": 7,
     },
 }
+
+# Ordered enricher chain — shapes the message after the engine decides + assembles
+# the core. Per-worker config, like RULES. Order is the chain order; each enricher
+# self-decides whether it applies.
+ENRICHERS = [
+    LineageEnricher(),                  # always → derived_from
+    GeoEnricher(strategy="centroid"),   # only if contributors are geolocated (no-op today)
+]
 
 EVENT_DOMAIN = "sensors"
 APPLICATION = WORKER_NAME
@@ -62,11 +72,13 @@ if __name__ == "__main__":
     )
 
     engine = WeightedWindowEngine(rules=RULES)
+    pipeline = EnrichmentPipeline(enrichers=ENRICHERS)
 
     stream_handler = KafkaStreamHandler(
         kafka_consumer=kafka_consumer,
         engine=engine,
         observer=observer,
         emitter=emitter,
+        pipeline=pipeline,
     )
     stream_handler.start(source_topics=KAFKA_SOURCE_TOPICS)

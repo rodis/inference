@@ -1,11 +1,12 @@
 # ADR 0001 — Message shaping pipeline: decide → enrich → emit
 
-Status: **Accepted (design only — not yet implemented)**
+Status: **Accepted — Phase 1 implemented; Phases 2–3 pending**
 Date: 2026-06-14
 
-> This is a design/decision record. It describes a **target** architecture and the reasoning
-> behind it. No code in this repository implements it yet; the "Current state" sections describe
-> what exists today so the gap is explicit. Implementation is staged in [Phased rollout](#phased-rollout).
+> This is a design/decision record describing the **target** architecture and its rationale.
+> **Phase 1 (the decide → enrich → emit refactor) is implemented**; the typed-message layer and
+> persistence (Phases 2–3) are not. Where a section describes capabilities (typed messages,
+> `envelope_id`, PostGIS) those remain target-state. See [Phased rollout](#phased-rollout) for status.
 
 ---
 
@@ -137,20 +138,20 @@ refactor is **internal to the worker** and does not alter the Vector/Kafka contr
 The chain carries a neutral, frozen builder, **not** a partially-built typed message:
 
 ```python
-class Contributor(BaseModel):       # frozen
-    envelope_id: UUID | None = None   # None until envelope_id lands (Phase 2)
-    event_name: str
-    timestamp: float
-    message: dict                     # full source body — enrichers inspect this
-
 class DerivedDraft(BaseModel):      # frozen; enrichers use model_copy(update=...)
     inference_type: str
     event_name: str
     confidence_score: float           # see open question on cross-engine core
     occurred_at: float
-    contributors: tuple[Contributor, ...]
+    contributors: tuple[Envelope, ...]  # the contributing source events, in full
     fields: dict = {}                 # capability output accretes here (location, derived_from, …)
 ```
+
+A contributor *is* a source event, which in this system is an `Envelope`. Carrying the full
+envelope (rather than a flattened `{event_name, timestamp, message}` struct) avoids duplicating the
+message's own fields, gives enrichers complete context (message body for geo, source metadata), and
+means `envelope_id` flows into lineage automatically once Vector mints it in Phase 2 — no extra
+plumbing. The engine persists the full envelope in its window store and reconstructs it on trigger.
 
 Rationale: a partially-built *typed* model is always invalid mid-chain (fights pydantic's
 validate-on-construction). A neutral draft lets enrichers accrete `fields` freely; validation against
@@ -277,10 +278,11 @@ pipeline.
 
 ## Phased rollout
 
-1. **Phase 1 — enricher pipeline refactor.** `engine.decide() -> DerivedDraft`, `EnrichmentPipeline`,
-   `LineageEnricher`, `GeoEnricher` scaffold (no-op until geolocated data exists), `WeightedWindowEngine`
-   contributor persistence, `ENRICHERS` wiring in `main.py`. Message stays a dict / duck-typed; engine
-   output stays Vector-compatible. No external dependencies.
+1. **Phase 1 — enricher pipeline refactor. ✅ IMPLEMENTED.** `engine.decide() -> DerivedDraft`,
+   `EnrichmentPipeline`, `LineageEnricher`, `GeoEnricher` scaffold (no-op until geolocated data exists),
+   `WeightedWindowEngine` contributor persistence (Redis HASH), `ENRICHERS` wiring in `main.py`. Message
+   stays a dict / duck-typed; the emitted payload is a superset of the prior output (adds `derived_from`),
+   so it stays Vector-compatible. No external dependencies.
 2. **Phase 2 — typed message layer.** `MessageBase`/registry/`OpaqueMessage`, `GeoLocated`/`Derived`
    mixins + Protocols, `envelope_id` (worker `default_factory`, then Vector `uuid_v7()` minting).
    Enrichers switch from dict duck-typing to real Protocol dispatch.

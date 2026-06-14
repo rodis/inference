@@ -17,11 +17,14 @@ Kafka (raw_sensors)
  KafkaStreamHandler           ← transport layer; owns consumer loop + commit strategy
     │
     ▼
-  InferenceEngine.process()   ← pluggable inference logic
+  InferenceEngine.decide()    ← pluggable: decides + assembles the core (+ contributors)
     │
- dict | None
+ DerivedDraft | None
     │
     ▼ (if not None)
+  EnrichmentPipeline          ← ordered enrichers shape the message (lineage, geo, …)
+    │  finalize() → dict
+    ▼
   Emitter.emit()              ← pluggable output target
     │  HTTP POST (inference result)
     ▼
@@ -63,17 +66,23 @@ Engines must read from `message` only. See `doc/invariants.md`.
 ## Data Flow
 
 1. `KafkaStreamHandler` polls `source_topics` in a blocking loop
-2. Each message is decoded from JSON and passed to `InferenceEngine.process()`
-3. If `process()` returns a result dict, it is logged via `Observer` and forwarded to the sink via `Emitter.emit()` (HTTP POST to Vector → Kafka `high_level_events`)
+2. Each message is parsed into an `Envelope` and passed to `InferenceEngine.decide()`
+3. If `decide()` returns a `DerivedDraft`, the worker runs it through the `EnrichmentPipeline` (which shapes the message and `finalize()`s it to a dict), logs it via `Observer`, and forwards it to the sink via `Emitter.emit()` (HTTP POST to Vector → Kafka `high_level_events`)
 4. The consumer offset is manually committed after every message (success or skip)
+
+See `doc/adr/0001-message-shaping-pipeline.md` for the decide → enrich → emit design.
 
 ## Components
 
 | Component | Location | Responsibility |
 |---|---|---|
-| `KafkaStreamHandler` | `transport/kafka_handler.py` | Kafka consumer loop, signal handling, commit strategy |
-| `InferenceEngine` | `engines/protocol.py` | Protocol defining the engine contract |
-| `WeightedWindowEngine` | `engines/weighted_window.py` | Time-windowed weighted threshold inference |
+| `KafkaStreamHandler` | `transport/kafka_handler.py` | Kafka consumer loop, signal handling, commit strategy; runs decide → pipeline → emit |
+| `InferenceEngine` | `engines/protocol.py` | Protocol defining the engine contract (`decide() -> DerivedDraft \| None`) |
+| `WeightedWindowEngine` | `engines/weighted_window.py` | Time-windowed weighted threshold inference (decider; engine-private Redis state) |
+| `DerivedDraft` | `pipeline/draft.py` | Neutral carrier the engine produces (core + `contributors: tuple[Envelope]`) |
+| `Enricher` | `pipeline/protocol.py` | Protocol for a single-capability message shaper |
+| `EnrichmentPipeline` / `finalize` | `pipeline/runner.py` | Folds enrichers over the draft, finalizes to the transport dict |
+| `LineageEnricher` / `GeoEnricher` | `pipeline/enrichers/` | `derived_from` (always) / `location` (if contributors geolocated) |
 | `Observer` | `observers/protocol.py` | Protocol defining the observer contract |
 | `InferenceObserver` | `observers/logging_observer.py` | Structured logging implementation |
 | `Emitter` | `transport/protocol.py` | Protocol defining the emitter contract |

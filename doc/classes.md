@@ -37,13 +37,25 @@ The transport layer calls `emit()` when the engine returns a result. The emitter
 
 ### `InferenceEngine` — `engines/protocol.py`
 
-Structural protocol. Any class implementing `process()` satisfies it — no inheritance required.
+Structural protocol. Any class implementing `decide()` satisfies it — no inheritance required. Swappable: `WeightedWindowEngine` is one implementation; a Bayesian (or other) engine is a drop-in.
 
 ```python
-def process(self, payload: Envelope) -> dict | None
+def decide(self, payload: Envelope) -> DerivedDraft | None
 ```
 
-Accepts the parsed `Envelope` and returns an inference result dict when the engine triggers, `None` when it does not. The transport layer handles emission; the engine has no knowledge of Kafka.
+Accepts the parsed `Envelope`; returns a `DerivedDraft` (core + contributors) when the engine triggers, `None` when it does not. The engine decides and assembles the core only — message shaping is the enrichment pipeline's job. The engine has no knowledge of Kafka, the emitter, or the pipeline.
+
+---
+
+### `Enricher` — `pipeline/protocol.py`
+
+Structural protocol (`@runtime_checkable`). Each enricher shapes one capability of a derived event.
+
+```python
+def enrich(self, draft: DerivedDraft) -> DerivedDraft
+```
+
+Self-decides applicability (returns the draft unchanged when its capability doesn't apply), and is pure (returns a new draft via `model_copy(update=...)`, never mutates).
 
 ---
 
@@ -86,40 +98,50 @@ WeightedWindowEngine(rules: dict, redis_config: dict | None = None)
 | `window_seconds` | `int` | How far back to look for contributing events |
 | `cooldown_seconds` | `int` | How long to suppress re-triggering after a successful inference (default: 1800) |
 
-**Algorithm:**
+**Algorithm (`decide`):**
 1. Drop the event if `payload.message["event_name"]` is not in `weights` (no Redis hit)
-2. Add the event to a Redis ZSET scored by timestamp
-3. Prune entries older than `window_seconds`
+2. Add the event to a Redis ZSET scored by timestamp, and store its full body in a parallel Redis HASH (`inference:<name>:contributors`)
+3. Prune the ZSET to `window_seconds`; prune the HASH to the surviving members
 4. Fetch all active entries; deduplicate by event type keeping the earliest occurrence
 5. Sum weights of unique contributors
-6. If score ≥ threshold and no cooldown lock is active, emit and set the lock atomically via `SET NX EX`
+6. If score ≥ threshold and no cooldown lock is active, take the lock atomically via `SET NX EX`
+7. Fetch the contributing bodies and return a `DerivedDraft` (core + `contributors`). No message shaping happens here.
 
-**Result dict** (follows the metadata/data invariant — see `doc/invariants.md`):
+The ZSET/HASH/lock are private to this engine (see the **Engine-Owned Infrastructure** invariant); they are not part of the engine Protocol.
+
+**Returns** a `DerivedDraft` (`pipeline/draft.py`) — core (`event_name`, `confidence_score`, `occurred_at`) + `contributors: tuple[Envelope, ...]`, the contributing source events as their full `Envelope`s (so enrichers get the message body, source metadata, and — once minted — `envelope_id`). Shaping (`sources`/`evidence`/`derived_from`/`location`) is the pipeline's job, not the engine's.
+
+---
+
+### `EnrichmentPipeline` / `finalize` — `pipeline/runner.py`
+
+`EnrichmentPipeline(enrichers: list[Enricher])` folds the enrichers over the draft (best-effort: a raising enricher is logged and skipped), then `finalize(draft)` returns the transport dict:
 
 ```python
 {
-    "inference_type": "...",   # metadata — identifies the inference event type
-    "processed_at": 1234.0,   # metadata — wall-clock time of the trigger
+    "inference_type": "...",   # metadata
+    "processed_at": 1234.0,   # metadata — wall-clock at finalize
     "message": {
-        "event_name": "...",              # canonical event identifier
-        "confidence_score": 12,           # total weight of contributing events
-        "occurred_at": 1777673675.0,      # average timestamp of unique contributors
-        "sources": ["event_a", "event_b"],# contributing event type names
-        "evidence": {                     # full trace for debugging / Gold Layer
-            "event_a": 1777673670.0,
-            "event_b": 1777673675.0,
-        },
+        "event_name": "...",
+        "confidence_score": 12,
+        "occurred_at": 1777673675.0,
+        "sources": ["event_a", "event_b"],          # reconstructed from contributors
+        "evidence": {"event_a": ..., "event_b": ...},# reconstructed from contributors
+        "derived_from": [...],                       # added by LineageEnricher
+        # "location": {...}                          # added by GeoEnricher iff applicable
     },
 }
 ```
 
-The result dict is POSTed to Vector, which re-wraps it in an `Envelope` before publishing to `high_level_events`.
+`sources`/`evidence` are reconstructed in `finalize` so the payload stays a superset of the pre-pipeline output. The dict is POSTed to Vector, which re-wraps it in an `Envelope` for `high_level_events`.
+
+**Enrichers** (`pipeline/enrichers/`): `LineageEnricher` (always → `derived_from`; `envelope_id` is `None` until Phase 2), `GeoEnricher(strategy="centroid")` (sets `location` only if contributors carry coordinates — a no-op today, no producer emits them).
 
 ---
 
 ### `KafkaStreamHandler` — `transport/kafka_handler.py`
 
-Drives the Kafka consumer loop and delegates to the engine and emitter.
+Drives the Kafka consumer loop and delegates to the engine, pipeline, and emitter.
 
 **Constructor:**
 ```python
@@ -128,8 +150,11 @@ KafkaStreamHandler(
     engine: InferenceEngine,
     observer: Observer,
     emitter: Emitter,
+    pipeline: EnrichmentPipeline,
 )
 ```
+
+Per message: `engine.decide(envelope)` → if a draft is returned, `pipeline.run(draft)` → `emitter.emit(result)`.
 
 **`start(source_topics: list[str])`** — blocking; exits cleanly on SIGTERM/SIGINT.
 

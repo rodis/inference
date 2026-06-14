@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from inference.engines.protocol import InferenceEngine
 from inference.events import Envelope
 from inference.observers.protocol import Observer
+from inference.pipeline.runner import EnrichmentPipeline
 from inference.transport.protocol import Emitter
 
 
@@ -17,11 +18,13 @@ class KafkaStreamHandler:
         engine: InferenceEngine,
         observer: Observer,
         emitter: Emitter,
+        pipeline: EnrichmentPipeline,
     ):
         self.consumer = kafka_consumer
         self.engine = engine
         self.observer = observer
         self.emitter = emitter
+        self.pipeline = pipeline
         self._running = False
 
     def start(self, source_topics: list[str]) -> None:
@@ -51,9 +54,12 @@ class KafkaStreamHandler:
                     payload = Envelope.model_validate_json(msg.value())
                     self.observer.on_received(payload)
 
-                    result = self.engine.process(payload)
+                    draft = self.engine.decide(payload)
 
-                    if result is not None:
+                    if draft is not None:
+                        # engine decided + assembled the core; the pipeline shapes the
+                        # message (lineage, geo, ...) and finalizes it to a transport dict
+                        result = self.pipeline.run(draft)
                         self.observer.on_inference(result)
                         try:
                             self.emitter.emit(result)

@@ -32,12 +32,30 @@ Engines must read `event_name` and `timestamp` from `payload.message`, never fro
 
 ## Engine Contract
 
-**`process()` accepts an `Envelope` and returns `dict | None`. The engine never produces to Kafka.**
+**`decide()` accepts an `Envelope` and returns a `DerivedDraft | None`. The engine decides and assembles the core; it does not shape the message.**
 
 - `None` → no inference triggered; transport commits and moves on
-- `dict` → inference triggered; transport forwards the result to the sink (via the Emitter), which POSTs it to Vector. Vector re-wraps it in an `Envelope` before publishing to `high_level_events`.
+- `DerivedDraft` → inference triggered. The draft carries only the **core** (`event_name`, `confidence_score`, `occurred_at`) plus the **contributors** (the source events, with their full bodies). The engine does *not* build `sources`/`evidence`/`location` or any capability-specific shape.
 
-The engine owns its internal state (Redis, windowing logic) and has no reference to the Kafka producer, consumer, or observer.
+`InferenceEngine` is a swappable Protocol — `WeightedWindowEngine` is one implementation; others (e.g. a Bayesian engine) may follow. The gatekeeper, time window, weights, cooldown lock, and Redis are implementation details of `WeightedWindowEngine`, never part of the engine Protocol or of `DerivedDraft`. The engine has no reference to the Kafka producer, consumer, observer, or emitter.
+
+See `doc/adr/0001-message-shaping-pipeline.md` for the design rationale and the future-state target.
+
+---
+
+## Enrichment Pipeline
+
+**The message is shaped by an ordered chain of enrichers, not by the engine.**
+
+After the engine returns a `DerivedDraft`, the worker runs it through an `EnrichmentPipeline` — an ordered list of `Enricher`s (`enrich(draft) -> draft`) configured per-worker in `main.py` next to `RULES`. Each enricher:
+
+- owns exactly **one** capability and **self-decides applicability** — if its capability doesn't apply (e.g. the contributors aren't geolocated), it returns the draft unchanged;
+- is **pure**: returns a new draft via `model_copy(update=...)`, never mutates the input;
+- decides applicability from the **contributors** (a derived event gains a capability only if its contributors support it).
+
+The pipeline is **best-effort**: by the time it runs, the engine has already decided to fire (possibly with irreversible side effects), so a raising enricher is logged and skipped — the event is still emitted, partially enriched. `finalize()` then merges the core + accreted capability fields into the transport dict; the Emitter still receives a `dict`, which Vector re-wraps into an `Envelope` for `high_level_events`.
+
+**Contributor data:** because enrichers shape the derived event from its contributors, the engine must supply the contributing source events as full `Envelope`s in the draft (`DerivedDraft.contributors: tuple[Envelope, ...]`), not a flattened subset. *How* it retains them is engine-private (`WeightedWindowEngine` keeps the full envelopes in a Redis HASH pruned alongside its ZSET).
 
 ---
 
