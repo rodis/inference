@@ -1,5 +1,7 @@
 import logging
 
+from inference.events import Envelope
+
 
 class InferenceObserver:
     def __init__(self, name: str):
@@ -8,7 +10,7 @@ class InferenceObserver:
     def on_start(self, topics: list[str]) -> None:
         self.logger.info(f"Starting, subscribed to topics: {topics}")
 
-    def on_received(self, payload: dict) -> None:
+    def on_received(self, payload: Envelope) -> None:
         self.logger.debug(f"Received event: {payload}")
 
     def on_inference(self, result: dict) -> None:

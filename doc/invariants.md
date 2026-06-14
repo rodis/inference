@@ -8,30 +8,34 @@ Design rules that must hold across the entire codebase. When adding new engines,
 
 **`message` contains data. Everything outside `message` is metadata.**
 
+The inbound schema is enforced by the pydantic `Envelope` model in `src/inference/events/envelope.py`. Vector wraps every event in this shape before publishing to Kafka:
+
 ```python
-{
-    "event_name": "...",          # metadata — routing/filtering hint
-    "source_app": "shortcut",    # metadata
-    "source_type": "http_server",# metadata
-    "timestamp": "2026-...",     # metadata — ISO string, wall-clock arrival time
-    "message": {
-        "event_name": "...",     # data — canonical event identifier
-        "timestamp": 1777673675, # data — Unix integer, used for windowing
-        ...                      # data — event-specific fields
-    }
-}
+Envelope(
+    event_name="...",          # metadata — routing/filtering hint
+    source_app="shortcut",    # metadata
+    source_type="http_server",# metadata — Vector source type
+    timestamp=datetime(...),  # metadata — wall-clock time of Vector ingestion
+    message={...},            # data — the original event body (untyped dict)
+)
 ```
 
-Engines must read `event_name` and `timestamp` from `payload["message"]`, never from the top-level payload.
+`message` contains the canonical data fields:
+- `event_name: str` — canonical event identifier
+- `timestamp: int` — Unix integer, used for windowing
+
+Engines must read `event_name` and `timestamp` from `payload.message`, never from the envelope-level fields. Envelope-level `event_name` and `timestamp` are transport/routing metadata only.
+
+`message` is an untyped `dict` for now; typed per-event message models are a deliberate next step, not part of this change.
 
 ---
 
 ## Engine Contract
 
-**`process()` returns `dict | None`. The engine never produces to Kafka.**
+**`process()` accepts an `Envelope` and returns `dict | None`. The engine never produces to Kafka.**
 
 - `None` → no inference triggered; transport commits and moves on
-- `dict` → inference triggered; transport is responsible for forwarding the result to the sink (via the Emitter)
+- `dict` → inference triggered; transport forwards the result to the sink (via the Emitter), which POSTs it to Vector. Vector re-wraps it in an `Envelope` before publishing to `high_level_events`.
 
 The engine owns its internal state (Redis, windowing logic) and has no reference to the Kafka producer, consumer, or observer.
 

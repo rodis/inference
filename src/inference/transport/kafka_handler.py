@@ -2,8 +2,10 @@ import json
 import signal
 
 from confluent_kafka import Consumer, KafkaException
+from pydantic import ValidationError
 
 from inference.engines.protocol import InferenceEngine
+from inference.events import Envelope
 from inference.observers.protocol import Observer
 from inference.transport.protocol import Emitter
 
@@ -46,7 +48,7 @@ class KafkaStreamHandler:
                         self.observer.on_error(KafkaException(msg.error()))
                         continue
 
-                    payload = json.loads(msg.value().decode("utf-8"))
+                    payload = Envelope.model_validate_json(msg.value())
                     self.observer.on_received(payload)
 
                     result = self.engine.process(payload)
@@ -64,8 +66,8 @@ class KafkaStreamHandler:
                     # manual commit after successful processing (enable.auto.commit=False)
                     self.consumer.commit(message=msg)
 
-                except json.JSONDecodeError as e:
-                    self.observer.on_error(e, "Invalid JSON received")
+                except (json.JSONDecodeError, ValidationError) as e:
+                    self.observer.on_error(e, "Invalid envelope received")
                     # skip-and-move-on: commit the malformed message to avoid an infinite retry loop
                     if msg:
                         self.consumer.commit(message=msg)

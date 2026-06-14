@@ -1,5 +1,26 @@
 # Inference Worker — Class Reference
 
+## Events
+
+### `Envelope` — `events/envelope.py`
+
+Pydantic model for the metadata-wrapped event Vector publishes to Kafka. The transport layer parses every inbound message into an `Envelope`; engines read their data from `message`.
+
+```python
+class Envelope(BaseModel):
+    event_name: str        # canonical event id; routing metadata
+    source_app: str        # producer identity (e.g. "shortcut")
+    source_type: str       # how it was produced (e.g. "http_server")
+    timestamp: datetime    # wall-clock time of Vector ingestion (ISO 8601 on the wire)
+    message: dict          # the original event body from the producer
+```
+
+`message` carries the data — engines read `event_name` and `timestamp` from inside it, never from the envelope-level fields. `Envelope.model_validate_json` raises `ValidationError` on a malformed payload, which the transport handler treats as a skip-and-commit (same path as `JSONDecodeError`).
+
+> `message` is an untyped `dict` for now. Typed per-event message models (and a registry to dispatch them) are a deliberate next step, not part of this change.
+
+---
+
 ## Protocols
 
 ### `Emitter` — `transport/protocol.py`
@@ -19,10 +40,10 @@ The transport layer calls `emit()` when the engine returns a result. The emitter
 Structural protocol. Any class implementing `process()` satisfies it — no inheritance required.
 
 ```python
-def process(self, payload: dict) -> dict | None
+def process(self, payload: Envelope) -> dict | None
 ```
 
-Returns an inference result dict when the engine triggers, `None` when it does not. The transport layer handles emission; the engine has no knowledge of Kafka.
+Accepts the parsed `Envelope` and returns an inference result dict when the engine triggers, `None` when it does not. The transport layer handles emission; the engine has no knowledge of Kafka.
 
 ---
 
@@ -32,7 +53,7 @@ Structural protocol for observing engine lifecycle events.
 
 ```python
 def on_start(self, topics: list[str]) -> None
-def on_received(self, payload: dict) -> None
+def on_received(self, payload: Envelope) -> None
 def on_inference(self, result: dict) -> None
 def on_error(self, error: Exception, context: str | None = None) -> None
 def on_shutdown(self) -> None
@@ -66,7 +87,7 @@ WeightedWindowEngine(rules: dict, redis_config: dict | None = None)
 | `cooldown_seconds` | `int` | How long to suppress re-triggering after a successful inference (default: 1800) |
 
 **Algorithm:**
-1. Drop the event if `event_name` is not in `weights` (no Redis hit)
+1. Drop the event if `payload.message["event_name"]` is not in `weights` (no Redis hit)
 2. Add the event to a Redis ZSET scored by timestamp
 3. Prune entries older than `window_seconds`
 4. Fetch all active entries; deduplicate by event type keeping the earliest occurrence
@@ -80,6 +101,7 @@ WeightedWindowEngine(rules: dict, redis_config: dict | None = None)
     "inference_type": "...",   # metadata — identifies the inference event type
     "processed_at": 1234.0,   # metadata — wall-clock time of the trigger
     "message": {
+        "event_name": "...",              # canonical event identifier
         "confidence_score": 12,           # total weight of contributing events
         "occurred_at": 1777673675.0,      # average timestamp of unique contributors
         "sources": ["event_a", "event_b"],# contributing event type names
@@ -90,6 +112,8 @@ WeightedWindowEngine(rules: dict, redis_config: dict | None = None)
     },
 }
 ```
+
+The result dict is POSTed to Vector, which re-wraps it in an `Envelope` before publishing to `high_level_events`.
 
 ---
 
