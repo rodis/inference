@@ -3,6 +3,8 @@ import time
 
 import redis
 
+from inference.events import Envelope
+
 
 def _redis_config_from_env() -> dict:
     return {
@@ -30,8 +32,8 @@ class WeightedWindowEngine:
         # decode_responses=True so Redis returns str instead of bytes
         self.redis = redis.Redis(**cfg, decode_responses=True, ssl=True)
 
-    def process(self, payload: dict) -> dict | None:
-        message = payload.get("message", {})
+    def process(self, payload: Envelope) -> dict | None:
+        message = payload.message
         event_name = message.get("event_name")
 
         # gatekeeper: drop immediately if this event type isn't tracked by this engine

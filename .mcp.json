@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "redis": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/redis/mcp-redis.git",
+        "redis-mcp-server",
+        "--url",
+        "${AIVEN_REDIS_URL}"
+      ]
+    },
+    "aiven": {
+      "command": "npx",
+      "args": ["-y", "mcp-aiven"],
+      "env": {
+        "AIVEN_TOKEN": "${AIVEN_TOKEN}"
+      }
+    },
+    "neon": {
+      "type": "http",
+      "url": "https://mcp.neon.tech/mcp"
+    }
+  }
+}
