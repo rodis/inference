@@ -16,6 +16,7 @@ Envelope(
     source_app="shortcut",    # metadata
     source_type="http_server",# metadata — Vector source type
     timestamp=datetime(...),  # metadata — wall-clock time of Vector ingestion
+    envelope_id=UUID(...),    # metadata — stable per-event id, minted by Vector at ingest
     message={...},            # data — the original event body (untyped dict)
 )
 ```
@@ -25,6 +26,8 @@ Envelope(
 - `timestamp: int` — Unix integer, used for windowing
 
 Engines must read `event_name` and `timestamp` from `payload.message`, never from the envelope-level fields. Envelope-level `event_name` and `timestamp` are transport/routing metadata only.
+
+**`envelope_id`:** minted by Vector's `classify_domain` transform (`uuid_v4()`) for every event at ingest — the stable identity used for lineage (`derived_from` joins on it) and, later, persistence. The model carries a `default_factory` fallback so an event without one still parses, but Vector's id is authoritative. `message` is still an untyped `dict`; typed per-event models remain a later step.
 
 `message` is an untyped `dict` for now; typed per-event message models are a deliberate next step, not part of this change.
 

@@ -1,12 +1,13 @@
 # ADR 0001 — Message shaping pipeline: decide → enrich → emit
 
-Status: **Accepted — Phase 1 implemented; Phases 2–3 pending**
+Status: **Accepted — Phase 1 + 2a (envelope_id) implemented; Phase 2b + 3 pending**
 Date: 2026-06-14
 
 > This is a design/decision record describing the **target** architecture and its rationale.
-> **Phase 1 (the decide → enrich → emit refactor) is implemented**; the typed-message layer and
-> persistence (Phases 2–3) are not. Where a section describes capabilities (typed messages,
-> `envelope_id`, PostGIS) those remain target-state. See [Phased rollout](#phased-rollout) for status.
+> **Phase 1 (decide → enrich → emit) and Phase 2a (`envelope_id`, Vector-minted) are implemented**;
+> the typed-message layer (2b) and persistence (3) are not. Where a section describes still-pending
+> capabilities (typed messages, PostGIS) those remain target-state. See
+> [Phased rollout](#phased-rollout) for status.
 
 ---
 
@@ -181,13 +182,18 @@ engine must supply **full contributor bodies** in the `DerivedDraft`, not just t
   keyed alongside the ZSET, pruned to the same window (diff-prune against surviving members). This is
   a WeightedWindow detail, **not** a Protocol requirement.
 
-### `envelope_id`
+### `envelope_id` — IMPLEMENTED
 
-Stable lineage needs stable IDs. `envelope_id` will be **minted by Vector at ingest** (VRL
-`uuid_v7()`) so every consumer shares one authoritative ID. As an interim (before the Vector edit),
-the worker mints one via `Field(default_factory=...)` so the system stays deployable; ids minted this
-way are stable within a single worker's processing but not across reprocessing/replay — acceptable
-until Vector minting lands.
+Stable lineage needs stable IDs. `envelope_id` is **minted by Vector at ingest** — the
+`classify_domain` transform sets `.envelope_id = uuid_v4()` (if absent) for every event, so every
+consumer shares one authoritative ID. The `Envelope` model carries it with a
+`Field(default_factory=uuid4)` fallback so an event without one still parses (a worker-minted id is
+stable within one process but not across consumers — Vector's is authoritative). `LineageEnricher`
+emits the contributors' real `envelope_id`s in `derived_from`.
+
+(`uuid_v4`, not `uuid_v7`: v4 is guaranteed available in the deployed Vector and fully satisfies the
+identity/lineage need. Switching to `uuid_v7` for time-ordered Postgres primary keys is a Phase-3
+consideration, gated on confirming VRL support; the DB side `pg_uuidv7` is already available.)
 
 ### Wiring
 
@@ -283,9 +289,14 @@ pipeline.
    `WeightedWindowEngine` contributor persistence (Redis HASH), `ENRICHERS` wiring in `main.py`. Message
    stays a dict / duck-typed; the emitted payload is a superset of the prior output (adds `derived_from`),
    so it stays Vector-compatible. No external dependencies.
-2. **Phase 2 — typed message layer.** `MessageBase`/registry/`OpaqueMessage`, `GeoLocated`/`Derived`
-   mixins + Protocols, `envelope_id` (worker `default_factory`, then Vector `uuid_v7()` minting).
-   Enrichers switch from dict duck-typing to real Protocol dispatch.
+2. **Phase 2 — identity + typed message layer.**
+   - *2a — `envelope_id`. ✅ IMPLEMENTED.* Vector `classify_domain` mints `uuid_v4()` at ingest;
+     `Envelope.envelope_id` (with `default_factory` fallback); `LineageEnricher` emits real ids. Message
+     stays a `dict`. (Requires deploying the Vector config change — see helm-override-files.)
+   - *2b — typed messages (pending).* `MessageBase`/registry/`OpaqueMessage`, `GeoLocated`/`Derived`
+     mixins + Protocols, `message` becomes a typed `MessageBase`; enrichers switch from dict
+     duck-typing to Protocol/attribute dispatch. **Open decision:** capability detection nominal
+     (mixin `isinstance`) vs structural (`runtime_checkable` Protocol) — deferred.
 3. **Phase 3 — persistence.** `CREATE EXTENSION postgis;` + `events` table (generated `geom`) +
    generic `event_lineage` edge table; Vector `kafka` source → `postgres` sink. Switch the engine to
    emit a full typed `Envelope` and make Vector pass-through.

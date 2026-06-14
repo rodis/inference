@@ -12,6 +12,7 @@ class Envelope(BaseModel):
     source_app: str        # producer identity (e.g. "shortcut")
     source_type: str       # how it was produced (e.g. "http_server")
     timestamp: datetime    # wall-clock time of Vector ingestion (ISO 8601 on the wire)
+    envelope_id: UUID      # stable per-event id (Vector-minted); default_factory fallback
     message: dict          # the original event body from the producer
 ```
 
