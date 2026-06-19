@@ -21,10 +21,11 @@ RULES = {
     "window_seconds": 600,
     "cooldown_seconds": 10,
     "weights": {
-        "car_lock_state_change": 4,
-        "device_disconnected_from_power": 3,
-        "device_disconnected_from_carplay": 4,
-        #"connect_to_home_wifi": 7,
+        # car_lock_state_change + device_connected_to_carplay together assert the
+        # car door is open. Equally important: each weighs 5, threshold 10, so both
+        # must land within the window for the worker to fire.
+        "car_lock_state_change": 5,
+        "device_connected_to_carplay": 5,
     },
 }
 

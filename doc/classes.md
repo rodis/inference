@@ -20,7 +20,7 @@ class Envelope(BaseModel):
 
 ### Messages — `events/messages.py`
 
-`MessageBase(event_name, timestamp)` (strict, `extra="forbid"`); `OpaqueMessage` (`extra="allow"`) fallback for unregistered event types. Capability **mixins** + matching `@runtime_checkable` Protocols (Protocols for typing only — dispatch is nominal on the mixin): `GeoLocated`(`location: GeoPoint | None`)/`GeoLocatedP`, `Derived`(`derived_from: list[LineageRef]`)/`DerivedP`. `MESSAGE_REGISTRY` + `register(event_name)` decorator + `resolve_message_type(event_name)`. Concrete e.g. `HomeArrivalMessage(MessageBase, Derived, GeoLocated)`.
+`MessageBase(event_name, timestamp)` (strict, `extra="forbid"`); `OpaqueMessage` (`extra="allow"`) fallback for unregistered event types. Capability **mixins** + matching `@runtime_checkable` Protocols (Protocols for typing only — dispatch is nominal on the mixin): `GeoLocated`(`location: GeoPoint | None`)/`GeoLocatedP`, `Derived`(`derived_from: list[LineageRef]`)/`DerivedP`. `MESSAGE_REGISTRY` + `register(event_name)` decorator + `resolve_message_type(event_name)`. Concrete e.g. `CarDoorOpenedMessage(MessageBase, Derived, GeoLocated)`.
 
 ---
 

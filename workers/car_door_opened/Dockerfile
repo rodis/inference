@@ -8,10 +8,10 @@ COPY src/ ./src/
 RUN pip install --no-cache-dir .
 
 # Copy the worker entrypoint under its directory so Path(__file__).parent.name
-# resolves to the worker name (home_arrival), matching the repo layout.
-COPY workers/home_arrival/main.py ./workers/home_arrival/main.py
+# resolves to the worker name (car_door_opened), matching the repo layout.
+COPY workers/car_door_opened/main.py ./workers/car_door_opened/main.py
 
 RUN useradd -u 1000 -m worker
 USER 1000
 
-CMD ["python", "workers/home_arrival/main.py"]
+CMD ["python", "workers/car_door_opened/main.py"]

@@ -1,9 +1,9 @@
 apiVersion: builtin
 kind: HelmChartInflationGenerator
 metadata:
-  name: home-arrival
+  name: car-door-opened
 name: application
-releaseName: home-arrival
+releaseName: car-door-opened
 version: 6.16.1
 repo: https://stakater.github.io/stakater-charts
 valuesFile: values.yml

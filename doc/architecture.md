@@ -56,7 +56,7 @@ Engines must read from `message` only. See `doc/invariants.md`.
 
 ## Deployment Model
 
-- One pod per inference type (e.g., `home_arrival`, `car_departure`)
+- One pod per inference type (e.g., `car_door_opened`, `car_departure`)
 - Engine class and rules are baked into each worker's `main.py` (see the **Configuration Source** invariant)
 - Cluster-shared infra env vars (`KAFKA_BOOTSTRAP_SERVERS`, `VECTOR_BASE_URL`) come from a Kubernetes ConfigMap
 - Credentials are injected via Kubernetes Secrets: Kafka mTLS certs are mounted as files and read by `config.py`; Redis credentials (`REDIS_HOST`/`PORT`/`DB`/`USERNAME`/`PASSWORD`) are mounted as env vars and read directly by the engine
@@ -88,7 +88,7 @@ See `doc/adr/0001-message-shaping-pipeline.md` for the decide → enrich → emi
 | `Emitter` | `transport/protocol.py` | Protocol defining the emitter contract |
 | `VectorHttpEmitter` | `transport/vector_http_emitter.py` | HTTP POST to Vector |
 | `config.py` | `src/inference/config.py` | Reads cluster-shared infra env vars (Kafka, Vector) sourced from ConfigMap in prod / `workers/.env` locally |
-| `workers/home_arrival/main.py` | `workers/home_arrival/main.py` | Worker entrypoint — wires all components together |
+| `workers/car_door_opened/main.py` | `workers/car_door_opened/main.py` | Worker entrypoint — wires all components together |
 
 ## Configuration
 

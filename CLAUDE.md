@@ -15,7 +15,7 @@ When you modify behavior that one of these documents describes, update the docum
 
 ## Big-picture model
 
-A worker is one process = one inference engine = one pod. The transport layer (`KafkaStreamHandler`) is engine-agnostic; the engine (`WeightedWindowEngine` today) is transport-agnostic and owns its own backend (Redis). The worker's [`main.py`](workers/home_arrival/main.py) is pure wiring — no logic.
+A worker is one process = one inference engine = one pod. The transport layer (`KafkaStreamHandler`) is engine-agnostic; the engine (`WeightedWindowEngine` today) is transport-agnostic and owns its own backend (Redis). The worker's [`main.py`](workers/car_door_opened/main.py) is pure wiring — no logic.
 
 Two cross-cutting rules drive most of the structure and are *not* obvious from reading any single file:
 
@@ -31,7 +31,7 @@ Two cross-cutting rules drive most of the structure and are *not* obvious from r
 
 1. `workers/<name>/main.py` — copy from an existing worker. Don't touch the `WORKER_NAME` / `WORKER_SLUG` derivation; just adjust `RULES`, `KAFKA_SOURCE_TOPICS`, `KAFKA_SINK_TOPIC`, `EVENT_DOMAIN`.
 2. `workers/<name>/Dockerfile` — copy from an existing worker. The two `<name>` occurrences in the `COPY` and `CMD` lines must match the directory name.
-3. `deploy/kustomize/base/<slug>/` — `helmChart.yml`, `kustomization.yml`, `values.yml`. Slug is the kebab-case form (`home-arrival`, not `home_arrival`).
+3. `deploy/kustomize/base/<slug>/` — `helmChart.yml`, `kustomization.yml`, `values.yml`. Slug is the kebab-case form (`car-door-opened`, not `car_door_opened`).
 4. Add the slug to `deploy/kustomize/base/kustomization.yml`.
 5. ArgoCD application: `deploy/argocd/application-<slug>.yml`.
 
@@ -39,7 +39,7 @@ The `publish-images.yml` workflow auto-discovers any `workers/*/Dockerfile`, bui
 
 ## Local development
 
-Local secrets and env live in `workers/.env` (gitignored). `config.py` loads it via `find_dotenv(usecwd=True)`, which walks upward from the current directory — **you must run the worker from inside the `workers/` tree** (`cd workers/home_arrival && python main.py`) for the `.env` to be found. Running from the repo root will fail with "Required environment variable … is not set".
+Local secrets and env live in `workers/.env` (gitignored). `config.py` loads it via `find_dotenv(usecwd=True)`, which walks upward from the current directory — **you must run the worker from inside the `workers/` tree** (`cd workers/car_door_opened && python main.py`) for the `.env` to be found. Running from the repo root will fail with "Required environment variable … is not set".
 
 In K8s the same env vars come from a `ConfigMap` (Kafka, Vector) and `Secret` (Redis, Kafka mTLS files); `find_dotenv` returns `""` and is skipped.
 
@@ -60,10 +60,10 @@ In K8s the same env vars come from a `ConfigMap` (Kafka, Vector) and `Secret` (R
 
 ```bash
 # Local run (from inside workers/ tree)
-cd workers/home_arrival && python main.py
+cd workers/car_door_opened && python main.py
 
 # Build a worker image locally
-docker build -f workers/home_arrival/Dockerfile -t inference-home-arrival .
+docker build -f workers/car_door_opened/Dockerfile -t inference-car-door-opened .
 
 # Lint (configured but not wired into CI)
 ruff check .

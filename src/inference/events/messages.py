@@ -90,7 +90,7 @@ def resolve_message_type(event_name: str) -> type[MessageBase]:
 
 # --- concrete messages --------------------------------------------------------
 
-@register("home_arrival")
-class HomeArrivalMessage(MessageBase, Derived, GeoLocated):
+@register("car_door_opened")
+class CarDoorOpenedMessage(MessageBase, Derived, GeoLocated):
     confidence_score: float
     occurred_at: float

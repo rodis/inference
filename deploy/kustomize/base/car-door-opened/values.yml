@@ -1,6 +1,6 @@
 deployment:
   image:
-    repository: ghcr.io/rodis/inference-home-arrival
+    repository: ghcr.io/rodis/inference-car-door-opened
     tag: "sha-c61af3c"
     pullPolicy: IfNotPresent
   env:
