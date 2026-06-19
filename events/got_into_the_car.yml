@@ -11,7 +11,7 @@ engine_config:
   # in the driver seat, put the phone on the wireless charger. Equally important.
   threshold: 10
   window_seconds: 600
-  cooldown_seconds: 10
+  cooldown_seconds: 600   # 10 min — fires at most once per trip
   weights:
     car_door_opened: 5
     device_connected_to_power: 5

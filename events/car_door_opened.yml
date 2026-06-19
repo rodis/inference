@@ -10,7 +10,7 @@ engine_config:
   # door is open. Equally important: 5 each, threshold 10 → both required in window.
   threshold: 10
   window_seconds: 600
-  cooldown_seconds: 10
+  cooldown_seconds: 600   # 10 min — fires at most once per trip
   weights:
     car_lock_state_change: 5
     device_connected_to_carplay: 5
