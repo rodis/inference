@@ -29,11 +29,12 @@ RULES = {
 }
 
 # Ordered enricher chain — shapes the message after the engine decides + assembles
-# the core. Per-worker config, like RULES. Order is the chain order; each enricher
-# self-decides whether it applies.
+# the core. Per-worker config, like RULES: this list sets availability + order +
+# config. Whether each enricher *applies* is decided by the pipeline from the
+# enricher's declared `requires` capability against the contributors' messages.
 ENRICHERS = [
-    LineageEnricher(),                  # always → derived_from
-    GeoEnricher(strategy="centroid"),   # only if contributors are geolocated (no-op today)
+    LineageEnricher(),                  # requires=None → always (derived_from)
+    GeoEnricher(strategy="centroid"),   # requires=GeoLocated → only if a contributor is geolocated
 ]
 
 EVENT_DOMAIN = "sensors"

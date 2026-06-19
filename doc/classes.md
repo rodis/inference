@@ -8,17 +8,19 @@ Pydantic model for the metadata-wrapped event Vector publishes to Kafka. The tra
 
 ```python
 class Envelope(BaseModel):
-    event_name: str        # canonical event id; routing metadata
-    source_app: str        # producer identity (e.g. "shortcut")
-    source_type: str       # how it was produced (e.g. "http_server")
-    timestamp: datetime    # wall-clock time of Vector ingestion (ISO 8601 on the wire)
-    envelope_id: UUID      # stable per-event id (Vector-minted); default_factory fallback
-    message: dict          # the original event body from the producer
+    event_name: str                     # canonical event id; routing metadata
+    source_app: str                     # producer identity (e.g. "shortcut")
+    source_type: str                    # how it was produced (e.g. "http_server")
+    timestamp: datetime                 # wall-clock time of Vector ingestion (ISO 8601 on the wire)
+    envelope_id: UUID                   # stable per-event id (Vector-minted); default_factory fallback
+    message: SerializeAsAny[MessageBase]  # typed body, resolved from event_name via the registry
 ```
 
-`message` carries the data — engines read `event_name` and `timestamp` from inside it, never from the envelope-level fields. `Envelope.model_validate_json` raises `ValidationError` on a malformed payload, which the transport handler treats as a skip-and-commit (same path as `JSONDecodeError`).
+`message` carries the data — engines read `event_name`/`timestamp` from it (attribute access), never from the envelope-level fields. A `model_validator(mode="before")` resolves the raw message dict to its concrete `MessageBase` subclass via `MESSAGE_REGISTRY` (`OpaqueMessage` fallback). `SerializeAsAny` is required so subclass fields survive `model_dump_json` (the engine round-trips contributors through Redis). `Envelope.model_validate_json` raises `ValidationError` on a malformed payload → skip-and-commit.
 
-> `message` is an untyped `dict` for now. Typed per-event message models (and a registry to dispatch them) are a deliberate next step, not part of this change.
+### Messages — `events/messages.py`
+
+`MessageBase(event_name, timestamp)` (strict, `extra="forbid"`); `OpaqueMessage` (`extra="allow"`) fallback for unregistered event types. Capability **mixins** + matching `@runtime_checkable` Protocols (Protocols for typing only — dispatch is nominal on the mixin): `GeoLocated`(`location: GeoPoint | None`)/`GeoLocatedP`, `Derived`(`derived_from: list[LineageRef]`)/`DerivedP`. `MESSAGE_REGISTRY` + `register(event_name)` decorator + `resolve_message_type(event_name)`. Concrete e.g. `HomeArrivalMessage(MessageBase, Derived, GeoLocated)`.
 
 ---
 
@@ -53,10 +55,11 @@ Accepts the parsed `Envelope`; returns a `DerivedDraft` (core + contributors) wh
 Structural protocol (`@runtime_checkable`). Each enricher shapes one capability of a derived event.
 
 ```python
+requires: type | None                          # capability a contributor's message must have (None = always)
 def enrich(self, draft: DerivedDraft) -> DerivedDraft
 ```
 
-Self-decides applicability (returns the draft unchanged when its capability doesn't apply), and is pure (returns a new draft via `model_copy(update=...)`, never mutates).
+Applicability is **declared**, not self-decided: the pipeline runs an enricher only when `requires is None` or some contributor's message `isinstance`s the required capability mixin (nominal). `enrich` is pure (returns a new draft via `model_copy(update=...)`, never mutates).
 
 ---
 
@@ -116,7 +119,7 @@ The ZSET/HASH/lock are private to this engine (see the **Engine-Owned Infrastruc
 
 ### `EnrichmentPipeline` / `finalize` — `pipeline/runner.py`
 
-`EnrichmentPipeline(enrichers: list[Enricher])` folds the enrichers over the draft (best-effort: a raising enricher is logged and skipped), then `finalize(draft)` returns the transport dict:
+`EnrichmentPipeline(enrichers: list[Enricher])` folds the enrichers over the draft — skipping any whose declared `requires` capability no contributor satisfies (`_applies`), and best-effort around the rest (a raising enricher is logged and skipped) — then `finalize(draft)` returns the transport dict:
 
 ```python
 {
@@ -136,7 +139,7 @@ The ZSET/HASH/lock are private to this engine (see the **Engine-Owned Infrastruc
 
 `sources`/`evidence` are reconstructed in `finalize` so the payload stays a superset of the pre-pipeline output. The dict is POSTed to Vector, which re-wraps it in an `Envelope` for `high_level_events`.
 
-**Enrichers** (`pipeline/enrichers/`): `LineageEnricher` (always → `derived_from`; `envelope_id` is `None` until Phase 2), `GeoEnricher(strategy="centroid")` (sets `location` only if contributors carry coordinates — a no-op today, no producer emits them).
+**Enrichers** (`pipeline/enrichers/`): `LineageEnricher` (`requires=None` → always; emits `derived_from` with real Vector-minted `envelope_id`s), `GeoEnricher(strategy="centroid")` (`requires=GeoLocated` → sets `location` centroid only when a contributor's message is a registered `GeoLocated` type — dormant until such a raw type is registered).
 
 ---
 

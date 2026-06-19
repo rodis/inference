@@ -1,5 +1,4 @@
 import os
-import time
 
 import redis
 
@@ -40,13 +39,13 @@ class WeightedWindowEngine:
 
     def decide(self, payload: Envelope) -> DerivedDraft | None:
         message = payload.message
-        event_name = message.get("event_name")
+        event_name = message.event_name
 
         # gatekeeper: drop immediately if this event type isn't tracked by this engine
         if event_name not in self.weights:
             return None
 
-        ts = int(message.get("timestamp", time.time()))
+        ts = int(message.timestamp)
         member = f"{event_name}:{ts}"
 
         # add (ZSET member + full envelope), prune the window, and fetch in one round-trip.

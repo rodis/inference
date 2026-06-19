@@ -1,36 +1,37 @@
+from inference.events.messages import GeoLocated, GeoPoint
 from inference.pipeline.draft import DerivedDraft
 
 
 class GeoEnricher:
     """Sets the derived event's `location` from its contributors' coordinates.
 
-    Owns the geolocation capability: if the contributors carry coordinates, the
-    derived event becomes geolocated; if none do, it returns the draft unchanged
-    (a derived event whose contributors aren't geolocated isn't geolocated either).
+    Owns the geolocation capability. The pipeline only calls this when the draft
+    satisfies `requires` (at least one contributor's message is `GeoLocated`), so
+    there's no applicability self-check here — only *selection* of which
+    contributors actually carry a point to feed the centroid.
 
-    Scaffold for now: no producer emits coordinates yet, so this is effectively a
-    no-op. It duck-types on a `message["location"]` of `{lat, lon}`; once typed
-    messages land (Phase 2) this becomes an `isinstance(msg, GeoLocated)` check.
     `strategy` is reserved for choosing how to combine multiple points; only
     `centroid` is implemented today.
     """
+
+    requires = GeoLocated
 
     def __init__(self, strategy: str = "centroid"):
         self.strategy = strategy
 
     def enrich(self, draft: DerivedDraft) -> DerivedDraft:
         points = [
-            loc
+            c.message.location
             for c in draft.contributors
-            if isinstance((loc := c.message.get("location")), dict)
-            and "lat" in loc
-            and "lon" in loc
+            if isinstance(c.message, GeoLocated) and c.message.location is not None
         ]
         if not points:
             return draft
 
-        location = {
-            "lat": sum(p["lat"] for p in points) / len(points),
-            "lon": sum(p["lon"] for p in points) / len(points),
-        }
-        return draft.model_copy(update={"fields": {**draft.fields, "location": location}})
+        location = GeoPoint(
+            lat=sum(p.lat for p in points) / len(points),
+            lon=sum(p.lon for p in points) / len(points),
+        )
+        return draft.model_copy(
+            update={"fields": {**draft.fields, "location": location.model_dump(exclude_none=True)}}
+        )

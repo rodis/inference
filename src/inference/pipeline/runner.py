@@ -21,6 +21,12 @@ class EnrichmentPipeline:
 
     def run(self, draft: DerivedDraft) -> dict:
         for enricher in self.enrichers:
+            if not _applies(enricher, draft):
+                logger.debug(
+                    "Enricher %s not applicable to this draft, skipping",
+                    type(enricher).__name__,
+                )
+                continue
             try:
                 draft = enricher.enrich(draft)
             except Exception as e:
@@ -33,6 +39,16 @@ class EnrichmentPipeline:
         return finalize(draft)
 
 
+def _applies(enricher, draft: DerivedDraft) -> bool:
+    """An enricher applies when it declares no requirement, or at least one
+    contributor's message satisfies the required capability (nominal isinstance).
+    """
+    required = getattr(enricher, "requires", None)
+    if required is None:
+        return True
+    return any(isinstance(c.message, required) for c in draft.contributors)
+
+
 def finalize(draft: DerivedDraft) -> dict:
     """Merge the engine's core with the enrichers' accreted `fields` into the
     transport dict the Emitter expects.
@@ -43,13 +59,13 @@ def finalize(draft: DerivedDraft) -> dict:
     `location`) are layered on top.
     """
     # contributors are Envelopes; read the canonical event_name/timestamp from
-    # their `message` (the data), per the metadata/data invariant.
+    # their typed `message` (the data), per the metadata/data invariant.
     message = {
         "event_name": draft.event_name,
         "confidence_score": draft.confidence_score,
         "occurred_at": draft.occurred_at,
-        "sources": [c.message.get("event_name") for c in draft.contributors],
-        "evidence": {c.message.get("event_name"): c.message.get("timestamp") for c in draft.contributors},
+        "sources": [c.message.event_name for c in draft.contributors],
+        "evidence": {c.message.event_name: c.message.timestamp for c in draft.contributors},
         **draft.fields,
     }
     return {

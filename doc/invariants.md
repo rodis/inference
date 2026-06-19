@@ -21,15 +21,15 @@ Envelope(
 )
 ```
 
-`message` contains the canonical data fields:
+`message` is a typed `MessageBase` (resolved from `event_name` via `MESSAGE_REGISTRY`, falling back to `OpaqueMessage` for unregistered types). Its canonical data fields:
 - `event_name: str` — canonical event identifier
 - `timestamp: int` — Unix integer, used for windowing
 
-Engines must read `event_name` and `timestamp` from `payload.message`, never from the envelope-level fields. Envelope-level `event_name` and `timestamp` are transport/routing metadata only.
+Engines must read `event_name` and `timestamp` from `payload.message` (attribute access), never from the envelope-level fields. Envelope-level `event_name` and `timestamp` are transport/routing metadata only.
 
-**`envelope_id`:** minted by Vector's `classify_domain` transform (`uuid_v4()`) for every event at ingest — the stable identity used for lineage (`derived_from` joins on it) and, later, persistence. The model carries a `default_factory` fallback so an event without one still parses, but Vector's id is authoritative. `message` is still an untyped `dict`; typed per-event models remain a later step.
+**`envelope_id`:** minted by Vector's `enrich_sensor` transform (`uuid_v4()`) for sensor events at ingest — the stable identity used for lineage (`derived_from` joins on it) and, later, persistence. The model carries a `default_factory` fallback so an event without one still parses, but Vector's id is authoritative.
 
-`message` is an untyped `dict` for now; typed per-event message models are a deliberate next step, not part of this change.
+**Capabilities are nominal.** Cross-cutting traits are capability **mixins** (`GeoLocated`, `Derived`); a concrete registered message inherits them. Detection is `isinstance(msg, GeoLocated)` against the mixin — **not** the `@runtime_checkable` Protocol (`OpaqueMessage` with `extra="allow"` would structurally false-match a stray `location` key). `Envelope.message` is typed `SerializeAsAny[MessageBase]` — `SerializeAsAny` is required so subclass fields survive `model_dump_json` (the engine round-trips contributors through Redis).
 
 ---
 
@@ -50,11 +50,11 @@ See `doc/adr/0001-message-shaping-pipeline.md` for the design rationale and the 
 
 **The message is shaped by an ordered chain of enrichers, not by the engine.**
 
-After the engine returns a `DerivedDraft`, the worker runs it through an `EnrichmentPipeline` — an ordered list of `Enricher`s (`enrich(draft) -> draft`) configured per-worker in `main.py` next to `RULES`. Each enricher:
+After the engine returns a `DerivedDraft`, the worker runs it through an `EnrichmentPipeline` — an ordered list of `Enricher`s (`enrich(draft) -> draft`) configured per-worker in `main.py` next to `RULES` (the list sets availability + order + config). Each enricher:
 
-- owns exactly **one** capability and **self-decides applicability** — if its capability doesn't apply (e.g. the contributors aren't geolocated), it returns the draft unchanged;
+- owns exactly **one** capability and **declares applicability** via `requires: type | None` (the capability mixin a contributor's message must be an instance of, or `None` = always). The **pipeline** evaluates `requires` centrally (`requires is None or any(isinstance(c.message, requires) for c in contributors)`) and only calls `enrich` when it applies — the enricher never self-decides whether to run;
 - is **pure**: returns a new draft via `model_copy(update=...)`, never mutates the input;
-- decides applicability from the **contributors** (a derived event gains a capability only if its contributors support it).
+- is judged on the **contributors** (a derived event gains a capability only if its contributors support it).
 
 The pipeline is **best-effort**: by the time it runs, the engine has already decided to fire (possibly with irreversible side effects), so a raising enricher is logged and skipped — the event is still emitted, partially enriched. `finalize()` then merges the core + accreted capability fields into the transport dict; the Emitter still receives a `dict`, which Vector re-wraps into an `Envelope` for `high_level_events`.
 

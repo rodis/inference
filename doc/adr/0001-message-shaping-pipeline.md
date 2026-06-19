@@ -1,13 +1,14 @@
 # ADR 0001 — Message shaping pipeline: decide → enrich → emit
 
-Status: **Accepted — Phase 1 + 2a (envelope_id) implemented; Phase 2b + 3 pending**
-Date: 2026-06-14
+Status: **Accepted — Phases 1, 2a, 2b implemented; Phase 3 (persistence) pending**
+Date: 2026-06-14 (2b: 2026-06-15)
 
 > This is a design/decision record describing the **target** architecture and its rationale.
-> **Phase 1 (decide → enrich → emit) and Phase 2a (`envelope_id`, Vector-minted) are implemented**;
-> the typed-message layer (2b) and persistence (3) are not. Where a section describes still-pending
-> capabilities (typed messages, PostGIS) those remain target-state. See
-> [Phased rollout](#phased-rollout) for status.
+> **Phases 1 (decide → enrich → emit), 2a (`envelope_id`, Vector-minted), and 2b (typed messages +
+> protocol-driven enrich applicability) are implemented**; persistence (3) is not, and sections
+> describing it (PostGIS, the `events` table) remain target-state. Capability **detection is nominal**
+> (`isinstance` on the mixin), and enricher **applicability is a declared `requires` capability**
+> checked centrally by the pipeline — see [Phased rollout](#phased-rollout).
 
 ---
 
@@ -106,15 +107,20 @@ accumulates its contributors however it likes, with whatever backend. This resta
 An ordered chain of **enrichers** progressively shapes the draft. Each enricher:
 
 - owns exactly **one capability/protocol**;
-- **self-decides applicability** — if the capability doesn't apply, it returns the draft unchanged
-  (the runner is a dumb fold, no separate `applies()` method);
-- decides applicability from the **contributors**: e.g. the `GeoEnricher` adds `location` only if the
-  contributors are `GeoLocated`. Contributors aren't geolocated ⇒ the derived event isn't geolocated.
+- **declares applicability** via a `requires` capability (the mixin a contributor's message must be
+  an instance of, or `None` = always). The **pipeline** checks it centrally and only calls `enrich`
+  when it applies — the enricher never re-decides whether to run (no `applies()` method, no internal
+  apply-guard);
+- applicability is judged on the **contributors** (inputs): e.g. `GeoEnricher` requires a `GeoLocated`
+  contributor. Contributors aren't geolocated ⇒ the derived event isn't geolocated.
 
 ```python
 @runtime_checkable
 class Enricher(Protocol):
+    requires: type | None              # capability a contributor's message must have
     def enrich(self, draft: DerivedDraft) -> DerivedDraft: ...
+
+# pipeline gate: requires is None or any(isinstance(c.message, requires) for c in contributors)
 ```
 
 Examples:
@@ -267,15 +273,21 @@ pipeline.
 
 ## Open questions
 
-- **GeoEnricher applicability:** `all` contributors geolocated vs `any` (centroid over the located
-  subset) vs require the *triggering* contributor.
-- **Location strategy:** centroid vs latest/triggering point vs highest-weight contributor — likely a
-  `GeoEnricher(strategy=…)` knob; default deferred until a geolocated producer exists.
+- **GeoEnricher applicability:** currently `any` contributor `GeoLocated` (centroid over the located
+  subset). `all`, or require the *triggering* contributor, still open.
+- **Location strategy:** centroid vs latest/triggering point vs highest-weight contributor — a
+  `GeoEnricher(strategy=…)` knob; only `centroid` implemented, default deferred until a geolocated producer exists.
 - **`sources`/`evidence` fate:** replace with `derived_from`, or keep transitionally for any existing
-  `high_level_events` consumer (none consume it today).
+  `high_level_events` consumer (none consume it today). Currently kept (superset).
 - **`processed_at` determinism:** wall-clock vs derived-from-envelope, if replay-equality matters.
-- **Naming:** `process` → `decide`.
 - **Worker facade:** should a `Worker` object own engine+pipeline+emitter instead of the handler.
+- **Event-definition / multi-handler runtime (future direction):** one app loading per-event-type
+  definitions (YAML) and spawning a handler per type, collapsing one-pod-per-event. Larger change
+  (concurrency, config schema, deploy/CI, worker-identity) — its own ADR when pursued.
+
+**Resolved:** capability detection is **nominal** (`isinstance` on the mixin, not the structural
+Protocol — `OpaqueMessage(extra="allow")` false-matches structurally). Enricher applicability is a
+declared `requires` checked centrally (not self-decided). Engine method renamed `process` → `decide`.
 - **Cross-engine core:** is `confidence_score` the right shared `DerivedDraft` field, or should the
   core be minimal (`event_name`, `occurred_at`, `contributors`) with engine-specific metrics (weighted
   score, Bayesian posterior) living in `fields`?
@@ -290,13 +302,17 @@ pipeline.
    stays a dict / duck-typed; the emitted payload is a superset of the prior output (adds `derived_from`),
    so it stays Vector-compatible. No external dependencies.
 2. **Phase 2 — identity + typed message layer.**
-   - *2a — `envelope_id`. ✅ IMPLEMENTED.* Vector `classify_domain` mints `uuid_v4()` at ingest;
-     `Envelope.envelope_id` (with `default_factory` fallback); `LineageEnricher` emits real ids. Message
-     stays a `dict`. (Requires deploying the Vector config change — see helm-override-files.)
-   - *2b — typed messages (pending).* `MessageBase`/registry/`OpaqueMessage`, `GeoLocated`/`Derived`
-     mixins + Protocols, `message` becomes a typed `MessageBase`; enrichers switch from dict
-     duck-typing to Protocol/attribute dispatch. **Open decision:** capability detection nominal
-     (mixin `isinstance`) vs structural (`runtime_checkable` Protocol) — deferred.
+   - *2a — `envelope_id`. ✅ IMPLEMENTED.* Vector's `enrich_sensor` transform mints `uuid_v4()` at
+     ingest (sensor traffic only, post-routing); `Envelope.envelope_id` (with `default_factory`
+     fallback); `LineageEnricher` emits real ids. (Vector config in helm-override-files.)
+   - *2b — typed messages + protocol-driven applicability. ✅ IMPLEMENTED.* `MessageBase`/`OpaqueMessage`
+     /`MESSAGE_REGISTRY`, `GeoLocated`/`Derived` mixins (+ `*P` Protocols for typing only); `Envelope.message`
+     is now `SerializeAsAny[MessageBase]` resolved via the registry. Enrichers declare a `requires`
+     capability; the pipeline applies each only when a contributor's message satisfies it
+     (**nominal** `isinstance` on the mixin — structural Protocol rejected: `OpaqueMessage(extra="allow")`
+     would false-match). `finalize` still emits a superset dict (no strict typed-output validation yet).
+     Kept on the current one-pod-per-worker model (the event-definition/YAML multi-handler runtime is a
+     separate future direction, out of scope).
 3. **Phase 3 — persistence.** `CREATE EXTENSION postgis;` + `events` table (generated `geom`) +
    generic `event_lineage` edge table; Vector `kafka` source → `postgres` sink. Switch the engine to
    emit a full typed `Envelope` and make Vector pass-through.
