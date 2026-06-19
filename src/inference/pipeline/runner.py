@@ -62,6 +62,11 @@ def finalize(draft: DerivedDraft) -> dict:
     # their typed `message` (the data), per the metadata/data invariant.
     message = {
         "event_name": draft.event_name,
+        # A derived event must itself be a valid pipeline input so it can contribute
+        # to further derivations (ADR 0002 recursive derivation): the window engine
+        # keys on `message.timestamp` and MessageBase requires it. We use the integer
+        # `occurred_at` as the derived event's timestamp.
+        "timestamp": int(draft.occurred_at),
         "confidence_score": draft.confidence_score,
         "occurred_at": draft.occurred_at,
         "sources": [c.message.event_name for c in draft.contributors],

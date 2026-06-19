@@ -1,7 +1,17 @@
 # ADR 0002 — Recursive derivation: entailment vs correlation
 
-Status: **Draft / stub — design exploration, nothing implemented**
-Date: 2026-06-17
+Status: **Partially realized — correlation-over-derived-events works (one runtime, multi-topic handler); entailment tier + cycle enforcement still design-only**
+Date: 2026-06-17 (update: 2026-06-20)
+
+> **Update 2026-06-20:** recursive derivation now runs. `got_into_the_car` derives from a *derived*
+> event (`car_door_opened`, on `high_level_events`) + a raw event (`device_connected_to_power`, on
+> `raw_sensors`) by simply listing both topics in its definition's `source_topics` — no new abstraction,
+> the existing `WeightedWindowEngine` + multi-topic subscribe. The one concrete change needed: derived
+> events must be valid pipeline inputs, so `finalize()` now stamps `timestamp = int(occurred_at)` and
+> derived events resolve to the permissive `OpaqueMessage` (a strict per-event model rejected the
+> emitted superset). The **no-cycles** invariant is documented (the `event_name` gatekeeper prevents
+> self-derivation) but not yet statically enforced; the stateless **entailment** tier below remains
+> design-only.
 
 > A stub to capture the model and the decision boundary. It builds on
 > [`0001-message-shaping-pipeline.md`](0001-message-shaping-pipeline.md) (decide → enrich → emit,

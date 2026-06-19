@@ -20,7 +20,7 @@ class Envelope(BaseModel):
 
 ### Messages — `events/messages.py`
 
-`MessageBase(event_name, timestamp)` (strict, `extra="forbid"`); `OpaqueMessage` (`extra="allow"`) fallback for unregistered event types. Capability **mixins** + matching `@runtime_checkable` Protocols (Protocols for typing only — dispatch is nominal on the mixin): `GeoLocated`(`location: GeoPoint | None`)/`GeoLocatedP`, `Derived`(`derived_from: list[LineageRef]`)/`DerivedP`. `MESSAGE_REGISTRY` + `register(event_name)` decorator + `resolve_message_type(event_name)`. Concrete e.g. `CarDoorOpenedMessage(MessageBase, Derived, GeoLocated)`.
+`MessageBase(event_name, timestamp)` (strict, `extra="forbid"`); `OpaqueMessage` (`extra="allow"`) fallback for unregistered event types. Capability **mixins** + matching `@runtime_checkable` Protocols (Protocols for typing only — dispatch is nominal on the mixin): `GeoLocated`(`location: GeoPoint | None`)/`GeoLocatedP`, `Derived`(`derived_from: list[LineageRef]`)/`DerivedP`. `MESSAGE_REGISTRY` + `register(event_name)` decorator + `resolve_message_type(event_name)`. **No event registers a strict model today** — events are data (`events/*.yml`) and derived events emit a superset shape a strict model would reject, so everything resolves to `OpaqueMessage`. The registry/mixins remain the seam for typed/per-event models (open question in ADR 0003). Every emitted derived event carries `timestamp` (= int `occurred_at`) so it satisfies `MessageBase` and is windowable as a contributor to further derivations (ADR 0002).
 
 ---
 

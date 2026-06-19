@@ -89,8 +89,19 @@ def resolve_message_type(event_name: str) -> type[MessageBase]:
 
 
 # --- concrete messages --------------------------------------------------------
-
-@register("car_door_opened")
-class CarDoorOpenedMessage(MessageBase, Derived, GeoLocated):
-    confidence_score: float
-    occurred_at: float
+#
+# No event registers a strict typed model today. Events are defined as data
+# (events/*.yml, ADR 0003), and derived events emit a superset shape
+# (event_name, timestamp, confidence_score, occurred_at, sources, evidence,
+# derived_from, ...) that a hand-written strict model would reject. So everything
+# resolves to the permissive `OpaqueMessage` (extra="allow"). The registry +
+# capability mixins above stay as the seam for typed/per-event models when a
+# concrete event wants strict validation or a nominal capability — see the
+# typed-message open question in doc/adr/0003-dynamic-event-runtime.md.
+#
+# Example, for when that day comes:
+#
+#   @register("some_event")
+#   class SomeEventMessage(MessageBase, Derived, GeoLocated):
+#       confidence_score: float
+#       occurred_at: float
