@@ -112,6 +112,27 @@ is not a bottleneck and `confluent_kafka`'s blocking C consumer fits a thread-pe
 (Alternative — one shared consumer over the union of source topics, dispatching by `event_name` —
 is cheaper on connections but couples offsets/rebalancing across events; rejected for now.)
 
+New groups use **`auto.offset.reset=latest`** (`runtime/builder.py`): a newly added event (or a new
+topic added to an existing group) starts at the **tail**, not the beginning. This applies only when
+the group has no committed offset, so existing handlers are unaffected. It is the fix for the
+new-event **replay** problem (a new `earliest` group replays all history, which the wall-clock
+cooldown vs event-time window collapses into junk fires + log spam). Trade-off: a new event doesn't
+backfill its window from history — desired, since replay-backfill was useless anyway.
+
+**Deferred: shared-consumer + dispatcher fan-out.** A single union consumer → dispatch queue →
+per-handler queues (read shared topics once; add a handler without minting a consumer group) was
+evaluated and **deferred (YAGNI)**. At current scale (2–3 handlers, low volume) per-handler consumers
++ `latest` are simpler *and* more robust. Revisit when **either** (a) runtime hot-reload of definitions
+becomes a goal — add/remove a handler without rolling the pod, where "add a thread + queue" beats
+"mint a group + trigger a rebalance" — **or** (b) handler count / topic-read volume grows enough that
+N× reads or rebalance churn is a measured cost. Constraints a future implementer must respect (learned
+in review, so they aren't relearned): a `confluent_kafka` Consumer is single-thread only (poll +
+commit on one thread); the poll thread must never block longer than `max.poll.interval.ms` or it's
+evicted (so backpressure is drop-with-log, never block-the-consumer); **at-least-once watermark commit
+is mandatory** because the engine is loss-sensitive (a dropped contributor silently suppresses a fire,
+while duplicates are safe via the idempotent `zadd` + cooldown lock); and the fan-out **loses
+per-handler crash isolation** (one shared consumer thread stalls every event).
+
 ### Deployment
 
 - **One image** (`inference-runtime`) built once by CI — not one per event.

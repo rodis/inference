@@ -63,7 +63,16 @@ def build_consumer(definition: EventDefinition, kafka: KafkaSettings) -> Consume
             "ssl.key.location": kafka.ssl_key_path,
             "group.id": f"inference-{definition.slug}-v1",
             "enable.auto.commit": False,
-            "auto.offset.reset": "earliest",
+            # Start a brand-new group at the TAIL, not the beginning. Only applies
+            # when the group has no committed offset — i.e. a newly added event, or
+            # a new topic added to an existing group. Existing handlers keep their
+            # committed positions and are unaffected. This avoids replaying all
+            # history on every new event (which the wall-clock cooldown vs event-time
+            # window collapses into junk fires + "invalid envelope" log spam). The
+            # trade-off — a new event doesn't backfill its window from history — is
+            # desired; replay-backfill was useless anyway. Mirrors Vector's
+            # vector-neon-persister source (auto_offset_reset: latest).
+            "auto.offset.reset": "latest",
         }
     )
 
