@@ -27,14 +27,18 @@ class KafkaStreamHandler:
         self.pipeline = pipeline
         self._running = False
 
-    def start(self, source_topics: list[str]) -> None:
+    def start(self, source_topics: list[str], handle_signals: bool = True) -> None:
         self.consumer.subscribe(source_topics)
         self._running = True
         self.observer.on_start(source_topics)
 
-        # SIGTERM is the standard K8s pod shutdown signal; SIGINT handles local Ctrl+C
-        signal.signal(signal.SIGTERM, lambda *_: self._shutdown())
-        signal.signal(signal.SIGINT, lambda *_: self._shutdown())
+        # SIGTERM is the standard K8s pod shutdown signal; SIGINT handles local Ctrl+C.
+        # signal.signal() only works on the main thread, so a multi-handler runtime
+        # running handlers in threads passes handle_signals=False and calls stop()
+        # itself from the main thread (see runtime.supervisor).
+        if handle_signals:
+            signal.signal(signal.SIGTERM, lambda *_: self._shutdown())
+            signal.signal(signal.SIGINT, lambda *_: self._shutdown())
 
         try:
             while self._running:
@@ -84,6 +88,11 @@ class KafkaStreamHandler:
                         self.consumer.commit(message=msg)
         finally:
             self.consumer.close()
+
+    def stop(self) -> None:
+        """Ask the poll loop to exit after its current iteration. Thread-safe —
+        the runtime supervisor calls this from the main thread on SIGTERM/SIGINT."""
+        self._shutdown()
 
     def _shutdown(self):
         self._running = False

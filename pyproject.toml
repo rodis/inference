@@ -17,6 +17,7 @@ dependencies = [
     "pydantic>=2.6",
     "redis",
     "python-dotenv",
+    "pyyaml",
 ]
 
 [tool.hatch.build.targets.wheel]

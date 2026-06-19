@@ -1,7 +1,7 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: inference-car-door-opened
+  name: inference-runtime
   namespace: argocd
   finalizers:
     - resources-finalizer.argocd.argoproj.io

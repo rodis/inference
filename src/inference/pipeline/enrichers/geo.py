@@ -1,5 +1,6 @@
 from inference.events.messages import GeoLocated, GeoPoint
 from inference.pipeline.draft import DerivedDraft
+from inference.runtime.registry import register_enricher
 
 
 class GeoEnricher:
@@ -35,3 +36,8 @@ class GeoEnricher:
         return draft.model_copy(
             update={"fields": {**draft.fields, "location": location.model_dump(exclude_none=True)}}
         )
+
+
+@register_enricher("geo")
+def build_geo_enricher(config: dict) -> GeoEnricher:
+    return GeoEnricher(strategy=config.get("strategy", "centroid"))

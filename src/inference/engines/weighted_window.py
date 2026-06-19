@@ -4,6 +4,7 @@ import redis
 
 from inference.events import Envelope
 from inference.pipeline.draft import DerivedDraft
+from inference.runtime.registry import register_engine
 
 
 def _redis_config_from_env() -> dict:
@@ -94,3 +95,15 @@ class WeightedWindowEngine:
             occurred_at=avg_ts,
             contributors=contributors,
         )
+
+
+@register_engine("weighted_window")
+def build_weighted_window_engine(definition) -> WeightedWindowEngine:
+    """Build a WeightedWindowEngine from an EventDefinition.
+
+    The engine's `rules` dict is the definition's `name` (identity) plus its
+    `engine_config` (threshold, window_seconds, cooldown_seconds, weights). The
+    engine still resolves its own Redis config from env (Engine-Owned Infra).
+    """
+    rules = {"name": definition.name, **definition.engine_config}
+    return WeightedWindowEngine(rules=rules)

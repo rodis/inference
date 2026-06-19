@@ -3,4 +3,4 @@ resources:
   - inference-worker-config.yml
   - kafka-ssl-credentials.yml
   - redis-credentials.yml
-  - car-door-opened
+  - runtime

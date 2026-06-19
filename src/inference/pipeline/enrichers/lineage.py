@@ -1,4 +1,5 @@
 from inference.pipeline.draft import DerivedDraft
+from inference.runtime.registry import register_enricher
 
 
 class LineageEnricher:
@@ -21,3 +22,8 @@ class LineageEnricher:
             for c in draft.contributors
         ]
         return draft.model_copy(update={"fields": {**draft.fields, "derived_from": derived_from}})
+
+
+@register_enricher("lineage")
+def build_lineage_enricher(config: dict) -> LineageEnricher:
+    return LineageEnricher()

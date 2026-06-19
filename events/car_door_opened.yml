@@ -1,0 +1,27 @@
+# Inference event, defined as data (ADR 0003). Replaces workers/car_door_opened/main.py.
+# `name` is the identity source of truth: emitted event_name, Redis keys
+# inference:car_door_opened:*, and the kebab consumer group inference-car-door-opened-v1.
+name: car_door_opened
+enabled: true
+
+engine: weighted_window
+engine_config:
+  # car_lock_state_change + device_connected_to_carplay together assert the car
+  # door is open. Equally important: 5 each, threshold 10 → both required in window.
+  threshold: 10
+  window_seconds: 600
+  cooldown_seconds: 10
+  weights:
+    car_lock_state_change: 5
+    device_connected_to_carplay: 5
+
+source_topics: [raw_sensors]
+sink_topic: high_level_events
+event_domain: sensors
+
+# Ordered chain — same as the old ENRICHERS list. Pipeline gates each by its
+# declared `requires` capability against the contributors (ADR 0001 Phase 2b).
+enrichers:
+  - lineage                       # requires=None → always (derived_from)
+  - geo:                          # requires=GeoLocated → only if a contributor is geolocated
+      strategy: centroid

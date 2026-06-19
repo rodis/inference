@@ -105,14 +105,16 @@ A message is never retried indefinitely. If a message cannot be processed, it is
 
 ## Configuration Source
 
-**Shared infra config lives in `config.py`. Per-worker config lives in `workers/<name>/main.py`. Engine-internal infra lives in the engine module.**
+**Shared infra config lives in `config.py`. Per-event config lives in `events/<name>.yml`. Engine-internal infra lives in the engine module.**
 
-- `config.py` holds only the cluster-shared infrastructure that the wiring layer touches directly: Kafka bootstrap servers, SSL cert paths, Vector base URL. Sourced from env vars / K8s Secrets and identical across all workers.
-- Each worker's `main.py` imports its engine class directly and declares its own per-worker config: `RULES`, source/sink topics, consumer group, event domain. Worker-specific, no meaningful shared default.
-- The worker's identity must be derived from the directory name, never declared as a literal. The directory layout is the source of truth; this prevents copy-paste drift across workers. Two forms are exposed at the top of `main.py`:
-  - `WORKER_NAME = Path(__file__).parent.name` — snake_case, used at the **data layer**: `RULES["name"]`, `APPLICATION`, Redis keys, emitted `inference_type`, Vector URL path, logger names.
-  - `WORKER_SLUG = WORKER_NAME.replace("_", "-")` — kebab-case, used at the **infra layer**: Kafka consumer group ID, and any other K8s / Docker / external-naming boundary that rejects underscores. The image-publish workflow already slugifies the directory name the same way (`${WORKER//_/-}`).
-  - The worker's Dockerfile must preserve the directory structure when copying `main.py` into the image (`workers/<name>/main.py`, not flattened to `main.py`). Otherwise `Path(__file__).parent.name` resolves to the WORKDIR (`app`), and every identity downstream — Redis keys, `inference_type`, Vector URL path, Kafka group — silently becomes `app`.
-- Engine-internal infra (Redis connection, future Postgres connection, etc.) lives in the engine module — see **Engine-Owned Infrastructure**. It must not appear in `config.py` or `main.py`.
+> Under ADR 0003 an event is data, not a directory: each `events/<name>.yml` is an `EventDefinition` and the generic runtime loads them all. This section reflects that; the old per-`workers/<name>/main.py` identity rule (`WORKER_NAME = Path(__file__).parent.name`) is retired.
 
-`main.py` is still only wiring — it does not contain logic. The per-worker constants at the top of the file are the worker's ConfigMap-equivalent.
+- `config.py` holds only the cluster-shared infrastructure that the wiring layer touches directly: Kafka bootstrap servers, SSL cert paths, Vector base URL. Sourced from env vars / K8s Secrets and identical across all events.
+- Each `events/<name>.yml` declares its own config: `engine` + `engine_config` (threshold, window, weights, …), `source_topics`, `sink_topic`, `event_domain`, `enrichers`. Event-specific, no meaningful shared default.
+- The event's identity must be derived from the definition's `name` field, never declared piecemeal. It is the single source of truth; this prevents drift across the data and infra layers. Two forms:
+  - `name` (snake_case) — **data layer**: `RULES["name"]`, Redis keys, emitted `inference_type`, Vector URL path (`{domain}/{name}/{sink}`), logger names.
+  - `slug = name.replace("_", "-")` (kebab-case) — **infra layer**: Kafka consumer group ID (`inference-<slug>-v1`), and any other external-naming boundary that rejects underscores.
+- Engines and enrichers are resolved from the definition's string keys via the registries in `runtime/registry.py`; concrete implementations self-register, so the runtime/framework names none of them.
+- Engine-internal infra (Redis connection, future Postgres connection, etc.) lives in the engine module — see **Engine-Owned Infrastructure**. It must not appear in `config.py` or the runtime/wiring.
+
+The runtime `main.py` is only wiring — it does not contain logic. The `events/*.yml` definitions are the per-event ConfigMap-equivalent (and in ADR 0003 Phase 2 literally become a ConfigMap).
