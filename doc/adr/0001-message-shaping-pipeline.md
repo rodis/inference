@@ -56,7 +56,7 @@ engine.
   `event_name, source_app, source_type, timestamp, message: dict`. **No `envelope_id`.**
 - The result dict is POSTed to Vector, which **re-wraps** it into an envelope and publishes to Kafka
   `high_level_events`. So the engine output is intentionally *not* an `Envelope`.
-- Vector runs as in-cluster ConfigMaps (namespace `vector`); it has **no** Postgres sink today.
+- Vector runs as in-cluster ConfigMaps (namespace `inference`); it has **no** Postgres sink today.
   Neon `aware` is empty, PostGIS 3.5 available but not installed.
 
 ---

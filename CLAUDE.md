@@ -34,7 +34,7 @@ Two cross-cutting rules drive most of the structure and are *not* obvious from r
 1. `events/<name>.yml` — copy an existing definition; set `name`, `engine`, `engine_config`, `source_topics`, `sink_topic`, `event_domain`, `enrichers`. (See [`runtime/definition.py`](src/inference/runtime/definition.py) for the schema.)
 2. If the event needs a new engine or enricher, add it under `src/inference/` and decorate it with `@register_engine(...)` / `@register_enricher(...)`, and make sure the runtime entrypoint imports its module.
 
-That's it — no new directory, Dockerfile, kustomize triplet, or ArgoCD app. In Phase 1 the runtime image is rebuilt (CI auto-builds the single `inference-runtime` image from `workers/runtime/Dockerfile` and bumps `deploy/kustomize/base/runtime/values.yml`); Phase 2 will make a definition change a ConfigMap roll with no rebuild.
+That's it — no new directory, Dockerfile, kustomize triplet, or ArgoCD app. In Phase 1 the runtime image is rebuilt (CI auto-builds the single `inference-runtime` image from `workers/runtime/Dockerfile` and bumps `deploy/inference/kustomize/base/runtime/values.yml`); Phase 2 will make a definition change a ConfigMap roll with no rebuild.
 
 ## Local development
 
@@ -44,10 +44,12 @@ In K8s the same env vars come from a `ConfigMap` (Kafka, Vector) and `Secret` (R
 
 ## Deploy-state branch
 
-`main` is the source branch. CI builds images on push to `main`, bumps `deploy/kustomize/base/*/values.yml`, and **force-pushes** the result to the `deploy-state` branch. Argo CD watches `deploy-state`. Implications:
+`deploy/` holds three things: [`deploy/inference/kustomize/`](deploy/inference/kustomize/) (the worker), [`deploy/vector/kustomize/`](deploy/vector/kustomize/) (Vector — this pipeline's ingest gateway + Neon persister), and [`deploy/argocd/`](deploy/argocd/) (the two `Application` manifests). Both apps deploy into the **`inference`** namespace; there is no separate `vector` namespace (Vector is per-application now, not cluster-wide). The `inference-runtime` app tracks `deploy-state`; `inference-vector` tracks `main` directly (pure config on a stock image — no image bump needed).
 
-- Never commit directly to `deploy-state`; it is overwritten.
-- A change to `deploy/` on `main` will reach Argo CD only after the next CI run for that worker. Paths under `deploy/**` are excluded from the workflow trigger to avoid rebuild loops, so a deploy-only PR will not retrigger the workflow — bump something in `src/` or `workers/` (or run the workflow manually) to refresh `deploy-state`.
+`main` is the source branch. Two workflows keep `deploy-state` (which Argo CD watches) in sync — never commit to `deploy-state`, it is force-pushed:
+
+- **Code changes** (`paths-ignore: deploy/**`) trigger [`publish-images.yml`](.github/workflows/publish-images.yml): build images, bump `deploy/inference/kustomize/base/*/values.yml` to `sha-<short>` (the placeholder `sha-bootstrap` in `main` lives only as a placeholder; the real tag exists only on `deploy-state`), commit, force-push `deploy-state`.
+- **Deploy-only changes** (`paths: deploy/**`) trigger [`mirror-deploy-state.yml`](.github/workflows/mirror-deploy-state.yml): mirror `main`→`deploy-state` **while carrying each worker's existing `deploy-state` image tag forward** (so a deploy-only change never reverts the deployed image to the placeholder).
 
 ## What is intentionally not here yet
 

@@ -6,4 +6,4 @@ name: vector
 releaseName: vector
 repo: https://helm.vector.dev
 valuesFile: values.yml
-namespace: vector
+namespace: inference

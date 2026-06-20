@@ -99,7 +99,7 @@ jobs:
           short="${SHA:0:7}"
           echo "$WORKERS" | jq -r '.[]' | while read -r worker; do
             slug="${worker//_/-}"
-            values="deploy/kustomize/base/${slug}/values.yml"
+            values="deploy/inference/kustomize/base/${slug}/values.yml"
             if [ ! -f "$values" ]; then
               echo "::warning::No manifest for $worker at $values, skipping"
               continue

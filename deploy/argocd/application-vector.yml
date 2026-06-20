@@ -17,7 +17,9 @@ spec:
 
   destination:
     server: https://kubernetes.default.svc
-    namespace: vector
+    # Vector is now per-application (this pipeline's ingest), so it lives in the
+    # inference namespace alongside the worker — not a cluster-wide vector ns.
+    namespace: inference
 
   syncPolicy:
     automated:

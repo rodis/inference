@@ -11,7 +11,7 @@ spec:
   source:
     repoURL: https://github.com/rodis/inference.git
     targetRevision: deploy-state
-    path: deploy/kustomize/base
+    path: deploy/inference/kustomize/base
 
   destination:
     server: https://kubernetes.default.svc

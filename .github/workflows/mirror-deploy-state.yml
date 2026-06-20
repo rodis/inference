@@ -37,7 +37,7 @@ jobs:
           fi
           # For each worker manifest, copy the tag from deploy-state onto main's
           # tree so the mirror keeps the deployed image instead of the placeholder.
-          find deploy/kustomize/base -mindepth 2 -maxdepth 2 -name values.yml | while read -r values; do
+          find deploy/inference/kustomize/base -mindepth 2 -maxdepth 2 -name values.yml | while read -r values; do
             git show "origin/deploy-state:${values}" > /tmp/ds_values.yml 2>/dev/null || continue
             ds_tag="$(yq '.deployment.image.tag' /tmp/ds_values.yml)"
             if [ -n "$ds_tag" ] && [ "$ds_tag" != "null" ]; then

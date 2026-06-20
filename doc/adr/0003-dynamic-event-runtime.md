@@ -136,7 +136,7 @@ per-handler crash isolation** (one shared consumer thread stalls every event).
 ### Deployment
 
 - **One image** (`inference-runtime`) built once by CI — not one per event.
-- **One** `deploy/kustomize/base/runtime/` (helmChart + values) and **one** ArgoCD `Application`.
+- **One** `deploy/inference/kustomize/base/runtime/` (helmChart + values) and **one** ArgoCD `Application`.
 - Definitions ship via `configMapGenerator` over `events/*.yml`, mounted read-only into the runtime.
   A YAML edit → new ConfigMap hash → ArgoCD rolls the Deployment → handlers reload. No image rebuild
   needed to change a definition (only to change runtime *code*).
