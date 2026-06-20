@@ -1,0 +1,8 @@
+# Scrapeable Vector internals on :9090/metrics. Use to pin/verify buffer health:
+#   vector_buffer_events{component_id="sensor_to_kafka_aiven"}  (and "sensor_to_neon")
+#   vector_component_sent_events_total{...}
+# A growing buffer_events means that sink is the bottleneck.
+type: prometheus_exporter
+inputs:
+  - internal_metrics
+address: 0.0.0.0:9090

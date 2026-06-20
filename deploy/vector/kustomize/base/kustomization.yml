@@ -11,6 +11,7 @@ configMapGenerator:
     files:
       - ./configs/sources/http_server_data_in.yml
       - ./configs/sources/kafka_persist.yml
+      - ./configs/sources/internal_metrics.yml
   - name: vector-transforms
     namespace: inference
     files:
@@ -24,6 +25,7 @@ configMapGenerator:
       - ./configs/sinks/console.yml
       - ./configs/sinks/sensor_to_kafka_aiven.yml
       - ./configs/sinks/sensor_to_neon.yml
+      - ./configs/sinks/prometheus_exporter.yml
 
 resources:
   # The inference namespace is owned by the inference-runtime app (its

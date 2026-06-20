@@ -24,11 +24,17 @@ service:
     - name: http-server
       port: 80
       protocol: TCP
+    - name: prom-exporter
+      port: 9090
+      protocol: TCP
 containerPorts:
   - containerPort: 80
     name: http-server
     protocol: TCP
-    
+  - containerPort: 9090
+    name: prom-exporter
+    protocol: TCP
+
 logLevel: "debug"
 
 extraVolumes:

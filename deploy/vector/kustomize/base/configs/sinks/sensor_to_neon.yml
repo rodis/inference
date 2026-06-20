@@ -7,8 +7,14 @@ endpoint: "${NEON_DATABASE_URL}"
 table: events
 healthcheck:
   enabled: true
-# Survive brief Neon unavailability (e.g. scale-to-zero cold start) without
-# dropping events — the Kafka consumer offset only advances on a successful write.
+# Flush the tail row on a 1s timer instead of waiting for the next event — under
+# low traffic the batch otherwise sat for many minutes.
+batch:
+  timeout_secs: 1
+# Memory buffer (was disk). No durability need here (WIP, no users); when_full:
+# block means a Neon outage applies backpressure and the Kafka offset simply
+# doesn't advance until a write succeeds — still no data loss.
 buffer:
-  type: disk
-  max_size: 268435488 # 256MB
+  type: memory
+  max_events: 500
+  when_full: block

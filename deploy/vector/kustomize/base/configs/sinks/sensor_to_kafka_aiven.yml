@@ -7,6 +7,10 @@ encoding:
   codec: json
   except_fields:
     - kafka_topic
+# Flush the producer promptly even under low traffic. The default leaves the tail
+# message of a quiet period sitting; 100ms linger keeps delivery near-real-time.
+librdkafka_options:
+  "queue.buffering.max.ms": "100"
 tls:
   enabled: true
   ca_file: "/etc/vector/certs/ca_certificate"
@@ -16,6 +20,10 @@ tls:
 healthcheck:
   enabled: false
 
+# Memory buffer (not disk): the disk buffer's write/flush cadence under low traffic
+# was holding the tail event for minutes. No durability need here (WIP, no users);
+# when_full: block applies backpressure rather than dropping if Kafka is unreachable.
 buffer:
-  type: disk
-  max_size: 268435488 # 256MB buffer if Kafka is temporarily unreachable
+  type: memory
+  max_events: 500
+  when_full: block
