@@ -1,0 +1,28 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: inference-vector
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/rodis/inference.git
+    # Vector is pure config on a stock image — it never needs CI's image-bump
+    # rewrite, so it tracks `main` directly (the runtime app tracks deploy-state).
+    targetRevision: main
+    path: deploy/vector/kustomize/overlays/production
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: vector
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
