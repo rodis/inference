@@ -1,5 +1,11 @@
 name: Mirror deploy-state
 
+# Deploy-only pushes to main (paths under deploy/**) don't rebuild images, so
+# publish-images.yml is skipped for them. This workflow mirrors those changes
+# onto deploy-state — but it must NOT clobber the real image tags that
+# publish-images.yml previously bumped there. main carries a `sha-bootstrap`
+# placeholder in each worker values.yml; the real `sha-<short>` lives only on
+# deploy-state. So before pushing, carry each worker's deploy-state tag forward.
 on:
   push:
     branches: [main]
@@ -20,5 +26,38 @@ jobs:
         with:
           ref: main
           token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Force-push main to deploy-state
-        run: git push --force origin HEAD:deploy-state
+
+      - name: Preserve bumped image tags from deploy-state
+        run: |
+          set -euo pipefail
+          # First mirror ever (no deploy-state yet): nothing to preserve.
+          if ! git fetch origin deploy-state 2>/dev/null; then
+            echo "deploy-state does not exist yet — mirroring main as-is"
+            exit 0
+          fi
+          # For each worker manifest, copy the tag from deploy-state onto main's
+          # tree so the mirror keeps the deployed image instead of the placeholder.
+          find deploy/kustomize/base -mindepth 2 -maxdepth 2 -name values.yml | while read -r values; do
+            git show "origin/deploy-state:${values}" > /tmp/ds_values.yml 2>/dev/null || continue
+            ds_tag="$(yq '.deployment.image.tag' /tmp/ds_values.yml)"
+            if [ -n "$ds_tag" ] && [ "$ds_tag" != "null" ]; then
+              yq -i ".deployment.image.tag = \"${ds_tag}\"" "$values"
+              echo "Preserved ${values} -> ${ds_tag}"
+            fi
+          done
+
+      - name: Commit (if changed) and force-push to deploy-state
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- deploy/; then
+            # No tag preservation needed — main's deploy/ already matches.
+            git push --force origin HEAD:deploy-state
+          else
+            git add deploy/
+            git commit -m "deploy: mirror main (preserving image tags) @ ${SHA:0:7}"
+            git push --force origin HEAD:deploy-state
+          fi
