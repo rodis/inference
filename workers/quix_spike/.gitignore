@@ -1,0 +1,3 @@
+# Local RocksDB state created by `app.run()` — recoverable from the changelog topic.
+state/
+__pycache__/

@@ -25,6 +25,9 @@ packages = ["src/inference"]
 
 [project.optional-dependencies]
 dev = []
+# Spike-only: the Quix Streams data-plane exploration (workers/quix_spike/).
+# Kept out of the runtime image deps until the migration is real (ADR 0004).
+quix = ["quixstreams>=3.0"]
 
 [tool.ruff]
 line-length = 100

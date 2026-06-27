@@ -1,0 +1,181 @@
+# ADR 0004 — Scaling model: keyed partitions over event-type placement
+
+Status: **Draft / exploration — design-only; nothing implemented. Names the target and the next decision.**
+Date: 2026-06-22
+
+> The bridge record between the current threaded runtime ([ADR 0003](0003-dynamic-event-runtime.md))
+> and the chosen Quix-Streams data-plane direction. It explains *why* the runtime does not scale
+> horizontally per event type, why static sharding is the wrong fix, and what the principled answer is.
+> No code changes here — the actionable output is a single modeling decision (the entity key).
+
+---
+
+## Context
+
+ADR 0003 collapsed one-pod-per-event into a single generic runtime: it loads every `events/*.yml` and
+runs **one handler (one thread, one consumer group) per definition in one process**
+([`supervisor.py`](../../src/inference/runtime/supervisor.py)). `replicas: N` stamps out N **identical**
+pods — every pod runs **every** handler.
+
+This bought real operational wins (one image, one deploy, add-an-event = a YAML change) at a cost that
+only shows up under load:
+
+- **No per-event-type horizontal scaling.** A replica duplicates all M handlers; it cannot give one
+  hot event type more parallelism. With 100 event types, every pod runs 100 threads + 100 librdkafka
+  consumers + 100 consumer-group memberships, regardless of which types are busy.
+- **The first real ceiling is consumer-group count**, not threads. 100 blocking IO-bound threads are
+  cheap (parked in `poll()`); 100 group memberships × N replicas against a **2-broker free-tier Aiven**
+  cluster is the constraint that bites first.
+
+### Why the obvious fixes are wrong
+
+- **More replicas** — duplicates the bundle; idle threads for partitions a pod didn't get. Adds load,
+  not scale (see [ADR 0003 scaling note] / discussion).
+- **Static sharding** (split `events/` via `EVENTS_DIR`, run K deployments each loading a slice).
+  Rejected as the *primary* model: it's offline bin-packing against a load distribution you can't know
+  in advance, it goes stale as traffic shifts, and the assignment is manual. Useful as a coarse blast-
+  radius/ops boundary later; **not** a scaling strategy.
+
+### Root cause
+
+All of the pain traces to one decision in [`invariants.md`](../invariants.md): **identity = event_type
+= consumer group**. That makes the *event type* the unit of placement — and the event type has
+unpredictable, unbounded load. You cannot pack an unknown distribution by hand.
+
+---
+
+## Keystone: why state/partition co-location is the load-bearing idea
+
+Everything below rests on one property, and it is worth stating on its own because the rest is
+downstream of it:
+
+> **`key → partition → exactly one consumer owns that partition` ⇒ there is structurally one writer
+> for any key's state. Not one writer enforced by a lock — one writer by construction.**
+
+The hardest thing in distributed stateful processing is concurrent mutation of shared state; the usual
+toolbox (locks, leases, CAS, Lua, transactions) only *manages* that concurrency. Co-location takes a
+different move: it arranges things so **the concurrency never exists**. You are not coordinating access
+to shared state — there is no sharing.
+
+Consequences that all fall out of this one property:
+
+- **No locks / no Lua.** The partition assignment *is* the lock, held by the group coordinator. The
+  **Single-Writer invariant** ([`invariants.md`](../invariants.md)) is satisfied for free.
+- **State goes local.** Because there's one writer, window state can live local to the process
+  (RocksDB on the pod) instead of in a shared store reached over the network — no per-event round-trip,
+  no shared bottleneck. Redis drops out of the engine; the weighted-window *algorithm* survives, only
+  its backend changes.
+- **Scaling stays correct automatically.** On rebalance the partition *and ownership of its state* move
+  together; the new owner rebuilds from the changelog. No split-brain window where two instances both
+  think they own a key.
+- **Three problems collapse into one fix.** The single-writer problem, the un-shardable-global-window
+  problem, and horizontal scaling all dissolve from this single decision — they share one root (no
+  partition key).
+
+This is the foundation of Kafka Streams, Flink keyed state, Samza, and (in different dress) the actor
+model — an actor *is* co-located state + a single-threaded mailbox keyed by identity.
+
+**The catch (so we don't over-rotate):** co-location is only as strong as the key, and it cuts both
+ways. Same-key aggregation becomes trivial; **cross-key joins become the new hard edge** — events with
+*different* natural keys land on different owners and must be **repartitioned** (shuffled) to meet.
+Co-location doesn't eliminate distributed coordination; it *relocates* it to the join boundary, where
+it's explicit and contained (this is exactly ADR 0002's cross-key recursive-derivation question). And
+local state needs a **changelog** for recovery — durability and rebalance-time replay are the price for
+dropping the shared store. Design keys so the common path is same-key; the difficulty moves to the rare
+cross-key path.
+
+---
+
+## Decision (direction, not yet built)
+
+**Stop placing work by event type. Place it by keyed partition.**
+
+Key every event by its **entity** (the unit a window aggregates over — e.g. which car / user / device).
+Then:
+
+- the **partition** is the unit of distribution; the **key** chooses the partition;
+- a hot entity/type spreads across more partitions → more parallelism, **automatically**;
+- scaling = add **identical, generic** instances; the framework's **rebalance** assigns partitions to
+  them live — no manual assignment, ever;
+- per-key window **state is co-located** with its partition: the instance holding the partition owns
+  the state, so there is no cross-instance contention or shared-lock dance.
+
+This is the natural completion of ADR 0003's "work definition is data, runtime is generic" idea: the
+generic runtime + event-as-data is the right foundation; the missing pieces are **(a) the key** and
+**(b) a real stream framework as the placement/state layer** — not a new bespoke abstraction.
+
+### The two established paradigms (both replace static sharding with dynamic, key-driven placement)
+
+1. **Stream processing — Kafka Streams / Flink / Quix (chosen).** Generic worker = a runtime instance;
+   "task definition" = the event YAML (already data); the "middle layer that assigns work" = the
+   consumer-group rebalance protocol + partitioned, changelog-backed state. Quix gives Kafka-Streams
+   semantics in Python: keyed state in RocksDB co-located per partition, recovered from a changelog
+   topic. **This is the direction already chosen** (Flink rejected as too heavy; CRD+operator deferred).
+
+2. **Virtual-actor model — Orleans grains / Akka cluster sharding / Dapr actors.** One actor per entity,
+   identified by key, **activated on demand and placed dynamically** by a directory/coordinator,
+   single-threaded per entity, owning its own state. A literal embodiment of "a little worker per car
+   that wakes, accumulates evidence, and fires." Recorded as the road **not** taken (no actor runtime in
+   the stack), but it's the cleanest conceptual match to per-entity windowed inference and worth knowing.
+
+### Explicitly rejected: a generic task queue / dispatcher
+
+A "middle layer that builds task definitions and hands them to a stateless worker pool"
+(Celery/SQS-style) is the **wrong tool** here. Task queues fit **independent, stateless** work (scrape a
+URL, resize an image). This workload is **stateful, ordered, keyed aggregation** — multiple events must
+converge on one window, in order, with consistent state. A task queue discards ordering and
+state-locality, forcing you to rebuild locking, dedup, and windowing on top of it — i.e. reimplement a
+stream processor, badly. The reason streaming frameworks exist is precisely that this is hard and not
+worth hand-rolling.
+
+---
+
+## The lynchpin: do events carry an entity key?
+
+This is the existing Quix spike's open question and **the gate for everything above**. Without a key,
+every event hashes to one partition and the system is pinned at today's **1-partition ceiling**
+regardless of framework. With a key, the manual-sharding problem evaporates and horizontal scale comes
+for free from rebalance.
+
+### Next steps (in order)
+
+1. **Decide the entity key** — what unit does a window aggregate over? (per car? per user?
+   per car-per-trip?) A *modeling* decision, not a code one. Blocks everything else.
+2. **Re-key ingest** so events carry it (Vector can stamp/route on the key at ingest).
+3. **Port one event to Quix** keyed by it; prove `replicas=2` splits partitions correctly and per-key
+   state stays consistent — the existing spike, now with the key decided.
+
+---
+
+## Open questions
+
+- **Key granularity** — per entity, or per entity-per-session/trip? Finer keys = more parallelism but
+  more state churn and shorter-lived windows.
+- **Cross-key derivations** — recursive derivation (ADR 0002) may correlate events with *different*
+  natural keys (a car event + a phone event). What is the join key then, and does one side need
+  re-keying? This is where keyed streams get genuinely hard.
+- **Does the threaded runtime stay** as the control-plane/dev shim, or is it fully replaced by Quix?
+- **Static sharding as an ops boundary** — even with keyed scaling, is `EVENTS_DIR` slicing still worth
+  keeping for blast-radius isolation (a poison event can't stall unrelated handlers)?
+- **State migration on rebalance** — changelog replay latency / standby replicas; acceptable for this
+  project's "no load, prove-it-structurally" bar, but the real-world cost to understand.
+
+---
+
+## Consequences
+
+- The "generic runtime + event-as-data" foundation (ADR 0003) is **kept** — this builds on it, doesn't
+  revert it.
+- Per-event-type horizontal scaling stops being a packing problem and becomes a partition-count + key
+  decision the framework executes automatically.
+- Commits the project to the entity-key modeling decision as the **immediate** next step — it gates the
+  Quix port, recursive-derivation join semantics (ADR 0002), and any horizontal-scale claim.
+- This is a **learning-project** record: the goal is a *structurally* scalable design (provable without
+  load), consistent with "scale by design, not under pressure." No load is expected; the value is the
+  skill and the clean target.
+
+---
+
+When this moves past draft, update [`architecture.md`](../architecture.md) and
+[`invariants.md`](../invariants.md) (especially the identity rule, which this directly reframes) per the
+"update docs alongside behavior" rule in [`CLAUDE.md`](../../CLAUDE.md).
