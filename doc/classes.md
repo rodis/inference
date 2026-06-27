@@ -1,5 +1,12 @@
 # Inference Worker — Class Reference
 
+> **⚠️ STALE (pre-Quix).** Most classes documented here (`Envelope`, `MessageBase`, engines, transport,
+> pipeline, `RuntimeSupervisor`, …) belonged to the threaded runtime and **have been removed**
+> (**superseded by [ADR 0004](adr/0004-scaling-model.md)**). The live runtime is
+> [`inference.runtime.quix`](../src/inference/runtime/quix.py) (~150 lines) + `EventDefinition`
+> ([`runtime/definition.py`](../src/inference/runtime/definition.py)). Read those directly; this doc
+> awaits a rewrite.
+
 ## Events
 
 ### `Envelope` — `events/envelope.py`

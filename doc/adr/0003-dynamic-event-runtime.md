@@ -1,7 +1,13 @@
 # ADR 0003 — Dynamic event runtime: YAML-defined, multi-handler, single deployment
 
-Status: **Accepted — Phase 1 implemented (runtime + loader + single deployment); Phases 2–3 pending**
+Status: **Superseded by [ADR 0004](0004-scaling-model.md) (2026-06-27)** — was: Accepted (Phase 1 implemented)
 Date: 2026-06-19
+
+> **Superseded.** The "event = YAML data, one generic runtime loads all definitions" idea **survives** —
+> but the *execution model* here (threaded `RuntimeSupervisor`, one `KafkaStreamHandler` consumer group
+> per event, Redis-backed engine, Vector HTTP emit) was replaced by the Quix Streams runtime
+> ([`inference.runtime.quix`](../../src/inference/runtime/quix.py)): one `Application`, one consumer
+> group, partition-local Quix `State`. That threaded code has been removed. See ADR 0004.
 
 > Decision record for the **multi-handler runtime** that ADR 0001 deferred (the "Worker facade" /
 > event-definition open question) and ADR 0002 named as the fix for deployment-granularity waste.

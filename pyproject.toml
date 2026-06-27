@@ -13,9 +13,8 @@ version = "0.0.0"
 requires-python = ">=3.13"
 license = {text = "Apache Software License 2.0"}
 dependencies = [
-    "confluent-kafka",
+    "quixstreams>=3.24,<4",   # the runtime data plane (ADR 0004); bundles confluent-kafka
     "pydantic>=2.6",
-    "redis",
     "python-dotenv",
     "pyyaml",
 ]
@@ -25,9 +24,6 @@ packages = ["src/inference"]
 
 [project.optional-dependencies]
 dev = []
-# Spike-only: the Quix Streams data-plane exploration (workers/quix_spike/).
-# Kept out of the runtime image deps until the migration is real (ADR 0004).
-quix = ["quixstreams>=3.0"]
 
 [tool.ruff]
 line-length = 100

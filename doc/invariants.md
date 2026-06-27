@@ -1,5 +1,12 @@
 # Inference Worker — Invariants
 
+> **⚠️ PARTIALLY STALE (pre-Quix).** Several rules here (Redis-key identity, engine-owned Redis,
+> transport adapters, single-writer-via-Lua) targeted the threaded runtime, **superseded by
+> [ADR 0004](adr/0004-scaling-model.md)**. Under the Quix runtime, single-writer-per-key is structural
+> (partition ownership, no Lua), state is Quix `State` (no Redis), and there is one shared consumer group
+> (not one per event). The *identity* rule (definition `name` = emitted `event_name`) still holds. Awaits
+> reconciliation; read ADR 0004 + [`quix.py`](../src/inference/runtime/quix.py) for current truth.
+
 Design rules that must hold across the entire codebase. When adding new engines, observers, or transport adapters, verify these still hold.
 
 ---
@@ -102,6 +109,28 @@ A message is never retried indefinitely. If a message cannot be processed, it is
 **The cooldown lock must be set atomically.**
 
 `SET NX EX` (atomic) is used instead of a separate `EXISTS` + `SETEX`. This prevents two concurrent engine instances from both passing the threshold check and both emitting a duplicate inference within the same cooldown window.
+
+---
+
+## Single-Writer Per Event Key
+
+**Each event's Redis state has exactly one writer. An event scales to `replicas > 1` only after its engine's decide-path is made atomic.**
+
+`WeightedWindowEngine` derives all its keys from the event `name` alone — `inference:<name>:buffer` (ZSET), `inference:<name>:contributors` (HASH), `inference:<name>:lock`. There is no per-pod or per-partition component, so **every consumer of the same event resolves to the same keys**. For a *global* correlation window this is correct and intended: state must be centralized, or partitioning the source topics across consumers would fragment the window and drop co-occurrences whose contributors landed on different partitions. The shared ZSET is the right design — the constraint is on *concurrent access* to it, not on sharing it.
+
+The hazard is that `decide()` is only **partially** atomic:
+
+- The opening pipeline (`zadd` + `hset` + `zremrangebyscore` + `zrange`) runs as one `MULTI`/`EXEC` (redis-py `transaction=True` default) — atomic. ✅
+- The **HASH prune that follows is not transactional**: it computes `stale = hkeys() - survivors` against the ZRANGE snapshot it captured a moment earlier, then `hdel`s the difference. A second writer that `ZADD`s + `HSET`s a new member *between* the snapshot and the `hkeys()` call will have its live member treated as stale and its body deleted — the ZSET keeps the member, the HASH loses its body, and a later `hmget` at fire time silently drops that contributor. Concurrency-only, silent data loss.
+
+The cooldown `SET NX EX` (see above) *does* hold under concurrency, so the worst case is a lost/partial contributor body, **not** a double-fire.
+
+**Why it's safe today:** the current topology runs exactly one handler per event in one process, with no replicas in practice — so there is never a second concurrent writer and the non-atomic prune is fine. This is a load-bearing assumption that was previously unstated.
+
+**How to apply:**
+- Treat "one consumer per event key" as an invariant of the engine as written. Single-replica-per-event is the safe default.
+- Before setting `replicas > 1` for any event (i.e. intra-event throughput scaling via Kafka partition fan-out), the engine's whole read-modify-decide-prune cycle must first be made atomic — fold it into a single server-side `EVAL` (Lua) script, or guard it with a short per-key lock. Once atomic, replicas scale that event's throughput correctly because the shared ZSET is exactly the state they should share.
+- Event-level horizontal scaling (one Deployment per event / per shard) and intra-event scaling (`replicas > 1` for a hot event) are **separate axes**. The first needs no engine change; the second is gated on this atomicity fix.
 
 ---
 

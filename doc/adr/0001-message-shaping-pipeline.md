@@ -1,7 +1,14 @@
 # ADR 0001 — Message shaping pipeline: decide → enrich → emit
 
-Status: **Accepted — Phases 1, 2a, 2b implemented; Phase 3 (persistence) pending**
+Status: **Superseded by [ADR 0004](0004-scaling-model.md) (2026-06-27)** — was: Accepted (Phases 1, 2a, 2b implemented)
 Date: 2026-06-14 (2b: 2026-06-15)
+
+> **Superseded.** The decide→enrich→emit pipeline, `DerivedDraft`, the enricher chain, and the typed
+> message/capability layer described here belonged to the threaded runtime, now replaced by the Quix
+> Streams runtime ([`inference.runtime.quix`](../../src/inference/runtime/quix.py)). That code has been
+> removed; the runtime builds `derived_from` lineage inline and does not (yet) run an enricher chain.
+> Kept for the rationale and as the reference if enrichers/typed messages are reintroduced into the
+> Quix flow. The content below describes the removed design.
 
 > This is a design/decision record describing the **target** architecture and its rationale.
 > **Phases 1 (decide → enrich → emit), 2a (`envelope_id`, Vector-minted), and 2b (typed messages +

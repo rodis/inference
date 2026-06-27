@@ -2,12 +2,11 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
-# Install the inference package and its dependencies, incl. the Quix data plane
-# (ADR 0004): the runtime is now a single Quix Streams Application, not the
-# thread-per-event RuntimeSupervisor.
+# Install the inference package and its dependencies. The runtime is a single
+# Quix Streams Application (ADR 0004); quixstreams is a base dependency.
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
-RUN pip install --no-cache-dir '.[quix]'
+RUN pip install --no-cache-dir .
 
 # Generic runtime entrypoint + the event definitions it loads at startup.
 # Definitions are baked into the image for now (ADR 0003 Phase 1); Phase 2 moves

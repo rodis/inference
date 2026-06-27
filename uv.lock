@@ -370,28 +370,20 @@ name = "inference"
 version = "0.0.0"
 source = { editable = "." }
 dependencies = [
-    { name = "confluent-kafka" },
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
-    { name = "redis" },
-]
-
-[package.optional-dependencies]
-quix = [
     { name = "quixstreams" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "confluent-kafka" },
     { name = "pydantic", specifier = ">=2.6" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
-    { name = "quixstreams", marker = "extra == 'quix'", specifier = ">=3.0" },
-    { name = "redis" },
+    { name = "quixstreams", specifier = ">=3.24,<4" },
 ]
-provides-extras = ["dev", "quix"]
+provides-extras = ["dev"]
 
 [[package]]
 name = "joserfc"
@@ -700,15 +692,6 @@ dependencies = [
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7b/d8/12f037f005a420b6652eb432c36fcba7e929cdae33984715d229f66f01a7/quixstreams-3.24.0-py3-none-any.whl", hash = "sha256:8afc01deb44b7f5383f77affdb184b53c1bc39c24f44433a334f05fca3ca0d43", size = 404410, upload-time = "2026-06-12T12:10:42.174Z" },
-]
-
-[[package]]
-name = "redis"
-version = "7.4.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/7b/7f/3759b1d0d72b7c92f0d70ffd9dc962b7b7b5ee74e135f9d7d8ab06b8a318/redis-7.4.0.tar.gz", hash = "sha256:64a6ea7bf567ad43c964d2c30d82853f8df927c5c9017766c55a1d1ed95d18ad", size = 4943913, upload-time = "2026-03-24T09:14:37.53Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/74/3a/95deec7db1eb53979973ebd156f3369a72732208d1391cd2e5d127062a32/redis-7.4.0-py3-none-any.whl", hash = "sha256:a9c74a5c893a5ef8455a5adb793a31bb70feb821c86eccb62eebef5a19c429ec", size = 409772, upload-time = "2026-03-24T09:14:35.968Z" },
 ]
 
 [[package]]

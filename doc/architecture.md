@@ -1,5 +1,11 @@
 # Inference Worker — Architecture
 
+> **⚠️ STALE (pre-Quix).** Describes the threaded runtime (per-event consumer, Redis engine, Vector HTTP
+> emit), **superseded by [ADR 0004](adr/0004-scaling-model.md)**. The live runtime is one Quix Streams
+> `Application` ([`inference.runtime.quix`](../src/inference/runtime/quix.py)): one consumer group,
+> partition-local Quix `State` (no Redis), envelopes produced straight to Kafka (Vector only ingests +
+> persists to Neon). Read ADR 0004 + `quix.py` for current truth; this awaits a rewrite.
+
 ## Overview
 
 Each inference worker is a standalone Python process deployed as a Kubernetes pod. It reads raw events from a Kafka topic, evaluates them against an inference engine, and publishes high-level inference events to a second Kafka topic when a threshold is met.
