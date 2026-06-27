@@ -1,7 +1,7 @@
 deployment:
   image:
     repository: ghcr.io/rodis/inference-runtime
-    tag: "sha-bootstrap"   # placeholder; CI bumps this to sha-<short> on deploy-state
+    tag: "sha-c0c6e95" # placeholder; CI bumps this to sha-<short> on deploy-state
     pullPolicy: IfNotPresent
   env:
     KAFKA_BOOTSTRAP_SERVERS:
