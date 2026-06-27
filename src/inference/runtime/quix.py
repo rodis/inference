@@ -135,9 +135,18 @@ def build_runtime() -> Application:
         sink_for[d.name] = d.sink_topic
         union_topics.update(d.source_topics)
 
-    logger.info("Loaded %d definition(s): %s; consuming %s; sinks %s",
+    # Consume only EXTERNAL source topics — those not produced by this runtime.
+    # Recursive derivation (a definition consuming another's output, e.g.
+    # got_into_the_car ← car_door_opened) is handled IN-PROCESS by the router (see
+    # below), so we never re-consume our own sink. This also sidesteps a Quix issue
+    # where `concat()` of multiple source topics + auto_offset_reset=latest fails to
+    # consume new messages — and keeps us to a single source topic (no concat).
+    sink_topics = set(sink_for.values())
+    source_topics = sorted(union_topics - sink_topics)
+
+    logger.info("Loaded %d definition(s): %s; consuming %s (external); sinks %s",
                 len(definitions), [d.name for d in definitions],
-                sorted(union_topics), sorted(set(sink_for.values())))
+                source_topics, sorted(sink_topics))
 
     ssl = _ssl_config()
     app = Application(
@@ -148,27 +157,39 @@ def build_runtime() -> Application:
         producer_extra_config=ssl,
         state_dir=os.environ.get("QUIX_STATE_DIR", "state"),
     )
-    sources = {t: app.topic(t, value_deserializer="json") for t in sorted(union_topics)}
-    sinks = {t: app.topic(t, value_serializer="json") for t in sorted(set(sink_for.values()))}
+    sources = {t: app.topic(t, value_deserializer="json") for t in source_topics}
+    sinks = {t: app.topic(t, value_serializer="json") for t in sorted(sink_topics)}
 
     def router(value, state: State):
+        """One incoming event in → all derived events out (expand=True), including
+        multi-hop derivations resolved IN-PROCESS. A fired event is fed back through
+        the same consumers map (queue), so e.g. car_door_opened immediately drives
+        got_into_the_car using that entity's persisted window — no Kafka round-trip,
+        no need to consume high_level_events. The event_name gatekeeper keeps the
+        graph a DAG (terminal events match no consumer and stop the cascade).
+        """
         if not isinstance(value, dict):
             return []
         msg = value.get("message") or {}
-        name = msg.get("event_name")
-        now = int(msg.get("timestamp", 0))
+        queue = [(msg.get("event_name"), int(msg.get("timestamp", 0)), value)]
         out = []
-        for spec in consumers.get(name, []):
-            result = decide(spec, name, now, value, state)
-            if result:
-                logger.info("FIRED %s vehicle=%s score=%s",
-                            result["inference_type"], result["message"]["vehicle_id"],
-                            result["message"]["confidence_score"])
-                out.append(to_envelope(result))
+        while queue:
+            name, now, val = queue.pop(0)
+            for spec in consumers.get(name, []):
+                result = decide(spec, name, now, val, state)
+                if result:
+                    logger.info("FIRED %s vehicle=%s score=%s",
+                                result["inference_type"], result["message"]["vehicle_id"],
+                                result["message"]["confidence_score"])
+                    env = to_envelope(result)
+                    out.append(env)
+                    queue.append((env["message"]["event_name"],
+                                  int(env["message"]["timestamp"]), env))
         return out
 
+    # Single combined stream over external source topics (one topic here → no concat).
     sdf = None
-    for t in sorted(union_topics):
+    for t in source_topics:
         stream = app.dataframe(sources[t])
         sdf = stream if sdf is None else sdf.concat(stream)
     sdf = sdf.group_by(key_for, name="entity")
