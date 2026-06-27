@@ -147,6 +147,23 @@ for free from rebalance.
 
 ---
 
+## Finding from the spike (2026-06-27): the topic budget is a real ceiling
+
+The step-3 spike (two instances over a 2-partition keyed topic) **proved the model**
+— disjoint key ownership across instances, single-writer-per-key, zero double-fires.
+But it surfaced a constraint the theory glosses over: **a stateful stream framework
+mints internal topics per handler.** Each Quix stateful operator creates a
+**changelog** topic; each `group_by` adds a **repartition** topic. On the Aiven
+**free-0 plan (5 user topics max)** that ceiling is hit almost immediately
+(`raw_sensors` + `high_level_events` + one spike's changelog already crowds it).
+
+Consequence: with this data plane, **the number of stateful event types is bounded
+by the topic budget, not just compute** — a second axis of the same "how many events
+can we run" question this ADR opened. Mitigations: a larger Kafka plan; **key at
+ingest (Vector) to avoid `group_by`** and its repartition topic; or share changelog
+topics across handlers. This makes the "key at ingest vs `group_by` in-app" choice
+(below) not just a performance question but a topic-count one.
+
 ## Open questions
 
 - **Key granularity** — per entity, or per entity-per-session/trip? Finer keys = more parallelism but

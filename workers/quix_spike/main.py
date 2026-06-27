@@ -53,6 +53,10 @@ THRESHOLD = 10
 WINDOW_SECONDS = 600
 COOLDOWN_SECONDS = 600
 
+# A label so two instances in one consumer group are distinguishable in the logs
+# (step 3 — proving partition/key split). Defaults to the PID.
+INSTANCE = os.environ.get("SPIKE_INSTANCE", str(os.getpid()))
+
 SOURCE_TOPIC = os.environ.get("SPIKE_SOURCE_TOPIC", "raw_sensors")
 # Separate sink so we never touch the real high_level_events during the spike.
 SINK_TOPIC = os.environ.get("SPIKE_SINK_TOPIC", "high_level_events_spike")
@@ -105,6 +109,7 @@ def weighted_window(value: dict, state: State):
     if name not in WEIGHTS:                       # gatekeeper (engine's event_name filter)
         return None
 
+    entity = key_for(value)                       # the vehicle this derived event is about
     now = int(msg.get("timestamp", 0))
 
     # window: {event_name: {"ts": earliest_ts, "envelope_id": id}} — dedup-earliest.
@@ -130,6 +135,7 @@ def weighted_window(value: dict, state: State):
         "inference_type": "car_door_opened",
         "message": {
             "event_name": "car_door_opened",
+            "vehicle_id": entity,                 # carry the entity key onto the derived event
             "timestamp": int(occurred_at),
             "confidence_score": score,
             "occurred_at": occurred_at,
@@ -150,15 +156,29 @@ def build_app() -> Application:
         auto_offset_reset="latest",               # matches builder.py:75 (no replay)
         consumer_extra_config=_SSL,
         producer_extra_config=_SSL,
+        # Per-instance local RocksDB dir. In K8s each pod has its own disk; locally
+        # two instances in one group must not share a state dir (RocksDB lock).
+        state_dir=os.environ.get("SPIKE_STATE_DIR", "state"),
     )
     source = app.topic(SOURCE_TOPIC, value_deserializer="json")
     sink = app.topic(SINK_TOPIC, value_serializer="json")
 
     sdf = app.dataframe(source)
-    sdf = sdf.group_by(key_for, name="entity")    # re-key → per-entity state (the lesson)
+    if os.environ.get("SPIKE_GROUP_BY", "true").lower() == "true":
+        # Step 2 path: re-key in-app. Needs a repartition topic (a shuffle), but
+        # works even when the source isn't keyed by entity.
+        sdf = sdf.group_by(key_for, name="entity")
+    # else (step 3, production-clean): the source is ALREADY keyed by vehicle_id at
+    # produce time, so State scopes to the Kafka message key directly — no shuffle,
+    # and the source partitions split straight across instances.
     sdf = sdf.apply(weighted_window, stateful=True)
     sdf = sdf.filter(lambda v: v is not None)      # drop the no-fire messages
-    sdf = sdf.update(lambda v: log.info("🔥 FIRED car_door_opened: %s", v["message"]))
+    sdf = sdf.update(
+        lambda v: log.info(
+            "🔥 [%s] FIRED car_door_opened vehicle=%s score=%s",
+            INSTANCE, v["message"]["vehicle_id"], v["message"]["confidence_score"],
+        )
+    )
     sdf = sdf.to_topic(sink)
     return app
 

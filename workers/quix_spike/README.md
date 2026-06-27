@@ -69,14 +69,61 @@ unit of parallelism).
 - Output is the `finalize()`-style superset dict to a **spike** topic; it is not
   yet re-wrapped into a full `Envelope` (that's step 4 — drop the Vector hop).
 
+## Step 3 — scaling proof ✅ (verified live 2026-06-27)
+
+Two instances (`SPIKE_INSTANCE=A`/`B`), one consumer group, a **2-partition**
+source topic keyed by `vehicle_id` (`SPIKE_GROUP_BY=false`, so the source
+partitions split straight across instances — the production-clean path):
+
+```
+Instance A fired: car-1, car-2, car-3
+Instance B fired: car-4, car-5, car-6
+```
+
+Disjoint key ownership, union = all six, **zero double-fires**. Each vehicle's two
+contributors landed on the same partition → same instance → same local state, so
+each fired exactly once, owned by exactly one instance. That's single-writer-per-key
++ horizontal split, demonstrated. To reproduce:
+
+```bash
+# create a 2-partition keyed source topic (raw_sensors_spike2) via AdminClient first, then:
+SPIKE_INSTANCE=A SPIKE_SOURCE_TOPIC=raw_sensors_spike2 SPIKE_GROUP_BY=false \
+  SPIKE_CONSUMER_GROUP=quix-spike-cdo-step3 SPIKE_STATE_DIR=state_A python main.py &
+SPIKE_INSTANCE=B SPIKE_SOURCE_TOPIC=raw_sensors_spike2 SPIKE_GROUP_BY=false \
+  SPIKE_CONSUMER_GROUP=quix-spike-cdo-step3 SPIKE_STATE_DIR=state_B python main.py &
+# then inject keyed pairs for several vehicles (Kafka message key = vehicle_id)
+```
+
+Two instances in one group need **separate** `SPIKE_STATE_DIR`s locally (RocksDB
+lock); in K8s each pod has its own disk so this is automatic.
+
+### ⚠️ Finding: the Aiven free tier caps you at **5 user topics**
+
+Every stateful handler mints a **changelog** topic (and a **repartition** topic if
+it uses `group_by`). On the free-0 plan that ceiling is hit almost immediately:
+`raw_sensors` + `high_level_events` + one spike's changelog/repartition already
+crowds it. Real consequence for the migration — **the number of stateful event
+types is bounded by the topic budget**, not just compute. Either pay for a larger
+plan, avoid `group_by` (key at ingest so no repartition topic), or share changelog
+topics. Recorded in [ADR 0004](../../doc/adr/0004-scaling-model.md).
+
 ## Next steps (ADR 0004)
 
-3. **Prove scaling**: a 2-partition test topic, two distinct `vehicle_id`s, run two
-   instances — confirm no double-fire and each instance owns disjoint keys.
 4. **Drop the Vector emit hop**: produce a full `Envelope` to the real
    `high_level_events`; Vector becomes Kafka→Neon persister only.
 5. **Generalize to YAML**: build one topology branch per `EventDefinition` on a
    shared `Application` — the actual 1:1-unbinding migration.
+
+## Env vars
+
+| Var | Default | Purpose |
+|---|---|---|
+| `SPIKE_SOURCE_TOPIC` | `raw_sensors` | input topic |
+| `SPIKE_SINK_TOPIC` | `high_level_events_spike` | output topic (isolated from prod) |
+| `SPIKE_CONSUMER_GROUP` | `quix-spike-car-door-opened-v1` | consumer group |
+| `SPIKE_GROUP_BY` | `true` | `true`=re-key in-app (step 2); `false`=source already keyed (step 3) |
+| `SPIKE_STATE_DIR` | `state` | local RocksDB dir (per-instance when scaling) |
+| `SPIKE_INSTANCE` | PID | label to tell instances apart in logs |
 
 ## Cleanup
 
