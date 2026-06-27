@@ -107,10 +107,32 @@ types is bounded by the topic budget**, not just compute. Either pay for a large
 plan, avoid `group_by` (key at ingest so no repartition topic), or share changelog
 topics. Recorded in [ADR 0004](../../doc/adr/0004-scaling-model.md).
 
+## Step 4 — drop the Vector emit hop ✅ (verified live 2026-06-27)
+
+The spike now mints the full `high_level_events` **Envelope** itself
+(`to_envelope()` — the job Vector's `classify_domain` + `enrich_sensor` transforms
+did) and produces it **straight to Kafka** via `to_topic()`. No HTTP POST to Vector.
+
+Proven two ways:
+- **Offline**: `to_envelope()` output field-set matches a real `high_level_events`
+  message exactly, and parses cleanly through the production `inference.events.Envelope`
+  model (message → `OpaqueMessage`, as expected for the unregistered `car_door_opened`).
+- **Live**: ran producing to the real `high_level_events`, injected the pair, then
+  re-consumed the topic and re-parsed the actual bytes via `Envelope` — found the
+  spike's envelope (tagged `source_type: "quix_spike"`, vs the live worker's
+  `"http_server"`). The worker mints `envelope_id` now (was Vector's job).
+
+```bash
+SPIKE_SINK_TOPIC=high_level_events SPIKE_CONSUMER_GROUP=quix-spike-step4 python main.py
+```
+
+Consequence for the architecture: **Vector leaves the emit path** and is reduced to
+the Kafka→Neon persister (`kafka_persist` source already consumes `high_level_events`).
+The only behavioural shift is `source_type` (`http_server` → the producing component)
+and who mints `envelope_id` (Vector → worker).
+
 ## Next steps (ADR 0004)
 
-4. **Drop the Vector emit hop**: produce a full `Envelope` to the real
-   `high_level_events`; Vector becomes Kafka→Neon persister only.
 5. **Generalize to YAML**: build one topology branch per `EventDefinition` on a
    shared `Application` — the actual 1:1-unbinding migration.
 

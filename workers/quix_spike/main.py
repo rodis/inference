@@ -33,6 +33,9 @@ that is the whole lesson, made concrete.
 
 import logging
 import os
+import time
+import uuid
+from datetime import datetime, timezone
 
 from dotenv import find_dotenv, load_dotenv
 from quixstreams import Application
@@ -149,6 +152,30 @@ def weighted_window(value: dict, state: State):
     }
 
 
+def to_envelope(result: dict) -> dict:
+    """Wrap the engine output in the `high_level_events` Envelope shape (ADR 0004 step 4).
+
+    This is the job Vector's `classify_domain` + `enrich_sensor` transforms did when
+    the worker POSTed to the HTTP gateway. Dropping that hop means the worker mints
+    `envelope_id` and stamps the metadata itself, then produces straight to Kafka via
+    `to_topic()`. The output matches the live wire shape field-for-field (verified
+    against a real high_level_events message), except `source_type` — which is now
+    "quix_spike" instead of "http_server" because it no longer comes through the HTTP
+    source. That field is also our distinguisher from the live worker's output.
+    """
+    name = result["inference_type"]
+    return {
+        "envelope_id": str(uuid.uuid4()),          # was minted by Vector's enrich_sensor
+        "event_name": name,
+        "inference_type": name,
+        "message": result["message"],
+        "processed_at": time.time(),
+        "source_app": name,                        # Vector set this from the URL path segment
+        "source_type": "quix_spike",               # was "http_server"; now produced directly
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 def build_app() -> Application:
     app = Application(
         broker_address=os.environ["KAFKA_BOOTSTRAP_SERVERS"],
@@ -179,7 +206,8 @@ def build_app() -> Application:
             INSTANCE, v["message"]["vehicle_id"], v["message"]["confidence_score"],
         )
     )
-    sdf = sdf.to_topic(sink)
+    sdf = sdf.apply(to_envelope)                    # step 4: shape the full Envelope ourselves
+    sdf = sdf.to_topic(sink)                        # produce straight to Kafka — no Vector hop
     return app
 
 
