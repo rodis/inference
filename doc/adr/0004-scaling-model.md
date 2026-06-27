@@ -164,6 +164,29 @@ ingest (Vector) to avoid `group_by`** and its repartition topic; or share change
 topics across handlers. This makes the "key at ingest vs `group_by` in-app" choice
 (below) not just a performance question but a topic-count one.
 
+## Spike outcome (steps 2–5, all verified live against Aiven 2026-06-27)
+
+`workers/quix_spike/` carried the direction from theory to running code on the real
+cluster:
+
+- **Step 2** — `car_door_opened` on one Quix `Application` + per-key `State` (no Redis,
+  no thread-per-event); fired end to end.
+- **Step 3** — two instances, one group, 2-partition keyed topic: disjoint key
+  ownership, **zero double-fires** (single-writer-per-key, proven).
+- **Step 4** — worker mints the full `Envelope` and `to_topic()`s it directly;
+  parses through the production `Envelope` model. **Vector leaves the emit path.**
+- **Step 5** — `runtime.py` loads every `events/*.yml` on **one shared `Application`**
+  and fires both `car_door_opened` and (recursively) `got_into_the_car` in one process.
+  **The 1:1 event↔thread binding is gone.**
+
+The step-5 shape was **dictated by the topic budget above**: one shared keyed
+stateful **router** (loads all definitions as data, per-`(definition, entity)` window
+in namespaced state) costs 1 repartition + 1 changelog *regardless of definition
+count*, whereas one-branch-per-definition costs N of each and overruns the 5-topic
+cap. So "how many stateful events can run" is answered on free tier by collapsing to
+a shared router — a concrete instance of this ADR's whole thesis (place/execute by
+something other than per-event-type identity).
+
 ## Open questions
 
 - **Key granularity** — per entity, or per entity-per-session/trip? Finer keys = more parallelism but

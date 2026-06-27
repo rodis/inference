@@ -131,10 +131,46 @@ the Kafka→Neon persister (`kafka_persist` source already consumes `high_level_
 The only behavioural shift is `source_type` (`http_server` → the producing component)
 and who mints `envelope_id` (Vector → worker).
 
-## Next steps (ADR 0004)
+## Step 5 — generic YAML-driven runtime ✅ (verified live 2026-06-27)
 
-5. **Generalize to YAML**: build one topology branch per `EventDefinition` on a
-   shared `Application` — the actual 1:1-unbinding migration.
+`runtime.py` loads **every** `events/*.yml` (via the same
+`inference.runtime.definition.load_definitions` the current runtime uses) and runs
+them ALL on **one shared `Application`** — one consumer group, one process. Adding
+an event is a YAML change, not another thread/consumer. **The 1:1 event↔thread
+binding is gone.**
+
+```bash
+cd workers/quix_spike && python runtime.py     # runs all events/*.yml at once
+```
+
+Verified live: injected `device_connected_to_power` + `car_lock_state_change` +
+`device_connected_to_carplay`, and one process fired **both** derivations:
+
+```
+🔥 FIRED car_door_opened  vehicle=spike_test   (lock + carplay)
+🔥 FIRED got_into_the_car  vehicle=spike_test  (power + the car_door_opened it just produced)
+```
+
+The second is **recursive derivation in-process**: the fired `car_door_opened` is
+produced to `high_level_events`, which is also a source topic, so the same router
+re-consumes it and feeds `got_into_the_car` — no extra wiring (ADR 0002).
+
+### Design: one shared router, not one branch per definition — and why
+
+The step-3 topic-budget finding **forced** this. Per-definition branches would mint
+N changelog + N repartition topics (over the 5-topic free-tier cap at N=3). So the
+runtime is a single keyed stateful **router** that loads all definitions as data and
+keeps a per-`(definition, entity)` window in **namespaced** state
+(`<def>:window`, `<def>:last_fired`). Cost: **1 repartition + 1 changelog total**,
+independent of definition count. The definitions stay the source of truth; only the
+execution shape changed. On a paid plan, per-definition branches read cleaner — a
+real cost/clarity trade, recorded in [ADR 0004](../../doc/adr/0004-scaling-model.md).
+
+### What a real migration still needs (not in this spike)
+
+- mTLS/config from the K8s `ConfigMap`/`Secret` (here it's `workers/.env`);
+- the enricher chain (`lineage`/`geo`) run as `.apply()` steps instead of inlined;
+- typed message validation at finalize; a deploy manifest; liveness/readiness.
 
 ## Env vars
 
