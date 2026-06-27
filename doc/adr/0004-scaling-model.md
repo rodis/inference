@@ -187,6 +187,34 @@ cap. So "how many stateful events can run" is answered on free tier by collapsin
 a shared router — a concrete instance of this ADR's whole thesis (place/execute by
 something other than per-event-type identity).
 
+## Deployed to the cluster (2026-06-27) — and two findings it forced
+
+The Quix runtime now **runs in-cluster** as the `inference-runtime` image CMD
+(`workers/runtime/quix_main.py` → `inference.runtime.quix`), replacing the threaded
+`RuntimeSupervisor`. State is an ephemeral emptyDir (`/tmp/quix-state`), recovered
+from the changelog. Verified live: injecting raw events makes the deployed pod fire
+`car_door_opened` **and** `got_into_the_car`, both landing on `high_level_events`.
+Getting there forced two design changes worth recording:
+
+1. **Read-only root filesystem.** RocksDB needs a writable dir; the hardened
+   container root is read-only. Fix: an `emptyDir` mounted at `/tmp/quix-state`
+   (ephemeral by design — state recovers from the Kafka changelog).
+
+2. **Quix `concat()` + `auto_offset_reset=latest` does not consume new messages.**
+   The runtime originally consumed `raw_sensors` + `high_level_events` (for recursive
+   derivation) by `concat`-ing the two source dataframes. In-cluster it stalled —
+   assigned partitions, consumed nothing. Bisected in-pod: raw consume/produce,
+   `latest`, `group_by`, `stateful` all work *individually*; `concat`+`earliest` reads
+   the backlog; but `concat`+`latest` consumes **zero** live messages. **Fix, which is
+   also a better design: don't consume `high_level_events` at all.** Consume only
+   *external* source topics (`union(source_topics) − sink_topics` = just `raw_sensors`
+   → a single topic, no `concat`), and resolve recursion **in-process** — a fired event
+   is fed back through the router's consumers map within the same call, using the
+   entity's persisted window. Lower latency (no Kafka round-trip), fewer topics, and it
+   sidesteps the `concat` bug. Caveat: this assumes the runtime is the *only* producer
+   of derived events (true here — the old per-event workers are decommissioned); an
+   external producer of a derived event would not be seen.
+
 ## Open questions
 
 - **Key granularity** — per entity, or per entity-per-session/trip? Finer keys = more parallelism but
