@@ -50,13 +50,23 @@ deployment:
             path: access-cert.pem
           - key: access-key
             path: access-key.pem
+    # Writable scratch for the Quix runtime's local RocksDB state (ADR 0004). The
+    # root filesystem is read-only, so /tmp/quix-state (the image's QUIX_STATE_DIR)
+    # needs a real volume. Ephemeral by design — state is recovered from the Kafka
+    # changelog on restart/reschedule, consistent with the no-in-cluster-persistence rule.
+    quix-state:
+      emptyDir: {}
   volumeMounts:
     kafka-ssl:
       mountPath: /etc/kafka/ssl
+    quix-state:
+      mountPath: /tmp/quix-state
   resources:
     requests:
       cpu: 50m
-      memory: 128Mi
-    limits:
-      cpu: 200m
       memory: 256Mi
+    limits:
+      # Bumped for the Quix runtime (ADR 0004): RocksDB state + librdkafka use more
+      # than the old threaded runtime's 256Mi.
+      cpu: 250m
+      memory: 512Mi
