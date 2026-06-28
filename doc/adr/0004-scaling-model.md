@@ -222,11 +222,34 @@ Getting there forced two design changes worth recording:
 - **Cross-key derivations** — recursive derivation (ADR 0002) may correlate events with *different*
   natural keys (a car event + a phone event). What is the join key then, and does one side need
   re-keying? This is where keyed streams get genuinely hard.
-- **Does the threaded runtime stay** as the control-plane/dev shim, or is it fully replaced by Quix?
+- **Does the threaded runtime stay** — *resolved (2026-06-27, commit c0c6e95):* fully replaced by Quix
+  and **removed** from the repo (no rollback shim; git history only).
 - **Static sharding as an ops boundary** — even with keyed scaling, is `EVENTS_DIR` slicing still worth
   keeping for blast-radius isolation (a poison event can't stall unrelated handlers)?
 - **State migration on rebalance** — changelog replay latency / standby replicas; acceptable for this
   project's "no load, prove-it-structurally" bar, but the real-world cost to understand.
+
+### Future work: the two next goals (in order)
+
+1. **Goal 1 — `user_id` entity key (multi-user, correctness).** The single change that makes the design
+   scale to many users (throughput aside): every producer stamps a consistent `user_id` into the payload,
+   and `key_for` reads it (the fallback chain already drafts `vehicle_id or user_id or source_app`). It's
+   primarily a **producer/ingest contract**, not runtime code. Everything else falls out: cooldowns/windows
+   become per-user automatically, topic footprint unchanged, no cross-key issue (a user's events all share
+   that user's key). Does **not** require goal 2.
+
+2. **Goal 2 — multi-feed ingest (flexibility).** Let distinct external feeds (different schema/retention/
+   producer/ACLs) coexist. Two routes, only one of which touches the `concat`+`latest` stall:
+   - **Option A — fan-in at the edge.** Producers write to their own topics; **Vector merges them into the
+     single `raw_sensors`** the runtime already consumes. Keeps the runtime single-source (the proven path);
+     mostly Vector config. *Preferred default* — delivers decoupled feeds without the bug.
+   - **Option B — runtime consumes multiple source topics.** Only if a feed truly can't be normalized at the
+     edge. Requires solving the `concat`+`latest` stall. **Diagnose first:** minimal repro + check whether
+     it's a known Quix bug / a newer Quix version offers native multi-topic sources (`app.dataframe(topics=…)`,
+     making `concat` unnecessary). If real and unfixed, the workaround is `earliest` + **tail-seeded committed
+     offsets** on first deploy (we proved `concat`+`earliest` consumes; seeding offsets at the tail avoids the
+     one-time history replay, then it resumes from committed offsets like `latest`).
+   Until pursued, the runtime enforces a **single external source topic** (the only tested path).
 
 ---
 
