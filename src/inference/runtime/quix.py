@@ -22,42 +22,26 @@ One shared keyed router (not one branch per definition) because each stateful
 operator + `group_by` mints Kafka topics, and the Aiven free tier caps user topics
 at 5; the router costs 1 repartition + 1 changelog regardless of definition count.
 
-Config comes from env (set by the K8s ConfigMap/Secret, or `workers/.env` locally):
-  KAFKA_BOOTSTRAP_SERVERS, KAFKA_SSL_{CA,CERT,KEY}_PATH, EVENTS_DIR,
-  QUIX_CONSUMER_GROUP, QUIX_STATE_DIR.
+Config (env-backed settings + constants like the producing APP_NAME) lives in
+`inference.runtime.config`; env is set by the K8s ConfigMap/Secret + image ENV, or
+`workers/.env` locally.
 """
 
 import logging
-import os
 import time
 import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
-from pathlib import Path
 
 from quixstreams import Application
 from quixstreams.state import State
 
 # importing names from the package runs inference/engines/__init__.py, which registers the built-in engines
 from inference.engines import Decision, ScopedState, build_engine
+from inference.runtime import config
 from inference.runtime.definition import load_definitions
 
 logger = logging.getLogger("inference.quix")
-
-# The producing application, recorded as `source_app` on derived events. Raw events
-# carry their own producer (e.g. "shortcut"); derived events are produced by this
-# runtime, so they share one meaningful value instead of duplicating event_name.
-APP_NAME = "inference"
-
-
-def _ssl_config() -> dict:
-    # Defaults match the kafka-ssl Secret volume mount in deploy/.../runtime/values.yml.
-    return {
-        "security.protocol": "SSL",
-        "ssl.ca.location": os.environ.get("KAFKA_SSL_CA_PATH", "/etc/kafka/ssl/ca-cert.pem"),
-        "ssl.certificate.location": os.environ.get("KAFKA_SSL_CERT_PATH", "/etc/kafka/ssl/access-cert.pem"),
-        "ssl.key.location": os.environ.get("KAFKA_SSL_KEY_PATH", "/etc/kafka/ssl/access-key.pem"),
-    }
 
 
 def key_for(value: dict) -> str:
@@ -97,7 +81,7 @@ def to_envelope(name: str, decision: Decision, user_id: str) -> dict:
         "event_name": name,
         "inference_type": name,
         "processed_at": time.time(),
-        "source_app": APP_NAME,
+        "source_app": config.APP_NAME,
         "source_type": "inference_quix",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "message": {
@@ -141,10 +125,9 @@ def _route(value: dict, state: State, consumers: dict) -> list[dict]:
 
 
 def build_runtime() -> Application:
-    events_dir = Path(os.environ.get("EVENTS_DIR", "events"))
-    definitions = load_definitions(events_dir)
+    definitions = load_definitions(config.EVENTS_DIR)
     if not definitions:
-        raise RuntimeError(f"No enabled event definitions found under {events_dir}")
+        raise RuntimeError(f"No enabled event definitions found under {config.EVENTS_DIR}")
 
     # Resolve each definition's engine (by its `engine` string) and index which event
     # names each engine consumes. Both are strategy-agnostic from here on — the
@@ -181,14 +164,14 @@ def build_runtime() -> Application:
                 len(definitions), [d.name for d in definitions],
                 source_topic, sorted(sink_topics))
 
-    ssl = _ssl_config()
+    ssl = config.kafka_ssl()
     app = Application(
-        broker_address=os.environ["KAFKA_BOOTSTRAP_SERVERS"],
-        consumer_group=os.environ.get("QUIX_CONSUMER_GROUP", "inference-quix-runtime-v1"),
+        broker_address=config.kafka_bootstrap(),
+        consumer_group=config.CONSUMER_GROUP,
         auto_offset_reset="latest",
         consumer_extra_config=ssl,
         producer_extra_config=ssl,
-        state_dir=os.environ.get("QUIX_STATE_DIR", "state"),
+        state_dir=config.STATE_DIR,
     )
     sinks = {t: app.topic(t, value_serializer="json") for t in sorted(sink_topics)}
 
