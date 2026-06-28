@@ -19,4 +19,3 @@ engine_config:
 
 source_topics: [raw_sensors]
 sink_topic: high_level_events
-event_domain: sensors

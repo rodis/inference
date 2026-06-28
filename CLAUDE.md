@@ -41,7 +41,7 @@ Two things that are *not* obvious from any single file:
 
 ## Adding a new event
 
-1. `events/<name>.yml` — copy an existing definition; set `name`, `engine: weighted_window`, `engine_config` (`weights`, `threshold`, `window_seconds`, `cooldown_seconds`), `source_topics`, `sink_topic`, `event_domain`. (See [`runtime/definition.py`](src/inference/runtime/definition.py).)
+1. `events/<name>.yml` — copy an existing definition; set `name`, `engine: weighted_window`, `engine_config` (`weights`, `threshold`, `window_seconds`, `cooldown_seconds`), `source_topics`, `sink_topic`. (See [`runtime/definition.py`](src/inference/runtime/definition.py).)
 2. That's it — the runtime loads it on next start. No new directory, consumer, image structure, or ArgoCD app.
 
 A new **strategy** is a new `Engine` class in [`src/inference/engines/`](src/inference/engines/) + `@register_engine("<name>")` + `engine: <name>` in a definition — no runtime change. (This is ADR 0001's swappable-engine seam, re-established in the Quix runtime.)

@@ -26,7 +26,6 @@ class EventDefinition(BaseModel):
     engine_config: dict = {}        # engine-specific (threshold, window_seconds, cooldown_seconds, weights)
     source_topics: list[str]        # topics the event's contributors arrive on
     sink_topic: str                 # where the derived event is produced
-    event_domain: str               # metadata (originally the Vector ingest URL segment)
 
 
 def load_definitions(events_dir: Path) -> list[EventDefinition]:
