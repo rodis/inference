@@ -158,16 +158,26 @@ def build_runtime() -> Application:
         sink_for[d.name] = d.sink_topic
         union_topics.update(d.source_topics)
 
-    # Consume only EXTERNAL source topics — those not produced by this runtime.
-    # Recursive derivation is handled IN-PROCESS by `_route`, so we never re-consume
-    # our own sink. This also keeps us to a single source topic (no concat — which
-    # stalls with auto_offset_reset=latest in this Quix version).
+    # The runtime consumes exactly ONE external source topic — the source topics not
+    # produced by this runtime. Recursive derivation is resolved IN-PROCESS by `_route`
+    # (a definition's derived contributors are never re-consumed from Kafka), so a
+    # second source is never needed; and Quix `concat()` of multiple sources stalls
+    # under auto_offset_reset=latest. A genuinely separate feed must be merged into this
+    # one topic at the edge (Vector) — see doc/adr/0004-scaling-model.md.
     sink_topics = set(sink_for.values())
     source_topics = sorted(union_topics - sink_topics)
+    if len(source_topics) != 1:
+        raise RuntimeError(
+            f"Expected exactly one external source topic, got {source_topics}. "
+            "Recursion is in-process (no second source needed) and multi-source concat "
+            "stalls with auto_offset_reset=latest; merge separate feeds at ingest "
+            "(Vector). See doc/adr/0004-scaling-model.md."
+        )
+    [source_topic] = source_topics
 
-    logger.info("Loaded %d definition(s): %s; consuming %s (external); sinks %s",
+    logger.info("Loaded %d definition(s): %s; consuming %s; sinks %s",
                 len(definitions), [d.name for d in definitions],
-                source_topics, sorted(sink_topics))
+                source_topic, sorted(sink_topics))
 
     ssl = _ssl_config()
     app = Application(
@@ -178,13 +188,9 @@ def build_runtime() -> Application:
         producer_extra_config=ssl,
         state_dir=os.environ.get("QUIX_STATE_DIR", "state"),
     )
-    sources = {t: app.topic(t, value_deserializer="json") for t in source_topics}
     sinks = {t: app.topic(t, value_serializer="json") for t in sorted(sink_topics)}
 
-    sdf = None
-    for t in source_topics:
-        stream = app.dataframe(sources[t])
-        sdf = stream if sdf is None else sdf.concat(stream)
+    sdf = app.dataframe(app.topic(source_topic, value_deserializer="json"))
     sdf = sdf.group_by(key_for, name="entity")
     sdf = sdf.apply(lambda value, state: _route(value, state, consumers), stateful=True, expand=True)
     sdf = sdf.to_topic(lambda value, key, ts, headers: sinks[sink_for[value["event_name"]]])
