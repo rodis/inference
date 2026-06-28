@@ -24,7 +24,7 @@ class EventDefinition(BaseModel):
     enabled: bool = True            # skip-load toggle for quick experiments
     engine: str                     # engine type; only "weighted_window" is implemented today
     engine_config: dict = {}        # engine-specific (threshold, window_seconds, cooldown_seconds, weights)
-    source_topics: list[str]        # topics the event's contributors arrive on
+    source_topic: str               # external topic the raw contributors arrive on (one per ADR 0004)
     sink_topic: str                 # where the derived event is produced
 
 

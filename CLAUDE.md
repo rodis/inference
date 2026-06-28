@@ -31,7 +31,7 @@ Two things that are *not* obvious from any single file:
 
 1. **One shared keyed router (`_route`), all definitions as data** (not one consumer/branch per event). `_route` loops the engines that consume each incoming event. This is forced by the Aiven free-tier **5-topic cap**: per-definition branches would mint N changelog + N repartition topics; the shared router costs **1 repartition + 1 changelog regardless of definition count**. See ADR 0004.
 
-2. **Recursion is resolved in-process, not through Kafka.** The runtime consumes only **external** source topics (`union(source_topics) − sink_topics` — i.e. `raw_sensors`, *not* `high_level_events`). When the router fires a derived event, it feeds that event back through the consumers map within the same call (a queue), using the entity's persisted window — so e.g. `car_door_opened` immediately drives `got_into_the_car`. Derived events are still produced to `high_level_events` (for persistence + external consumers); they are just not re-consumed. The `event_name` gatekeeper keeps the graph a DAG. (Caveat: assumes the runtime is the only producer of derived events — true today.)
+2. **Recursion is resolved in-process, not through Kafka.** The runtime consumes the **one external** source topic (the definitions' `source_topic` minus sinks — i.e. `raw_sensors`, *not* `high_level_events`; exactly one is required today, see ADR 0004). When the router fires a derived event, it feeds that event back through the consumers map within the same call (a queue), using the entity's persisted window — so e.g. `car_door_opened` immediately drives `got_into_the_car`. Derived events are still produced to `high_level_events` (for persistence + external consumers); they are just not re-consumed. The `event_name` gatekeeper keeps the graph a DAG. (Caveat: assumes the runtime is the only producer of derived events — true today.)
 
 **Identity.** The definition `name` (snake_case) is the emitted `event_name`/`inference_type` and the sink-routing key. The whole runtime shares **one** Kafka consumer group (`QUIX_CONSUMER_GROUP`, default `inference-quix-runtime-v1`) — *not* a group per event (that was the threaded model).
 
@@ -41,7 +41,7 @@ Two things that are *not* obvious from any single file:
 
 ## Adding a new event
 
-1. `events/<name>.yml` — copy an existing definition; set `name`, `engine: weighted_window`, `engine_config` (`weights`, `threshold`, `window_seconds`, `cooldown_seconds`), `source_topics`, `sink_topic`. (See [`runtime/definition.py`](src/inference/runtime/definition.py).)
+1. `events/<name>.yml` — copy an existing definition; set `name`, `engine: weighted_window`, `engine_config` (`weights`, `threshold`, `window_seconds`, `cooldown_seconds`), `source_topic`, `sink_topic`. (See [`runtime/definition.py`](src/inference/runtime/definition.py).)
 2. That's it — the runtime loads it on next start. No new directory, consumer, image structure, or ArgoCD app.
 
 A new **strategy** is a new `Engine` class in [`src/inference/engines/`](src/inference/engines/) + `@register_engine("<name>")` + `engine: <name>` in a definition — no runtime change. (This is ADR 0001's swappable-engine seam, re-established in the Quix runtime.)

@@ -14,5 +14,5 @@ engine_config:
     car_lock_state_change: 5
     device_connected_to_carplay: 5
 
-source_topics: [raw_sensors]
+source_topic: raw_sensors
 sink_topic: high_level_events

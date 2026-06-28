@@ -150,30 +150,31 @@ def build_runtime() -> Application:
     # weighted-window specifics live entirely inside the resolved Engine.
     consumers: dict[str, list] = defaultdict(list)
     sink_for: dict[str, str] = {}
-    union_topics: set[str] = set()
+    declared_sources: set[str] = set()
     for d in definitions:
         engine = build_engine(d)
         for event_name in engine.input_event_names():
             consumers[event_name].append(engine)
         sink_for[d.name] = d.sink_topic
-        union_topics.update(d.source_topics)
+        declared_sources.add(d.source_topic)
 
-    # The runtime consumes exactly ONE external source topic — the source topics not
-    # produced by this runtime. Recursive derivation is resolved IN-PROCESS by `_route`
-    # (a definition's derived contributors are never re-consumed from Kafka), so a
-    # second source is never needed; and Quix `concat()` of multiple sources stalls
+    # The runtime consumes exactly ONE external source topic — the declared sources that
+    # aren't produced by this runtime. Recursive derivation is resolved IN-PROCESS by
+    # `_route` (a definition's derived contributors are never re-consumed from Kafka), so
+    # a second source is never needed; and Quix `concat()` of multiple sources stalls
     # under auto_offset_reset=latest. A genuinely separate feed must be merged into this
-    # one topic at the edge (Vector) — see doc/adr/0004-scaling-model.md.
+    # one topic at the edge (Vector). Allowing multiple sources is future work — see
+    # doc/adr/0004-scaling-model.md.
     sink_topics = set(sink_for.values())
-    source_topics = sorted(union_topics - sink_topics)
-    if len(source_topics) != 1:
+    external_sources = sorted(declared_sources - sink_topics)
+    if len(external_sources) != 1:
         raise RuntimeError(
-            f"Expected exactly one external source topic, got {source_topics}. "
+            f"Expected exactly one external source topic, got {external_sources}. "
             "Recursion is in-process (no second source needed) and multi-source concat "
             "stalls with auto_offset_reset=latest; merge separate feeds at ingest "
             "(Vector). See doc/adr/0004-scaling-model.md."
         )
-    [source_topic] = source_topics
+    [source_topic] = external_sources
 
     logger.info("Loaded %d definition(s): %s; consuming %s; sinks %s",
                 len(definitions), [d.name for d in definitions],

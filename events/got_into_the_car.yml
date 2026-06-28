@@ -17,5 +17,5 @@ engine_config:
     car_door_opened: 5
     device_connected_to_power: 5
 
-source_topics: [raw_sensors]
+source_topic: raw_sensors
 sink_topic: high_level_events
