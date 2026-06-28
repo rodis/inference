@@ -50,11 +50,15 @@ def _ssl_config() -> dict:
 
 
 def key_for(value: dict) -> str:
-    """The entity a window aggregates over — the partition/state key. Prefers a real
-    `vehicle_id` (derived events carry it); falls back to `source_app`, then a constant.
+    """The entity a window aggregates over — the partition/state key (ADR 0004 goal 1).
+
+    Uses `user_id`, which Vector stamps on every event at ingest (defaulting to "rods"
+    if the producer didn't send one). Derived events carry `user_id` too (set in
+    `decide`), so in-process recursion stays on the same entity. Falls back to
+    `source_app` then a constant for any event that somehow lacks `user_id`.
     """
     msg = value.get("message", {}) if isinstance(value, dict) else {}
-    return str(msg.get("vehicle_id") or value.get("source_app") or "_single_entity")
+    return str(msg.get("user_id") or value.get("source_app") or "_single_entity")
 
 
 def to_envelope(result: dict) -> dict:
@@ -98,7 +102,7 @@ def decide(spec: dict, name: str, now: int, value: dict, state: State):
         "inference_type": spec["name"],
         "message": {
             "event_name": spec["name"],
-            "vehicle_id": key_for(value),
+            "user_id": key_for(value),
             "timestamp": int(occurred_at),
             "confidence_score": score,
             "occurred_at": occurred_at,
@@ -178,8 +182,8 @@ def build_runtime() -> Application:
             for spec in consumers.get(name, []):
                 result = decide(spec, name, now, val, state)
                 if result:
-                    logger.info("FIRED %s vehicle=%s score=%s",
-                                result["inference_type"], result["message"]["vehicle_id"],
+                    logger.info("FIRED %s user=%s score=%s",
+                                result["inference_type"], result["message"]["user_id"],
                                 result["message"]["confidence_score"])
                     env = to_envelope(result)
                     out.append(env)

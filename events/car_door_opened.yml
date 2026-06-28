@@ -1,6 +1,5 @@
-# Inference event, defined as data (ADR 0003). Replaces workers/car_door_opened/main.py.
-# `name` is the identity source of truth: emitted event_name, Redis keys
-# inference:car_door_opened:*, and the kebab consumer group inference-car-door-opened-v1.
+# Inference event, defined as data. Loaded by the Quix runtime (ADR 0004).
+# `name` is the identity source of truth: the emitted event_name/inference_type.
 name: car_door_opened
 enabled: true
 
@@ -18,10 +17,3 @@ engine_config:
 source_topics: [raw_sensors]
 sink_topic: high_level_events
 event_domain: sensors
-
-# Ordered chain — same as the old ENRICHERS list. Pipeline gates each by its
-# declared `requires` capability against the contributors (ADR 0001 Phase 2b).
-enrichers:
-  - lineage                       # requires=None → always (derived_from)
-  - geo:                          # requires=GeoLocated → only if a contributor is geolocated
-      strategy: centroid

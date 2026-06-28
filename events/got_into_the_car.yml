@@ -1,7 +1,8 @@
-# Recursive derivation (ADR 0002): got_into_the_car is derived from a DERIVED event
-# (car_door_opened, on high_level_events) + a RAW event (device_connected_to_power,
-# on raw_sensors). So this handler consumes BOTH topics as sources — the derivation
-# graph closes a loop in the topic graph (still a DAG: nothing derives got_into_the_car).
+# Recursive derivation (ADR 0002/0004): got_into_the_car derives from a RAW event
+# (device_connected_to_power) + a DERIVED event (car_door_opened). The derived
+# contributor is fed back IN-PROCESS by the runtime's router — NOT re-consumed from
+# high_level_events — so the only external source is raw_sensors. Still a DAG:
+# nothing derives got_into_the_car, so the cascade terminates.
 name: got_into_the_car
 enabled: true
 
@@ -16,13 +17,6 @@ engine_config:
     car_door_opened: 5
     device_connected_to_power: 5
 
-# The contributors live on different topics — subscribe to both. The engine
-# gatekeeps by event_name, so unrelated traffic on either topic is dropped.
-source_topics: [raw_sensors, high_level_events]
+source_topics: [raw_sensors]
 sink_topic: high_level_events
 event_domain: sensors
-
-enrichers:
-  - lineage
-  - geo:
-      strategy: centroid

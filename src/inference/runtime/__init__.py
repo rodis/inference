@@ -5,10 +5,9 @@ Loads `EventDefinition`s (from `events/*.yml`) and runs them all on one Quix
 source of truth for event identity.
 """
 
-from inference.runtime.definition import EnricherSpec, EventDefinition, load_definitions
+from inference.runtime.definition import EventDefinition, load_definitions
 
 __all__ = [
     "EventDefinition",
-    "EnricherSpec",
     "load_definitions",
 ]

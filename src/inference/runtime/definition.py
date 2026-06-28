@@ -1,32 +1,18 @@
 """`EventDefinition` — an inference event expressed as data, not code.
 
-This is the YAML-on-disk replacement for a worker's hand-written `main.py`
-constants (`RULES`, `KAFKA_*`, `EVENT_DOMAIN`, `ENRICHERS`). The `name` field is
-the source of truth for identity (replacing the directory-name rule): the emitted
-`event_name`, Redis keys (`inference:<name>:*`), and the kebab `slug` used for the
-Kafka consumer group all derive from it.
+The YAML-on-disk schema (`events/<name>.yml`) that the Quix runtime
+([`inference.runtime.quix`](quix.py)) loads. The `name` field is the source of
+truth for identity: it is the emitted `event_name`/`inference_type` and the key the
+router uses to route a fired event to its sink.
 """
 
 import logging
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 logger = logging.getLogger(__name__)
-
-
-class EnricherSpec(BaseModel):
-    """One enricher in the chain: a registry key + its constructor config.
-
-    YAML accepts either a bare string (`- lineage`) or a single-key mapping with
-    config (`- geo: {strategy: centroid}`); both normalize to this shape.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    name: str
-    config: dict = {}
 
 
 class EventDefinition(BaseModel):
@@ -34,36 +20,13 @@ class EventDefinition(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str                       # identity — snake_case; source of truth (was the directory name)
+    name: str                       # identity — snake_case; emitted event_name/inference_type
     enabled: bool = True            # skip-load toggle for quick experiments
-    engine: str                     # registry key (e.g. "weighted_window")
-    engine_config: dict = {}        # engine-specific (threshold, window_seconds, weights, ...)
-    source_topics: list[str]
-    sink_topic: str
-    event_domain: str
-    enrichers: list[EnricherSpec] = []
-
-    @property
-    def slug(self) -> str:
-        """kebab-case form — infra layer (Kafka consumer group)."""
-        return self.name.replace("_", "-")
-
-    @field_validator("enrichers", mode="before")
-    @classmethod
-    def _normalize_enrichers(cls, value):
-        # Accept ["lineage", {"geo": {...}}] and normalize each item to EnricherSpec shape.
-        if not isinstance(value, list):
-            return value
-        out = []
-        for item in value:
-            if isinstance(item, str):
-                out.append({"name": item, "config": {}})
-            elif isinstance(item, dict) and len(item) == 1:
-                (key, cfg), = item.items()
-                out.append({"name": key, "config": cfg or {}})
-            else:
-                out.append(item)  # let EnricherSpec raise a clear error
-        return out
+    engine: str                     # engine type; only "weighted_window" is implemented today
+    engine_config: dict = {}        # engine-specific (threshold, window_seconds, cooldown_seconds, weights)
+    source_topics: list[str]        # topics the event's contributors arrive on
+    sink_topic: str                 # where the derived event is produced
+    event_domain: str               # metadata (originally the Vector ingest URL segment)
 
 
 def load_definitions(events_dir: Path) -> list[EventDefinition]:
