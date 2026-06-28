@@ -73,28 +73,35 @@ def to_event(name: str, decision: Decision, user_id: str) -> dict:
     with the entity `user_id`), and add the top-level metadata. Engines only decide;
     all shaping lives here.
 
+    The top-level wrapper is kept identical to the one Vector mints for raw events,
+    so every Kafka topic carries the same shape: `event_name`, `source_app`,
+    `source_type`, `timestamp`, `message`. `source_type="kafka"` records the entry
+    mechanism (derived events are produced straight to Kafka; raw events enter via
+    Vector's `http_server`, so theirs reads `"http_server"`). It is metadata only —
+    Vector's persister drops it, so it never reaches Neon.
+
     The per-event id lives in `message.id` — the inference app mints it for derived
     events, Vector mints the same for raw events at ingest (there is no top-level
     "envelope" wrapper id anymore). Lineage is one field: `derived_from`
-    (`[{id, event_name, timestamp}]`).
-
-    (`inference_type` is what Vector's Neon persister keys `event_class=derived` off,
-    so it's kept; see deploy/vector/.../shape_for_neon.yml.)
+    (`[{id, event_name, timestamp}]`). Derived-only metadata lives in `message`:
+    `inference_type` (its presence is how Vector's persister keys `event_class=derived`
+    — see deploy/vector/.../shape_for_neon.yml) and `processed_at`.
     """
     contributors = decision.contributors
     return {
         "event_name": name,
-        "inference_type": name,
-        "processed_at": time.time(),
         "source_app": config.APP_NAME,
+        "source_type": "kafka",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "message": {
             "id": str(uuid.uuid4()),
             "event_name": name,
+            "inference_type": name,
             "user_id": user_id,
             "timestamp": int(decision.occurred_at),
             "confidence_score": decision.score,
             "occurred_at": decision.occurred_at,
+            "processed_at": time.time(),
             "derived_from": [
                 {"id": c["id"], "event_name": c["event_name"], "timestamp": c["timestamp"]}
                 for c in contributors
