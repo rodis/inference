@@ -28,10 +28,8 @@ Config (env-backed settings + constants like the producing APP_NAME) lives in
 """
 
 import logging
-import time
 import uuid
 from collections import defaultdict
-from datetime import datetime, timezone
 from typing import NamedTuple
 
 from quixstreams import Application
@@ -88,26 +86,30 @@ def to_event(name: str, inference_type: str, decision: Decision, user_id: str) -
     all shaping lives here.
 
     The top-level wrapper is kept identical to the one Vector mints for raw events,
-    so every Kafka topic carries the same shape: `name`, `source_app`,
-    `source_type`, `timestamp`, `message`. `source_type="kafka"` records the entry
-    mechanism (derived events are produced straight to Kafka; raw events enter via
-    Vector's `http_server`, so theirs reads `"http_server"`). It is metadata only —
-    Vector's persister drops it, so it never reaches Neon.
+    so every Kafka topic carries the same shape: `name`, `source_app`, `source_type`,
+    `message`. `source_type="kafka"` records the entry mechanism (derived events are
+    produced straight to Kafka; raw events enter via Vector's `http_server`, so theirs
+    reads `"http_server"`). It is metadata only — Vector's persister drops it, so it
+    never reaches Neon.
+
+    There is no produce-time / inference-time stamp on the record: the only event-time
+    is `message.timestamp` (when the event occurred), and "when the system handled it"
+    is the DB-set `ingested_at` column (authoritative persist time). The old wrapper
+    `timestamp` (emit time) and `message.processed_at` (inference time) were ~the same
+    instant as `ingested_at` and were dropped.
 
     The per-event id lives in `message.id` — the inference app mints it for derived
     events, Vector mints the same for raw events at ingest (there is no top-level
     "envelope" wrapper id anymore). Lineage is one field: `derived_from`
-    (`[{id, name, timestamp}]`). Derived-only metadata lives in `message`:
-    `inference_type` (the engine type that produced it; its presence is also how
-    Vector's persister keys `event_class=derived` — see
-    deploy/vector/.../shape_for_neon.yml) and `processed_at`.
+    (`[{id, name, timestamp}]`). The derived-only `inference_type` (the engine type
+    that produced it) also lives in `message`; its presence is how Vector's persister
+    keys `event_class=derived` — see deploy/vector/.../shape_for_neon.yml.
     """
     contributors = decision.contributors
     return {
         "name": name,
         "source_app": config.APP_NAME,
         "source_type": "kafka",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
         "message": {
             "id": str(uuid.uuid4()),
             "name": name,
@@ -115,7 +117,6 @@ def to_event(name: str, inference_type: str, decision: Decision, user_id: str) -
             "user_id": user_id,
             "timestamp": int(decision.occurred_at),   # single event-time field (raw events carry it too); engine windows on it, Neon occurred_at column derives from it
             "confidence_score": decision.score,
-            "processed_at": time.time(),
             "derived_from": [
                 {"id": c["id"], "name": c["name"], "timestamp": c["timestamp"]}
                 for c in contributors
