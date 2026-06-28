@@ -166,8 +166,9 @@ topics across handlers. This makes the "key at ingest vs `group_by` in-app" choi
 
 ## Spike outcome (steps 2–5, all verified live against Aiven 2026-06-27)
 
-`workers/quix_spike/` carried the direction from theory to running code on the real
-cluster:
+`workers/quix_spike/` (code since removed — see git history; the productionised form is
+[`inference.runtime.quix`](../../src/inference/runtime/quix.py)) carried the direction from
+theory to running code on the real cluster:
 
 - **Step 2** — `car_door_opened` on one Quix `Application` + per-key `State` (no Redis,
   no thread-per-event); fired end to end.

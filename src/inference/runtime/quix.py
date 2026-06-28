@@ -1,9 +1,8 @@
-"""Generic Quix Streams runtime (ADR 0004) — the deployable form of the spike.
+"""Generic Quix Streams runtime (ADR 0004).
 
-Loads every `events/*.yml` (the same `EventDefinition`s the threaded runtime used)
-and runs them all on ONE shared Quix `Application`: one consumer group, one process,
-partition-keyed state. This is the productionised version of `workers/quix_spike/`
-— see [`doc/adr/0004-scaling-model.md`](../../../doc/adr/0004-scaling-model.md).
+Loads every `events/*.yml` and runs them all on ONE shared Quix `Application`: one
+consumer group, one process, partition-keyed state. See
+[`doc/adr/0004-scaling-model.md`](../../../doc/adr/0004-scaling-model.md).
 
 It replaces the thread-per-event `RuntimeSupervisor`:
   * no Redis — window + cooldown live in partition-local Quix `State` (RocksDB +
@@ -11,8 +10,9 @@ It replaces the thread-per-event `RuntimeSupervisor`:
   * no Vector emit hop — the full `high_level_events` Envelope is minted here and
     produced straight to Kafka via `to_topic()` (Vector stays the ingest gateway +
     Neon persister);
-  * recursive derivation (ADR 0002) is free — a fired event lands on `high_level_events`,
-    which is also a source topic, so the same router re-consumes it.
+  * recursive derivation (ADR 0002) is resolved IN-PROCESS — a fired event is fed
+    back through the router within the same call (see `router`), not re-consumed from
+    Kafka, so the runtime consumes only external source topics (no `high_level_events`).
 
 One shared keyed router (not one branch per definition) because each stateful
 operator + `group_by` mints Kafka topics, and the Aiven free tier caps user topics

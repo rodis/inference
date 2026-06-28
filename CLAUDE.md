@@ -50,8 +50,6 @@ A genuinely new engine *type* (Bayesian, etc.) would mean extending the router i
 
 Env/secrets live in `workers/.env` (gitignored). The entrypoint loads it via `find_dotenv(usecwd=True)`, which walks upward from the CWD — **run from inside the `workers/` tree**. In K8s the same vars come from the `ConfigMap` (Kafka bootstrap) and `Secret` (Kafka mTLS files mounted at `/etc/kafka/ssl`); `find_dotenv` returns `""` and is skipped.
 
-[`workers/quix_spike/`](workers/quix_spike/) is the **learning artifact** — the step-by-step exploration (its `README.md` tells the story, steps 2→5) that became `inference.runtime.quix`. Useful for understanding; not deployed.
-
 ## Deploy-state branch
 
 `deploy/` holds: [`deploy/inference/kustomize/`](deploy/inference/kustomize/) (the runtime), [`deploy/vector/kustomize/`](deploy/vector/kustomize/) (Vector — ingest gateway + Neon persister), and [`deploy/argocd/`](deploy/argocd/) (the two `Application` manifests). Both deploy into the **`inference`** namespace. The `inference-runtime` app tracks `deploy-state`; `inference-vector` tracks `main` directly.
