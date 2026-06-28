@@ -46,7 +46,7 @@ class ScopedState:
 
 @runtime_checkable
 class Engine(Protocol):
-    name: str                                    # definition name — identity + state scope
+    name: str                                    # static engine-type identity (e.g. "weighted_window"), set by the registry
 
     def input_event_names(self) -> set[str]:
         """Event names this engine consumes — drives the runtime's routing index."""
@@ -64,12 +64,15 @@ _REGISTRY: dict[str, type] = {}
 
 
 def register_engine(engine_type: str):
-    """Class decorator registering an `Engine` under `engine_type`. The class is
-    constructed as `cls(name=<definition name>, config=<engine_config>)`.
+    """Class decorator registering an `Engine` under `engine_type`. Also stamps the
+    type onto the class as its static `name` (so `engine.name == "weighted_window"`,
+    not the event it produces — that's the definition's name, tracked by the runtime).
+    The class is constructed as `cls(config=<engine_config>)`.
     """
 
     def _wrap(cls: type) -> type:
         _REGISTRY[engine_type] = cls
+        cls.name = engine_type
         return cls
 
     return _wrap
@@ -84,4 +87,4 @@ def build_engine(definition) -> Engine:
             f"Unknown engine '{definition.engine}' for event '{definition.name}'. "
             f"Registered engines: {sorted(_REGISTRY)}"
         ) from None
-    return cls(name=definition.name, config=definition.engine_config)
+    return cls(config=definition.engine_config)

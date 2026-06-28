@@ -32,16 +32,27 @@ import time
 import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
+from typing import NamedTuple
 
 from quixstreams import Application
 from quixstreams.state import State
 
 # importing names from the package runs inference/engines/__init__.py, which registers the built-in engines
-from inference.engines import Decision, ScopedState, build_engine
+from inference.engines import Decision, Engine, ScopedState, build_engine
 from inference.runtime import config
 from inference.runtime.definition import load_definitions
 
 logger = logging.getLogger("inference.quix")
+
+
+class Consumer(NamedTuple):
+    """An engine bound to the event it produces. `engine.name` is the static engine
+    *type* (e.g. "weighted_window"); `produces` is the definition's name — the event
+    this engine emits and the key its per-entity state is scoped under.
+    """
+
+    produces: str
+    engine: Engine
 
 
 def key_for(value: dict) -> str:
@@ -63,8 +74,11 @@ def key_for(value: dict) -> str:
     return str(user_id)
 
 
-def to_event(name: str, decision: Decision, user_id: str) -> dict:
+def to_event(name: str, inference_type: str, decision: Decision, user_id: str) -> dict:
     """Shape an engine `Decision` into the full `high_level_events` record.
+
+    `name` is the event produced (the definition's name, e.g. "car_door_opened");
+    `inference_type` is the engine *type* that produced it (e.g. "weighted_window").
 
     The runtime owns the whole record now — the old `decide → finalize →
     Vector-re-wraps` hop is gone; we produce straight to Kafka. So this is one step:
@@ -84,8 +98,9 @@ def to_event(name: str, decision: Decision, user_id: str) -> dict:
     events, Vector mints the same for raw events at ingest (there is no top-level
     "envelope" wrapper id anymore). Lineage is one field: `derived_from`
     (`[{id, name, timestamp}]`). Derived-only metadata lives in `message`:
-    `inference_type` (its presence is how Vector's persister keys `event_class=derived`
-    — see deploy/vector/.../shape_for_neon.yml) and `processed_at`.
+    `inference_type` (the engine type that produced it; its presence is also how
+    Vector's persister keys `event_class=derived` — see
+    deploy/vector/.../shape_for_neon.yml) and `processed_at`.
     """
     contributors = decision.contributors
     return {
@@ -96,7 +111,7 @@ def to_event(name: str, decision: Decision, user_id: str) -> dict:
         "message": {
             "id": str(uuid.uuid4()),
             "name": name,
-            "inference_type": name,
+            "inference_type": inference_type,
             "user_id": user_id,
             "timestamp": int(decision.occurred_at),
             "confidence_score": decision.score,
@@ -110,11 +125,11 @@ def to_event(name: str, decision: Decision, user_id: str) -> dict:
     }
 
 
-def _route(value: dict, state: State, consumers: dict) -> list[dict]:
+def _route(value: dict, state: State, consumers: dict[str, list[Consumer]]) -> list[dict]:
     """One incoming event → all derived events (expand=True), multi-hop resolved
     IN-PROCESS. A fired event is re-enqueued so it can drive further definitions
     using this entity's persisted state — no Kafka round-trip. The consumers index
-    (name → engines) keeps the graph a DAG: a terminal event matches no engine
+    (name → consumers) keeps the graph a DAG: a terminal event matches no consumer
     and stops the cascade.
     """
     if not isinstance(value, dict):
@@ -124,11 +139,11 @@ def _route(value: dict, state: State, consumers: dict) -> list[dict]:
     while queue:
         event = queue.pop(0)
         name = (event.get("message") or {}).get("name")
-        for engine in consumers.get(name, []):
-            decision = engine.decide(event, ScopedState(state, f"{engine.name}:"))
+        for produces, engine in consumers.get(name, []):
+            decision = engine.decide(event, ScopedState(state, f"{produces}:"))   # state scoped per produced event
             if decision:
-                logger.info("FIRED %s user=%s score=%s", engine.name, user_id, decision.score)
-                derived = to_event(engine.name, decision, user_id)
+                logger.info("FIRED %s via %s user=%s score=%s", produces, engine.name, user_id, decision.score)
+                derived = to_event(produces, engine.name, decision, user_id)
                 out.append(derived)
                 queue.append(derived)
     return out
@@ -139,16 +154,17 @@ def build_runtime() -> Application:
     if not definitions:
         raise RuntimeError(f"No enabled event definitions found under {config.EVENTS_DIR}")
 
-    # Resolve each definition's engine (by its `engine` string) and index which event
-    # names each engine consumes. Both are strategy-agnostic from here on — the
+    # Resolve each definition's engine (by its `engine` string) and index, per input
+    # event name, the consumers that fire on it — each pairing the engine with the
+    # event it produces (the definition name). Strategy-agnostic from here on: the
     # weighted-window specifics live entirely inside the resolved Engine.
-    consumers: dict[str, list] = defaultdict(list)
+    consumers: dict[str, list[Consumer]] = defaultdict(list)
     sink_for: dict[str, str] = {}
     declared_sources: set[str] = set()
     for d in definitions:
         engine = build_engine(d)
         for input_name in engine.input_event_names():
-            consumers[input_name].append(engine)
+            consumers[input_name].append(Consumer(produces=d.name, engine=engine))
         sink_for[d.name] = d.sink_topic
         declared_sources.add(d.source_topic)
 

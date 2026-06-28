@@ -10,8 +10,9 @@ from inference.engines.base import Decision, ScopedState, register_engine
 
 @register_engine("weighted_window")
 class WeightedWindowEngine:
-    def __init__(self, name: str, config: dict):
-        self.name = name
+    name = "weighted_window"   # static engine-type identity (also stamped by register_engine)
+
+    def __init__(self, config: dict):
         self.weights: dict[str, float] = config.get("weights", {})
         self.threshold = config["threshold"]
         self.window = config["window_seconds"]
