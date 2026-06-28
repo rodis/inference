@@ -113,9 +113,8 @@ def to_event(name: str, inference_type: str, decision: Decision, user_id: str) -
             "name": name,
             "inference_type": inference_type,
             "user_id": user_id,
-            "timestamp": int(decision.occurred_at),
+            "timestamp": int(decision.occurred_at),   # single event-time field (raw events carry it too); engine windows on it, Neon occurred_at column derives from it
             "confidence_score": decision.score,
-            "occurred_at": decision.occurred_at,
             "processed_at": time.time(),
             "derived_from": [
                 {"id": c["id"], "name": c["name"], "timestamp": c["timestamp"]}
