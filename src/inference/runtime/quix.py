@@ -82,7 +82,6 @@ def to_envelope(name: str, decision: Decision, user_id: str) -> dict:
         "inference_type": name,
         "processed_at": time.time(),
         "source_app": config.APP_NAME,
-        "source_type": "inference_quix",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "message": {
             "event_name": name,
