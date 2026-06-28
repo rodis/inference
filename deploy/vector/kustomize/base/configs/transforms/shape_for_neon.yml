@@ -14,5 +14,11 @@ source: |
       .event_class = "derived"
   }
 
+  # Drop source_type: the kafka source stamps its own metadata value ("kafka") on
+  # every decoded event, clobbering the envelope's value, so the column was uniformly
+  # "kafka" and useless. event_class (raw/derived) + source_app already carry the
+  # signal. (Neon column dropped to match.)
+  del(.source_type)
+
   # occurred_at + ingested_at are set DB-side by the events BEFORE INSERT trigger,
   # so this transform stays minimal (no timestamp math in VRL).
