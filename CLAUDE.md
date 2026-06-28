@@ -24,7 +24,7 @@ An inference event is **data** — a YAML file in [`events/`](events/). A single
 
 - **`key_for(event)`** — the **entity key** a window aggregates over (`message.user_id`; sentinel `_no_user_id` + warning if missing). Partition + state-ownership unit.
 - **Engines ([`inference.engines`](src/inference/engines/))** — the *strategy*, resolved from the definition's `engine` string via a registry. `WeightedWindowEngine` is the only built-in: prune a time window, weighted sum of distinct contributors, threshold, event-time cooldown. It exposes `input_event_names()` (drives routing) + `decide(event, state) -> Decision | None`. Per-entity Quix `State` (RocksDB + changelog) is scoped per definition via `ScopedState` (keys `<def>:window`/`<def>:last_fired`), so definitions share one store without colliding. **No Redis.**
-- **`to_envelope(name, decision, user_id)`** — runtime-side shaping in one step: mint the full `high_level_events` Envelope from an engine `Decision` (`envelope_id`, metadata, and the `message` with `derived_from` lineage from contributors, stamped with the entity `user_id`). The old `decide → finalize → Vector-re-wrap` hop is gone — we produce straight to Kafka — so engines only decide; all shaping lives here.
+- **`to_event(name, decision, user_id)`** — runtime-side shaping in one step: mint the full `high_level_events` event record from an engine `Decision` (top-level metadata, and the `message` with the per-event `id`, `derived_from` lineage from contributors, and the entity `user_id`). The id lives in `message.id` — the inference app mints it for derived events, Vector mints it for raw events at ingest; there is **no top-level "envelope" wrapper id**. The old `decide → finalize → Vector-re-wrap` hop is gone — we produce straight to Kafka — so engines only decide; all shaping lives here.
 - **`build_runtime()` / `_route()`** — `build_runtime` resolves each definition's engine, indexes `event_name → engines` from `input_event_names()`, and wires the topology: consume external source topics → `group_by(key_for)` → one stateful `_route` (`expand=True`) → `to_topic(sink)`. `_route` is the shared router that calls `engine.decide(...)`.
 
 Two things that are *not* obvious from any single file:
@@ -37,7 +37,7 @@ Two things that are *not* obvious from any single file:
 
 **Engine / strategy.** Each definition's `engine` string selects an `Engine` from the registry (`inference.engines`), constructed with its `engine_config` — which the **engine parses itself**; the runtime never knows the config schema. Only `weighted_window` is registered today (`weights`, `threshold`, `window_seconds`, `cooldown_seconds`). Lineage (`derived_from`) is produced by `finalize` from the decision's contributors; there is no general enricher chain (a known next step if geo/other shaping is wanted).
 
-**Vector's role shrank.** Vector is the **ingest gateway** (producers POST → `raw_sensors`) and the **Neon persister** (`kafka` source over `raw_sensors` + `high_level_events` → Postgres). It is **no longer in the emit path** — the runtime produces the Envelope straight to Kafka via `to_topic()`.
+**Vector's role shrank.** Vector is the **ingest gateway** (producers POST → `raw_sensors`) and the **Neon persister** (`kafka` source over `raw_sensors` + `high_level_events` → Postgres). It is **no longer in the emit path** — the runtime produces the event record straight to Kafka via `to_topic()`.
 
 ## Adding a new event
 

@@ -27,11 +27,11 @@ class WeightedWindowEngine:
             return None
         now = int(msg.get("timestamp", 0))
 
-        # window: {event_name: {"ts": earliest_ts, "envelope_id": id}} — dedup-earliest, pruned to window
+        # window: {event_name: {"ts": earliest_ts, "id": event_id}} — dedup-earliest, pruned to window
         window = state.get("window", {})
         window = {k: v for k, v in window.items() if now - v["ts"] <= self.window}
         if name not in window or now < window[name]["ts"]:
-            window[name] = {"ts": now, "envelope_id": event.get("envelope_id")}
+            window[name] = {"ts": now, "id": msg.get("id")}
         state.set("window", window)
 
         score = sum(self.weights.get(k, 0) for k in window)
@@ -43,7 +43,7 @@ class WeightedWindowEngine:
 
         occurred_at = sum(v["ts"] for v in window.values()) / len(window)
         contributors = tuple(
-            {"event_name": k, "timestamp": v["ts"], "envelope_id": v["envelope_id"]}
+            {"event_name": k, "timestamp": v["ts"], "id": v["id"]}
             for k, v in window.items()
         )
         return Decision(occurred_at=occurred_at, score=score, contributors=contributors)

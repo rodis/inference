@@ -24,7 +24,7 @@ class Decision:
 
     occurred_at: float
     score: float
-    contributors: tuple[dict, ...]   # each: {"event_name", "timestamp", "envelope_id"}
+    contributors: tuple[dict, ...]   # each: {"event_name", "timestamp", "id"}
 
 
 class ScopedState:

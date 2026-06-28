@@ -7,7 +7,7 @@ consumer group, one process, partition-keyed state. See
 It replaces the thread-per-event `RuntimeSupervisor`:
   * no Redis — per-entity state lives in partition-local Quix `State` (RocksDB +
     changelog), single-writer-per-key by construction;
-  * no Vector emit hop — the full `high_level_events` Envelope is minted here and
+  * no Vector emit hop — the full `high_level_events` event record is minted here and
     produced straight to Kafka via `to_topic()` (Vector stays the ingest gateway +
     Neon persister);
   * recursive derivation (ADR 0002) is resolved IN-PROCESS — a fired event is fed
@@ -63,37 +63,40 @@ def key_for(value: dict) -> str:
     return str(user_id)
 
 
-def to_envelope(name: str, decision: Decision, user_id: str) -> dict:
-    """Shape an engine `Decision` into the full `high_level_events` Envelope.
+def to_event(name: str, decision: Decision, user_id: str) -> dict:
+    """Shape an engine `Decision` into the full `high_level_events` record.
 
-    The runtime owns the whole envelope now — the old `decide → finalize →
+    The runtime owns the whole record now — the old `decide → finalize →
     Vector-re-wraps` hop is gone; we produce straight to Kafka. So this is one step:
-    mint `envelope_id`, build the `message` (the derived event + `derived_from` lineage
-    from the decision's contributors, stamped with the entity `user_id`), and add the
-    metadata. Engines only decide; all shaping lives here.
+    mint the event `id` (inside `message`), build the rest of the `message` (the
+    derived event + `derived_from` lineage from the decision's contributors, stamped
+    with the entity `user_id`), and add the top-level metadata. Engines only decide;
+    all shaping lives here.
 
-    Lineage is one field: `derived_from` (`[{envelope_id, event_name, timestamp}]`). The
-    old `sources` (names) and `evidence` (name→ts) were pure projections of it — dropped.
+    The per-event id lives in `message.id` — the inference app mints it for derived
+    events, Vector mints the same for raw events at ingest (there is no top-level
+    "envelope" wrapper id anymore). Lineage is one field: `derived_from`
+    (`[{id, event_name, timestamp}]`).
 
     (`inference_type` is what Vector's Neon persister keys `event_class=derived` off,
     so it's kept; see deploy/vector/.../shape_for_neon.yml.)
     """
     contributors = decision.contributors
     return {
-        "envelope_id": str(uuid.uuid4()),
         "event_name": name,
         "inference_type": name,
         "processed_at": time.time(),
         "source_app": config.APP_NAME,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "message": {
+            "id": str(uuid.uuid4()),
             "event_name": name,
             "user_id": user_id,
             "timestamp": int(decision.occurred_at),
             "confidence_score": decision.score,
             "occurred_at": decision.occurred_at,
             "derived_from": [
-                {"envelope_id": c["envelope_id"], "event_name": c["event_name"], "timestamp": c["timestamp"]}
+                {"id": c["id"], "event_name": c["event_name"], "timestamp": c["timestamp"]}
                 for c in contributors
             ],
         },
@@ -118,9 +121,9 @@ def _route(value: dict, state: State, consumers: dict) -> list[dict]:
             decision = engine.decide(event, ScopedState(state, f"{engine.name}:"))
             if decision:
                 logger.info("FIRED %s user=%s score=%s", engine.name, user_id, decision.score)
-                env = to_envelope(engine.name, decision, user_id)
-                out.append(env)
-                queue.append(env)
+                derived = to_event(engine.name, decision, user_id)
+                out.append(derived)
+                queue.append(derived)
     return out
 
 
