@@ -74,42 +74,40 @@ def key_for(value: dict) -> str:
     return str(user_id)
 
 
-def finalize(name: str, decision: Decision, user_id: str) -> dict:
-    """Shape an engine `Decision` into the emitted `high_level_events` message.
+def to_envelope(name: str, decision: Decision, user_id: str) -> dict:
+    """Shape an engine `Decision` into the full `high_level_events` Envelope.
 
-    The runtime owns message/lineage shaping (and stamps the entity `user_id`) so
-    engines only decide, not build envelopes. `sources`/`evidence`/`derived_from`
-    are derived from the decision's contributors.
+    The runtime owns the whole envelope now — the old `decide → finalize →
+    Vector-re-wraps` hop is gone; we produce straight to Kafka. So this is one step:
+    mint `envelope_id`, build the `message` (the derived event + `sources`/`evidence`/
+    `derived_from` from the decision's contributors, stamped with the entity `user_id`),
+    and add the metadata. Engines only decide; all shaping lives here.
+
+    (`inference_type` is what Vector's Neon persister keys `event_class=derived` off,
+    so it's kept; see deploy/vector/.../shape_for_neon.yml.)
     """
-    return {
-        "event_name": name,
-        "user_id": user_id,
-        "timestamp": int(decision.occurred_at),
-        "confidence_score": decision.score,
-        "occurred_at": decision.occurred_at,
-        "sources": [c["event_name"] for c in decision.contributors],
-        "evidence": {c["event_name"]: c["timestamp"] for c in decision.contributors},
-        "derived_from": [
-            {"envelope_id": c["envelope_id"], "event_name": c["event_name"], "timestamp": c["timestamp"]}
-            for c in decision.contributors
-        ],
-    }
-
-
-def to_envelope(name: str, message: dict) -> dict:
-    """Wrap a message in the `high_level_events` Envelope shape — the job Vector's
-    classify_domain + enrich_sensor transforms used to do. The worker mints
-    `envelope_id` and stamps the metadata itself.
-    """
+    contributors = decision.contributors
     return {
         "envelope_id": str(uuid.uuid4()),
         "event_name": name,
         "inference_type": name,
-        "message": message,
         "processed_at": time.time(),
         "source_app": name,
         "source_type": "inference_quix",
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "message": {
+            "event_name": name,
+            "user_id": user_id,
+            "timestamp": int(decision.occurred_at),
+            "confidence_score": decision.score,
+            "occurred_at": decision.occurred_at,
+            "sources": [c["event_name"] for c in contributors],
+            "evidence": {c["event_name"]: c["timestamp"] for c in contributors},
+            "derived_from": [
+                {"envelope_id": c["envelope_id"], "event_name": c["event_name"], "timestamp": c["timestamp"]}
+                for c in contributors
+            ],
+        },
     }
 
 
@@ -130,10 +128,8 @@ def _route(value: dict, state: State, consumers: dict) -> list[dict]:
         for engine in consumers.get(name, []):
             decision = engine.decide(event, ScopedState(state, f"{engine.name}:"))
             if decision:
-                message = finalize(engine.name, decision, user_id)
-                logger.info("FIRED %s user=%s score=%s",
-                            engine.name, user_id, message["confidence_score"])
-                env = to_envelope(engine.name, message)
+                logger.info("FIRED %s user=%s score=%s", engine.name, user_id, decision.score)
+                env = to_envelope(engine.name, decision, user_id)
                 out.append(env)
                 queue.append(env)
     return out
