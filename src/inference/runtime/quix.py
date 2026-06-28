@@ -52,13 +52,20 @@ def _ssl_config() -> dict:
 def key_for(value: dict) -> str:
     """The entity a window aggregates over — the partition/state key (ADR 0004 goal 1).
 
-    Uses `user_id`, which Vector stamps on every event at ingest (defaulting to "rods"
-    if the producer didn't send one). Derived events carry `user_id` too (set in
-    `decide`), so in-process recursion stays on the same entity. Falls back to
-    `source_app` then a constant for any event that somehow lacks `user_id`.
+    Keys on `user_id`, which Vector stamps on every sensor event at ingest (defaulting
+    to "rods" today) and which derived events carry too (set in `decide`). If it's ever
+    missing we bucket under an explicit sentinel and warn — deliberately NOT under
+    `source_app`: that would silently fragment one entity's state across two keys
+    (user_id vs producer name) and, once multi-user, collapse different users into the
+    shared producer bucket. A missing key must be loud and isolated, not plausibly-wrong.
     """
     msg = value.get("message", {}) if isinstance(value, dict) else {}
-    return str(msg.get("user_id") or value.get("source_app") or "_single_entity")
+    user_id = msg.get("user_id")
+    if not user_id:
+        logger.warning("event has no user_id; bucketing under '_no_user_id' (event_name=%s)",
+                       msg.get("event_name"))
+        return "_no_user_id"
+    return str(user_id)
 
 
 def to_envelope(result: dict) -> dict:
