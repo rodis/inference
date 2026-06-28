@@ -10,6 +10,11 @@ source: |
   }
   .id = .message.id
 
+  # Hoist the entity key to a top-level field for the events.user_id column. Every
+  # event carries message.user_id (Vector rejects raw events without it; the runtime
+  # stamps it on derived events), so it's the per-user analytics dimension in Neon.
+  .user_id = .message.user_id
+
   # event_class: the inference runtime's output carries message.inference_type;
   # raw producer events do not. (inference_type lives inside the message now, so the
   # top-level wrapper is identical across raw and derived events on every topic.)

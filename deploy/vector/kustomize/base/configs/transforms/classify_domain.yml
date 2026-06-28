@@ -52,11 +52,13 @@ source: |
       .message = parse_json(.message) ?? .message
   }
 
-  # 6. Strict Event Name Validation
+  # 6. Strict Event Name Validation. Producers still POST `event_name`; we rename it
+  # to the internal field `name` here so every component + the Neon column uses `name`.
   if !is_object(.message) || !exists(.message.event_name) {
       log("Rejected: Missing event_name in payload from app: " + to_string(.source_app) ?? "unknown", level: "error")
       abort
   }
+  .message.name = del(.message.event_name)
 
   # 7. Strict user_id Validation — the inference runtime keys per-user state on
   # message.user_id (ADR 0004). Reject events without it rather than guessing an
@@ -64,9 +66,9 @@ source: |
   # http_server source already returned 200 on receipt, so this rejection shows up
   # as a Vector error log + a dropped event, not a 4xx to the caller.)
   if !exists(.message.user_id) {
-      log("Rejected: Missing user_id in payload from app: " + (to_string(.source_app) ?? "unknown") + " event: " + (to_string(.message.event_name) ?? "unknown"), level: "error")
+      log("Rejected: Missing user_id in payload from app: " + (to_string(.source_app) ?? "unknown") + " event: " + (to_string(.message.name) ?? "unknown"), level: "error")
       abort
   }
 
-  # Mirror event_name to the root
-  .event_name = .message.event_name
+  # Mirror name to the root (top-level wrapper field + Neon `name` column)
+  .name = .message.name
