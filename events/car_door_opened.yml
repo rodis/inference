@@ -1,5 +1,5 @@
 # Inference event, defined as data. Loaded by the Quix runtime (ADR 0004).
-# `name` is the identity source of truth: the emitted event_name/inference_type.
+# `name` is the identity source of truth: the emitted event name/inference_type.
 name: car_door_opened
 enabled: true
 

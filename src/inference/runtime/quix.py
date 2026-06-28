@@ -57,8 +57,8 @@ def key_for(value: dict) -> str:
     msg = value.get("message", {}) if isinstance(value, dict) else {}
     user_id = msg.get("user_id")
     if not user_id:
-        logger.warning("event has no user_id; bucketing under '_no_user_id' (event_name=%s)",
-                       msg.get("event_name"))
+        logger.warning("event has no user_id; bucketing under '_no_user_id' (name=%s)",
+                       msg.get("name"))
         return "_no_user_id"
     return str(user_id)
 
@@ -74,7 +74,7 @@ def to_event(name: str, decision: Decision, user_id: str) -> dict:
     all shaping lives here.
 
     The top-level wrapper is kept identical to the one Vector mints for raw events,
-    so every Kafka topic carries the same shape: `event_name`, `source_app`,
+    so every Kafka topic carries the same shape: `name`, `source_app`,
     `source_type`, `timestamp`, `message`. `source_type="kafka"` records the entry
     mechanism (derived events are produced straight to Kafka; raw events enter via
     Vector's `http_server`, so theirs reads `"http_server"`). It is metadata only —
@@ -83,19 +83,19 @@ def to_event(name: str, decision: Decision, user_id: str) -> dict:
     The per-event id lives in `message.id` — the inference app mints it for derived
     events, Vector mints the same for raw events at ingest (there is no top-level
     "envelope" wrapper id anymore). Lineage is one field: `derived_from`
-    (`[{id, event_name, timestamp}]`). Derived-only metadata lives in `message`:
+    (`[{id, name, timestamp}]`). Derived-only metadata lives in `message`:
     `inference_type` (its presence is how Vector's persister keys `event_class=derived`
     — see deploy/vector/.../shape_for_neon.yml) and `processed_at`.
     """
     contributors = decision.contributors
     return {
-        "event_name": name,
+        "name": name,
         "source_app": config.APP_NAME,
         "source_type": "kafka",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "message": {
             "id": str(uuid.uuid4()),
-            "event_name": name,
+            "name": name,
             "inference_type": name,
             "user_id": user_id,
             "timestamp": int(decision.occurred_at),
@@ -103,7 +103,7 @@ def to_event(name: str, decision: Decision, user_id: str) -> dict:
             "occurred_at": decision.occurred_at,
             "processed_at": time.time(),
             "derived_from": [
-                {"id": c["id"], "event_name": c["event_name"], "timestamp": c["timestamp"]}
+                {"id": c["id"], "name": c["name"], "timestamp": c["timestamp"]}
                 for c in contributors
             ],
         },
@@ -114,7 +114,7 @@ def _route(value: dict, state: State, consumers: dict) -> list[dict]:
     """One incoming event → all derived events (expand=True), multi-hop resolved
     IN-PROCESS. A fired event is re-enqueued so it can drive further definitions
     using this entity's persisted state — no Kafka round-trip. The consumers index
-    (event_name → engines) keeps the graph a DAG: a terminal event matches no engine
+    (name → engines) keeps the graph a DAG: a terminal event matches no engine
     and stops the cascade.
     """
     if not isinstance(value, dict):
@@ -123,7 +123,7 @@ def _route(value: dict, state: State, consumers: dict) -> list[dict]:
     queue, out = [value], []
     while queue:
         event = queue.pop(0)
-        name = (event.get("message") or {}).get("event_name")
+        name = (event.get("message") or {}).get("name")
         for engine in consumers.get(name, []):
             decision = engine.decide(event, ScopedState(state, f"{engine.name}:"))
             if decision:
@@ -147,8 +147,8 @@ def build_runtime() -> Application:
     declared_sources: set[str] = set()
     for d in definitions:
         engine = build_engine(d)
-        for event_name in engine.input_event_names():
-            consumers[event_name].append(engine)
+        for input_name in engine.input_event_names():
+            consumers[input_name].append(engine)
         sink_for[d.name] = d.sink_topic
         declared_sources.add(d.source_topic)
 
@@ -188,7 +188,7 @@ def build_runtime() -> Application:
     sdf = app.dataframe(app.topic(source_topic, value_deserializer="json"))
     sdf = sdf.group_by(key_for, name="entity")
     sdf = sdf.apply(lambda value, state: _route(value, state, consumers), stateful=True, expand=True)
-    sdf = sdf.to_topic(lambda value, key, ts, headers: sinks[sink_for[value["event_name"]]])
+    sdf = sdf.to_topic(lambda value, key, ts, headers: sinks[sink_for[value["name"]]])
     return app
 
 

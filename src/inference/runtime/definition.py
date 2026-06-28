@@ -2,7 +2,7 @@
 
 The YAML-on-disk schema (`events/<name>.yml`) that the Quix runtime
 ([`inference.runtime.quix`](quix.py)) loads. The `name` field is the source of
-truth for identity: it is the emitted `event_name`/`inference_type` and the key the
+truth for identity: it is the emitted event `name`/`inference_type` and the key the
 router uses to route a fired event to its sink.
 """
 
@@ -20,7 +20,7 @@ class EventDefinition(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str                       # identity — snake_case; emitted event_name/inference_type
+    name: str                       # identity — snake_case; emitted event name/inference_type
     enabled: bool = True            # skip-load toggle for quick experiments
     engine: str                     # engine type; only "weighted_window" is implemented today
     engine_config: dict = {}        # engine-specific (threshold, window_seconds, cooldown_seconds, weights)

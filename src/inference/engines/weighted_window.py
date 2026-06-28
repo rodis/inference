@@ -22,12 +22,12 @@ class WeightedWindowEngine:
 
     def decide(self, event: dict, state: ScopedState) -> Decision | None:
         msg = event.get("message") or {}
-        name = msg.get("event_name")
+        name = msg.get("name")
         if name not in self.weights:                  # not a contributor (defensive; router pre-filters)
             return None
         now = int(msg.get("timestamp", 0))
 
-        # window: {event_name: {"ts": earliest_ts, "id": event_id}} — dedup-earliest, pruned to window
+        # window: {name: {"ts": earliest_ts, "id": event_id}} — dedup-earliest, pruned to window
         window = state.get("window", {})
         window = {k: v for k, v in window.items() if now - v["ts"] <= self.window}
         if name not in window or now < window[name]["ts"]:
@@ -43,7 +43,7 @@ class WeightedWindowEngine:
 
         occurred_at = sum(v["ts"] for v in window.values()) / len(window)
         contributors = tuple(
-            {"event_name": k, "timestamp": v["ts"], "id": v["id"]}
+            {"name": k, "timestamp": v["ts"], "id": v["id"]}
             for k, v in window.items()
         )
         return Decision(occurred_at=occurred_at, score=score, contributors=contributors)
