@@ -10,10 +10,11 @@ source: |
   }
   .id = .message.id
 
-  # event_class: the worker's inference output carries a top-level inference_type;
-  # raw producer events do not.
+  # event_class: the inference runtime's output carries message.inference_type;
+  # raw producer events do not. (inference_type lives inside the message now, so the
+  # top-level wrapper is identical across raw and derived events on every topic.)
   .event_class = "raw"
-  if exists(.inference_type) {
+  if exists(.message.inference_type) {
       .event_class = "derived"
   }
 
