@@ -44,6 +44,11 @@ from inference.runtime.definition import load_definitions
 
 logger = logging.getLogger("inference.quix")
 
+# The producing application, recorded as `source_app` on derived events. Raw events
+# carry their own producer (e.g. "shortcut"); derived events are produced by this
+# runtime, so they share one meaningful value instead of duplicating event_name.
+APP_NAME = "inference"
+
 
 def _ssl_config() -> dict:
     # Defaults match the kafka-ssl Secret volume mount in deploy/.../runtime/values.yml.
@@ -92,7 +97,7 @@ def to_envelope(name: str, decision: Decision, user_id: str) -> dict:
         "event_name": name,
         "inference_type": name,
         "processed_at": time.time(),
-        "source_app": name,
+        "source_app": APP_NAME,
         "source_type": "inference_quix",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "message": {
