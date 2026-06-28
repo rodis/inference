@@ -6,6 +6,12 @@ source: |
   del(.path_parts)
   del(.path)
   del(.event_domain)
+  # Drop the http_server source's ingest `timestamp` (emit-time): it was ~the same
+  # instant as the DB-set ingested_at column, which is the authoritative system time.
+  # Keeps the wrapper {name, source_app, source_type, message} consistent with derived
+  # events (the runtime's to_event emits no produce-time stamp either). Event-time
+  # lives in message.timestamp.
+  del(.timestamp)
 
   # Event identity — sensor traffic only (this transform runs post-routing). The id
   # lives INSIDE the message (no top-level "envelope" wrapper anymore): the inference
