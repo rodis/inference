@@ -18,8 +18,8 @@ class Decision:
 
     The runtime turns this into the emitted message (and stamps the entity key), so
     engines only *decide* — they don't shape envelopes/lineage. `contributors` are
-    the source events that triggered it (for `sources`/`evidence`/`derived_from`);
-    `score` is the engine's confidence metric.
+    the source events that triggered it (shaped into `derived_from` lineage by the
+    runtime); `score` is the engine's confidence metric.
     """
 
     occurred_at: float

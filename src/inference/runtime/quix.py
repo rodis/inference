@@ -68,9 +68,12 @@ def to_envelope(name: str, decision: Decision, user_id: str) -> dict:
 
     The runtime owns the whole envelope now — the old `decide → finalize →
     Vector-re-wraps` hop is gone; we produce straight to Kafka. So this is one step:
-    mint `envelope_id`, build the `message` (the derived event + `sources`/`evidence`/
-    `derived_from` from the decision's contributors, stamped with the entity `user_id`),
-    and add the metadata. Engines only decide; all shaping lives here.
+    mint `envelope_id`, build the `message` (the derived event + `derived_from` lineage
+    from the decision's contributors, stamped with the entity `user_id`), and add the
+    metadata. Engines only decide; all shaping lives here.
+
+    Lineage is one field: `derived_from` (`[{envelope_id, event_name, timestamp}]`). The
+    old `sources` (names) and `evidence` (name→ts) were pure projections of it — dropped.
 
     (`inference_type` is what Vector's Neon persister keys `event_class=derived` off,
     so it's kept; see deploy/vector/.../shape_for_neon.yml.)
@@ -89,8 +92,6 @@ def to_envelope(name: str, decision: Decision, user_id: str) -> dict:
             "timestamp": int(decision.occurred_at),
             "confidence_score": decision.score,
             "occurred_at": decision.occurred_at,
-            "sources": [c["event_name"] for c in contributors],
-            "evidence": {c["event_name"]: c["timestamp"] for c in contributors},
             "derived_from": [
                 {"envelope_id": c["envelope_id"], "event_name": c["event_name"], "timestamp": c["timestamp"]}
                 for c in contributors
