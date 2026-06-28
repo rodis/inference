@@ -7,9 +7,11 @@ source: |
   del(.path)
   del(.event_domain)
 
-  # Envelope identity — sensor traffic only (this transform runs post-routing).
-  # Mint a stable UUID per event at ingest if one wasn't supplied. Downstream
-  # lineage (derived_from) and persistence (primary key / dedupe) join on this.
-  if !exists(.envelope_id) {
-      .envelope_id = uuid_v4()
+  # Event identity — sensor traffic only (this transform runs post-routing). The id
+  # lives INSIDE the message (no top-level "envelope" wrapper anymore): the inference
+  # runtime mints message.id for derived events, Vector mints it for raw events here.
+  # Mint a stable UUID at ingest if the producer didn't supply one. Downstream lineage
+  # (derived_from) and persistence (primary key / dedupe) join on this.
+  if !exists(.message.id) {
+      .message.id = uuid_v4()
   }

@@ -2,10 +2,13 @@ type: remap
 inputs:
   - kafka_persist
 source: |
-  # Never persist an event without the stable id — it's the events PK.
-  if !exists(.envelope_id) {
+  # The stable id lives inside the message now (no top-level envelope wrapper). Hoist
+  # it to a top-level field so the postgres sink maps it to the events.id PK column.
+  # Never persist an event without it — it's the PK.
+  if !exists(.message.id) {
       abort
   }
+  .id = .message.id
 
   # event_class: the worker's inference output carries a top-level inference_type;
   # raw producer events do not.
