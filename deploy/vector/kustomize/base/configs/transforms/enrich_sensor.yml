@@ -13,12 +13,3 @@ source: |
   if !exists(.envelope_id) {
       .envelope_id = uuid_v4()
   }
-
-  # Entity key (ADR 0004 goal 1). The runtime keys per-user state on .message.user_id;
-  # the iOS Shortcut doesn't send one yet, so default it here. Single-user today → "rods".
-  if !is_object(.message) {
-      .message = {}
-  }
-  if !exists(.message.user_id) {
-      .message.user_id = "rods"
-  }

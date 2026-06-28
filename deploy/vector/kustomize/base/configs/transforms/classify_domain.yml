@@ -58,5 +58,15 @@ source: |
       abort
   }
 
+  # 7. Strict user_id Validation — the inference runtime keys per-user state on
+  # message.user_id (ADR 0004). Reject events without it rather than guessing an
+  # entity: a missing user_id means the producer is misconfigured. (Note: the
+  # http_server source already returned 200 on receipt, so this rejection shows up
+  # as a Vector error log + a dropped event, not a 4xx to the caller.)
+  if !exists(.message.user_id) {
+      log("Rejected: Missing user_id in payload from app: " + (to_string(.source_app) ?? "unknown") + " event: " + (to_string(.message.event_name) ?? "unknown"), level: "error")
+      abort
+  }
+
   # Mirror event_name to the root
   .event_name = .message.event_name
