@@ -4,41 +4,14 @@ deployment:
     tag: "sha-bootstrap"   # placeholder; CI bumps this to sha-<short> on deploy-state
     pullPolicy: IfNotPresent
   env:
+    # The Quix runtime needs only the Kafka bootstrap here; mTLS comes from the
+    # kafka-ssl volume, and EVENTS_DIR/QUIX_* are baked into the image. (Redis +
+    # VECTOR_BASE_URL were removed with the threaded runtime — ADR 0004.)
     KAFKA_BOOTSTRAP_SERVERS:
       valueFrom:
         configMapKeyRef:
           name: inference-worker-config
           key: KAFKA_BOOTSTRAP_SERVERS
-    VECTOR_BASE_URL:
-      valueFrom:
-        configMapKeyRef:
-          name: inference-worker-config
-          key: VECTOR_BASE_URL
-    REDIS_HOST:
-      valueFrom:
-        secretKeyRef:
-          name: redis-credentials
-          key: REDIS_HOST
-    REDIS_PORT:
-      valueFrom:
-        secretKeyRef:
-          name: redis-credentials
-          key: REDIS_PORT
-    REDIS_DB:
-      valueFrom:
-        secretKeyRef:
-          name: redis-credentials
-          key: REDIS_DB
-    REDIS_USERNAME:
-      valueFrom:
-        secretKeyRef:
-          name: redis-credentials
-          key: REDIS_USERNAME
-    REDIS_PASSWORD:
-      valueFrom:
-        secretKeyRef:
-          name: redis-credentials
-          key: REDIS_PASSWORD
   volumes:
     kafka-ssl:
       secret:
