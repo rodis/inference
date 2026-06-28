@@ -1,0 +1,22 @@
+# Recursive derivation (ADR 0002/0004): got_out_the_car derives from a RAW event
+# (device_disconnected_from_power) + a DERIVED event (car_door_closed). The derived
+# contributor is fed back IN-PROCESS by the runtime's router — NOT re-consumed from
+# high_level_events — so the only external source is raw_sensors. Still a DAG:
+# nothing derives got_out_the_car, so the cascade terminates.
+# Mirror of got_into_the_car, on the disconnect signals (leaving the car).
+name: got_out_the_car
+enabled: true
+
+engine: weighted_window
+engine_config:
+  # car_door_closed + device_disconnected_from_power together mean: took the phone off
+  # the wireless charger, got out, closed the door. Equally important.
+  threshold: 10
+  window_seconds: 600
+  cooldown_seconds: 600   # 10 min — fires at most once per trip
+  weights:
+    car_door_closed: 5
+    device_disconnected_from_power: 5
+
+source_topic: raw_sensors
+sink_topic: high_level_events
