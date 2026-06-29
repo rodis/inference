@@ -42,7 +42,11 @@ class WeightedWindowEngine:
             return None
         state.set("last_fired", now)
 
-        occurred_at = sum(v["ts"] for v in window.values()) / len(window)
+        # event-time = the latest contributing signal: the moment the pattern completed
+        # and the inference first became knowable. Keeps lineage monotonic (derived ts >=
+        # every contributor) and anchors cooldown/window math to real time — averaging
+        # stamped derived events earlier than their own triggering signal.
+        occurred_at = max(v["ts"] for v in window.values())
         contributors = tuple(
             {"name": k, "timestamp": v["ts"], "id": v["id"]}
             for k, v in window.items()
