@@ -1,5 +1,7 @@
 """Pluggable inference engines. Importing this package registers the built-ins."""
 
+from inference.engines import decaying_window  # noqa: F401  (side effect: registers the engine)
+from inference.engines import naive_bayes_window  # noqa: F401  (side effect: registers the engine)
 from inference.engines import weighted_window  # noqa: F401  (side effect: registers the engine)
 from inference.engines.base import (
     Decision,
