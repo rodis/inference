@@ -7,7 +7,8 @@ source: |
   # occurred_at — the events trigger derives it from message.timestamp, so a stray
   # "timestamp " key means the canonical one is missing. Trim whitespace on every key.
   if is_object(.message) {
-      .message = map_keys!(.message) -> |key| { strip_whitespace(key) }
+      # object!() pins the type so map_keys' closure param is known (else E121: `any`).
+      .message = map_keys!(object!(.message)) -> |key| { strip_whitespace(key) }
   }
 
   # Cleanup
