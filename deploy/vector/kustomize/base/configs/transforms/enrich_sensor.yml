@@ -2,6 +2,14 @@ type: remap
 inputs:
   - route_by_domain.sensor_traffic
 source: |
+  # Normalize producer payload keys: some Shortcuts emit trailing/leading spaces
+  # (e.g. "amount ", "timestamp ") which create malformed columns and, worse, a NULL
+  # occurred_at — the events trigger derives it from message.timestamp, so a stray
+  # "timestamp " key means the canonical one is missing. Trim whitespace on every key.
+  if is_object(.message) {
+      .message = map_keys!(.message) -> |key| { strip_whitespace(key) }
+  }
+
   # Cleanup
   del(.path_parts)
   del(.path)
