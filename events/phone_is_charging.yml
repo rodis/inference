@@ -1,0 +1,18 @@
+# Inference event, defined as data. Loaded by the Quix runtime (ADR 0004).
+# `name` is the identity source of truth: the emitted event name (inference_type is the engine type).
+name: phone_is_charging
+enabled: true
+
+# Session-pairing engine: a charge session spans plugging in to unplugging. The engine
+# remembers the open device_connected_to_power and emits phone_is_charging when
+# device_disconnected_from_power arrives, carrying both as lineage (duration is
+# disconnect.timestamp - connect.timestamp). Mirror of car_trip's shape, on the raw
+# power signals.
+engine: session_window
+engine_config:
+  start_event: device_connected_to_power
+  end_event: device_disconnected_from_power
+  max_duration_seconds: 86400   # 24h — a disconnect beyond this won't pair to a stale connect
+
+source_topic: raw_sensors
+sink_topic: high_level_events

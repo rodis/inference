@@ -1,10 +1,10 @@
-import { Car, LogIn, LogOut, DoorOpen, DoorClosed, KeyRound, Smartphone, Plug, CreditCard, Circle } from "lucide-react";
+import { Car, LogIn, LogOut, DoorOpen, DoorClosed, KeyRound, Smartphone, Plug, BatteryCharging, CreditCard, Circle } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { AwareEvent } from "./types";
 
 export const VERBS: Record<string, string> = {
   car_trip: "Car trip", got_into_the_car: "Got into the car", got_out_the_car: "Got out of the car",
-  car_door_opened: "Car door opened", car_door_closed: "Car door closed",
+  car_door_opened: "Car door opened", car_door_closed: "Car door closed", phone_is_charging: "Phone charging",
 };
 export const RAW_LABEL: Record<string, string> = {
   device_connected_to_power: "Power connected", device_disconnected_from_power: "Power disconnected",
@@ -17,6 +17,7 @@ export const CAT: Record<string, { c: string; Icon: LucideIcon }> = {
   car_door_opened: { c: "#7a5bff", Icon: DoorOpen }, car_door_closed: { c: "#9b7bff", Icon: DoorClosed }, car_lock_state_change: { c: "#e0567f", Icon: KeyRound },
   device_connected_to_carplay: { c: "#6b5bff", Icon: Smartphone }, device_disconnected_from_carplay: { c: "#8a7cff", Icon: Smartphone },
   device_connected_to_power: { c: "#f5a524", Icon: Plug }, device_disconnected_from_power: { c: "#e0892a", Icon: Plug },
+  phone_is_charging: { c: "#27ae60", Icon: BatteryCharging },
   credit_card_payment: { c: "#14b8a6", Icon: CreditCard },
 };
 
@@ -94,7 +95,7 @@ export const GROUP_DEFS: GroupDef[] = [
   { key: "door", label: "Doors", Icon: DoorClosed, color: "#7a5bff", test: (n) => n.includes("door") },
   { key: "lock", label: "Lock", Icon: KeyRound, color: "#e0567f", test: (n) => n.includes("lock") },
   { key: "carplay", label: "CarPlay", Icon: Smartphone, color: "#6b5bff", test: (n) => n.includes("carplay") },
-  { key: "power", label: "Power", Icon: Plug, color: "#f5a524", test: (n) => n.includes("power") },
+  { key: "power", label: "Power", Icon: Plug, color: "#f5a524", test: (n) => n.includes("power") || n.includes("charg") },
   { key: "spend", label: "Spending", Icon: CreditCard, color: "#14b8a6", test: (n) => n.includes("payment") || n.includes("card") },
   { key: "other", label: "Other", Icon: Circle, color: "#9298a6", test: () => true },
 ];
