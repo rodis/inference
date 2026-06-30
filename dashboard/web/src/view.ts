@@ -55,6 +55,35 @@ export function buildScale(epochs: number[]): Scale {
 }
 export { ROW };
 
+/** Reveal-weighted vertical layout for semantic zoom. Every event keeps a slot, but the
+ *  slot height grows with the event's reveal (0..1): hidden events collapse to a sliver
+ *  (holding their place), revealed events take a full row. Because nothing enters or
+ *  leaves the layout as altitude changes, lower-layer events *grow* in/out smoothly
+ *  instead of popping. Positions are keyed per event id (handles same-timestamp events). */
+const PACK_MIN = 16;
+export function packScale(events: AwareEvent[], reveal: (e: AwareEvent) => number): { pos: Map<string, number>; h: number } {
+  const sorted = [...events].sort((a, b) => a.epoch - b.epoch);
+  const pos = new Map<string, number>();
+  const ys: number[] = [];
+  let y = 0, first = true;
+  for (const e of sorted) {
+    const r = Math.max(0, Math.min(1, reveal(e)));
+    if (!first) y += PACK_MIN + (ROW - PACK_MIN) * r; // space this event claims above it
+    pos.set(e.id, y);
+    ys.push(y);
+    first = false;
+  }
+  // Trim collapsed head/tail: the timeline should start at the first visible event and end
+  // at the last, so leading/trailing hidden slivers don't add whitespace. Interior slivers
+  // stay (they hint at detail between visible events).
+  let lo = 0; while (lo < sorted.length && reveal(sorted[lo]) < 0.02) lo++;
+  let hi = sorted.length - 1; while (hi >= 0 && reveal(sorted[hi]) < 0.02) hi--;
+  if (lo > hi) return { pos, h: y + ROW }; // nothing clearly visible — leave as-is
+  const offset = ys[lo];
+  for (const [k, v] of pos) pos.set(k, Math.max(0, v - offset));
+  return { pos, h: ys[hi] - offset + ROW };
+}
+
 export interface GroupDef { key: string; label: string; icon: string; color: string; test: (n: string) => boolean }
 export const GROUP_DEFS: GroupDef[] = [
   { key: "trip", label: "Car & trip", icon: "🚗", color: "#3d6cf7", test: (n) => n === "car_trip" || n.includes("got_in") || n.includes("got_out") || n.includes("trip") },

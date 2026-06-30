@@ -149,9 +149,23 @@ if (DIST / "assets").is_dir():
     app.mount("/assets", StaticFiles(directory=DIST / "assets"), name="assets")
 
 
-@app.get("/", include_in_schema=False)
-def index():
+def _spa() -> FileResponse:
     bundle = DIST / "index.html"
     if not bundle.is_file():
         raise HTTPException(503, "UI bundle not built (run `npm run build` in web/)")
     return FileResponse(bundle)
+
+
+@app.get("/", include_in_schema=False)
+def index():
+    return _spa()
+
+
+@app.get("/{path:path}", include_in_schema=False)
+def spa_fallback(path: str):
+    # Client-side routes (e.g. /d/timeline) must return the SPA shell so deep links and
+    # refreshes resolve. /api/* and /assets/* match their own routes/mount first; guard
+    # anyway so an unknown API path 404s instead of silently serving HTML.
+    if path.startswith(("api/", "assets/")):
+        raise HTTPException(404)
+    return _spa()
