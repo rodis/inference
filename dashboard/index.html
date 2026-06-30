@@ -229,7 +229,10 @@ EVENTS.filter(e => e.name==="got_into_the_car").forEach(start => {
   const end = EVENTS.find(e => e.name==="got_out_the_car" && e.epoch>=start.epoch);
   trips.push({ start, end });
 });
-const synthTrips = trips.filter(t => t.start && t.end).map((t,i) => ({
+// car_trip is a real derived event now (session_window engine). Only synthesize when
+// none have been produced yet, so we never double-count a trip.
+const hasRealTrips = EVENTS.some(e => e.name === "car_trip");
+const synthTrips = (hasRealTrips ? [] : trips.filter(t => t.start && t.end)).map((t,i) => ({
   id:"trip-"+i, name:"car_trip", event_class:"derived", synthetic:true,
   epoch:t.start.epoch, date:t.start.date, endEpoch:t.end.epoch, durationSec:t.end.epoch-t.start.epoch,
   message:{ id:"trip-"+i, name:"car_trip", inference_type:"planned rollup · synthesized in view", confidence_score:null, derived_from:[{id:t.start.id},{id:t.end.id}] },
