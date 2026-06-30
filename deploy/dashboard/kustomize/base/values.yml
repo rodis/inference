@@ -48,6 +48,21 @@ service:
       targetPort: 8000
       protocol: TCP
 
-# Intentionally no ingress for now — DNS/cert is handled manually later.
+# Traefik runs as the `nginx` ingress controller in this cluster. cert-manager issues
+# the TLS cert (letsencrypt-prod) into aware-dashboard-tls once DNS for the host points
+# at the cluster (HTTP-01 challenge). Path backend defaults to this app's service on its
+# `http` port, so serviceName/servicePort are omitted.
 ingress:
-  enabled: false
+  enabled: true
+  ingressClassName: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: aware.prod.rods.me
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: aware-dashboard-tls
+      hosts:
+        - aware.prod.rods.me
