@@ -35,7 +35,7 @@ function ARow({ name, derivLevel, getL, getCeil, onHome, onLift, sampleOf }: Pro
   }
   return (
     <div className="arow">
-      <span className="ai" style={{ background: cat.c }}>{cat.e}</span>
+      <span className="ai" style={{ background: cat.c }}><cat.Icon size={14} strokeWidth={2.25} /></span>
       <span className="an">{typeLabel(name)}</span>
       <span className="ad">D{derivLevel(sampleOf[name])}</span>
       <span className="btns">{homeBtns}</span>
@@ -62,7 +62,7 @@ export default function AssignPanel(props: Props) {
         return (
           <div className="agroup" key={g.key}>
             <div className="agroup-head">
-              <span className="gi" style={{ background: g.color }}>{g.icon}</span>
+              <span className="gi" style={{ background: g.color }}><g.Icon size={13} strokeWidth={2.25} /></span>
               <span className="gn">{g.label}</span>
               <span className="gc">{members.length}</span>
             </div>

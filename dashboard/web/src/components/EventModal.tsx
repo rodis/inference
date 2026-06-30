@@ -22,7 +22,7 @@ function DNode({ e, byId, getL, derivLevel }: { e: AwareEvent; byId: Record<stri
   return (
     <div className="dnode">
       <div className="drow">
-        <span className="dtile" style={{ background: cat.c }}>{cat.e}</span>
+        <span className="dtile" style={{ background: cat.c }}><cat.Icon size={15} strokeWidth={2.25} /></span>
         <span className="dn">{labelOf(e)}</span>
         <span className="dg" />
         <span className="dt">{fmtTimeSec(e.date)}</span>
@@ -59,7 +59,7 @@ export default function EventModal({ event, byId, getL, derivLevel, onClose }: P
       <div className="modal">
         <div className="modal-head">
           <button className="x" aria-label="Close" onClick={onClose}>✕</button>
-          <div className="htile" style={{ background: cat.c }}>{cat.e}</div>
+          <div className="htile" style={{ background: cat.c }}><cat.Icon size={22} strokeWidth={2.25} /></div>
           <div>
             <div className="mlabel">
               {e.event_class === "derived"

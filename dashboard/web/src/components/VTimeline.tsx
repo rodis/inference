@@ -86,7 +86,7 @@ export default function VTimeline({ events, scale, posOf, packedHeight, getL, ge
           <div key={e.id} className="vt-card" style={{ top: y, opacity: r, pointerEvents: r < 0.1 ? "none" : undefined }}>
             <div className="vt-time">{fmtTime(e.date)}</div>
             <div className="vt-circ">
-              <div className="vt-circle" style={{ background: cat.c, transform: `scale(${0.82 + 0.18 * r})` }}>{cat.e}</div>
+              <div className="vt-circle" style={{ background: cat.c, transform: `scale(${0.82 + 0.18 * r})` }}><cat.Icon size={18} strokeWidth={2.25} /></div>
             </div>
             <button className="vt-body" onClick={() => onSelect(e)} tabIndex={r < 0.1 ? -1 : undefined}>
               {e.synthetic ? (

@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
+import { Car } from "lucide-react";
 import { DASHBOARDS } from "./registry";
 import { useAware } from "./useAware";
 
@@ -9,12 +10,12 @@ export default function Shell() {
   return (
     <div className="wrap">
       <header className="appbar">
-        <div className="applogo">🚗</div>
+        <div className="applogo"><Car size={22} strokeWidth={2.25} color="#fff" /></div>
         <span className="appname">Aware</span>
         <nav className="topnav">
           {DASHBOARDS.map((d) => (
             <NavLink key={d.slug} to={`/d/${d.slug}`} className={({ isActive }) => "navlink" + (isActive ? " on" : "")}>
-              {d.icon && <span className="ni">{d.icon}</span>}{d.title}
+              {d.Icon && <d.Icon size={15} strokeWidth={2.25} className="ni" />}{d.title}
             </NavLink>
           ))}
         </nav>

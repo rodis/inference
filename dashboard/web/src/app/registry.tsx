@@ -1,4 +1,6 @@
 import type { ComponentType } from "react";
+import { Calendar, BarChart2, Radio } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import TimelineDashboard from "../dashboards/timeline/TimelineDashboard";
 import CompareDashboard from "../dashboards/compare/CompareDashboard";
 import SignalsDashboard from "../dashboards/signals/SignalsDashboard";
@@ -9,12 +11,12 @@ export interface DashboardDef {
   slug: string;                 // URL segment: /d/:slug
   title: string;                // nav label
   group?: string;               // optional nav grouping
-  icon?: string;                // emoji shown in nav
+  Icon?: LucideIcon;            // icon shown in nav
   component: ComponentType;     // reads shared data via useAware()
 }
 
 export const DASHBOARDS: DashboardDef[] = [
-  { slug: "timeline", title: "Day timeline", group: "Life", icon: "🗓️", component: TimelineDashboard },
-  { slug: "compare", title: "Compare", group: "Life", icon: "📊", component: CompareDashboard },
-  { slug: "signals", title: "Signals", group: "Life", icon: "📡", component: SignalsDashboard },
+  { slug: "timeline", title: "Day timeline", group: "Life", Icon: Calendar, component: TimelineDashboard },
+  { slug: "compare", title: "Compare", group: "Life", Icon: BarChart2, component: CompareDashboard },
+  { slug: "signals", title: "Signals", group: "Life", Icon: Radio, component: SignalsDashboard },
 ];

@@ -1,3 +1,5 @@
+import { Car, LogIn, LogOut, DoorOpen, DoorClosed, KeyRound, Smartphone, Plug, CreditCard, Circle } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import type { AwareEvent } from "./types";
 
 export const VERBS: Record<string, string> = {
@@ -8,12 +10,14 @@ export const RAW_LABEL: Record<string, string> = {
   device_connected_to_power: "Power connected", device_disconnected_from_power: "Power disconnected",
   device_connected_to_carplay: "CarPlay connected", device_disconnected_from_carplay: "CarPlay disconnected",
   car_lock_state_change: "Car lock changed",
+  credit_card_payment: "Card payment",
 };
-export const CAT: Record<string, { c: string; e: string }> = {
-  car_trip: { c: "#3d6cf7", e: "🚗" }, got_into_the_car: { c: "#18b26b", e: "➡️" }, got_out_the_car: { c: "#12a89b", e: "⬅️" },
-  car_door_opened: { c: "#7a5bff", e: "🚪" }, car_door_closed: { c: "#9b7bff", e: "🚪" }, car_lock_state_change: { c: "#e0567f", e: "🔑" },
-  device_connected_to_carplay: { c: "#6b5bff", e: "📲" }, device_disconnected_from_carplay: { c: "#8a7cff", e: "📲" },
-  device_connected_to_power: { c: "#f5a524", e: "🔌" }, device_disconnected_from_power: { c: "#e0892a", e: "🔌" },
+export const CAT: Record<string, { c: string; Icon: LucideIcon }> = {
+  car_trip: { c: "#3d6cf7", Icon: Car }, got_into_the_car: { c: "#18b26b", Icon: LogIn }, got_out_the_car: { c: "#12a89b", Icon: LogOut },
+  car_door_opened: { c: "#7a5bff", Icon: DoorOpen }, car_door_closed: { c: "#9b7bff", Icon: DoorClosed }, car_lock_state_change: { c: "#e0567f", Icon: KeyRound },
+  device_connected_to_carplay: { c: "#6b5bff", Icon: Smartphone }, device_disconnected_from_carplay: { c: "#8a7cff", Icon: Smartphone },
+  device_connected_to_power: { c: "#f5a524", Icon: Plug }, device_disconnected_from_power: { c: "#e0892a", Icon: Plug },
+  credit_card_payment: { c: "#14b8a6", Icon: CreditCard },
 };
 
 export const NLOG = 4;
@@ -22,7 +26,7 @@ export const LCHIP: Record<number, { bg: string; fg: string }> = {
   3: { bg: "#efeaff", fg: "#6a4cd0" }, 4: { bg: "#eef0f4", fg: "#7a8294" },
 };
 
-export const catOf = (name: string) => CAT[name] || { c: "#9298a6", e: "•" };
+export const catOf = (name: string) => CAT[name] || { c: "#9298a6", Icon: Circle };
 const pad = (n: number) => String(n).padStart(2, "0");
 export const fmtTime = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 export const fmtTimeSec = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
@@ -84,14 +88,15 @@ export function packScale(events: AwareEvent[], reveal: (e: AwareEvent) => numbe
   return { pos, h: ys[hi] - offset + ROW };
 }
 
-export interface GroupDef { key: string; label: string; icon: string; color: string; test: (n: string) => boolean }
+export interface GroupDef { key: string; label: string; Icon: LucideIcon; color: string; test: (n: string) => boolean }
 export const GROUP_DEFS: GroupDef[] = [
-  { key: "trip", label: "Car & trip", icon: "🚗", color: "#3d6cf7", test: (n) => n === "car_trip" || n.includes("got_in") || n.includes("got_out") || n.includes("trip") },
-  { key: "door", label: "Doors", icon: "🚪", color: "#7a5bff", test: (n) => n.includes("door") },
-  { key: "lock", label: "Lock", icon: "🔑", color: "#e0567f", test: (n) => n.includes("lock") },
-  { key: "carplay", label: "CarPlay", icon: "📲", color: "#6b5bff", test: (n) => n.includes("carplay") },
-  { key: "power", label: "Power", icon: "🔌", color: "#f5a524", test: (n) => n.includes("power") },
-  { key: "other", label: "Other", icon: "•", color: "#9298a6", test: () => true },
+  { key: "trip", label: "Car & trip", Icon: Car, color: "#3d6cf7", test: (n) => n === "car_trip" || n.includes("got_in") || n.includes("got_out") || n.includes("trip") },
+  { key: "door", label: "Doors", Icon: DoorClosed, color: "#7a5bff", test: (n) => n.includes("door") },
+  { key: "lock", label: "Lock", Icon: KeyRound, color: "#e0567f", test: (n) => n.includes("lock") },
+  { key: "carplay", label: "CarPlay", Icon: Smartphone, color: "#6b5bff", test: (n) => n.includes("carplay") },
+  { key: "power", label: "Power", Icon: Plug, color: "#f5a524", test: (n) => n.includes("power") },
+  { key: "spend", label: "Spending", Icon: CreditCard, color: "#14b8a6", test: (n) => n.includes("payment") || n.includes("card") },
+  { key: "other", label: "Other", Icon: Circle, color: "#9298a6", test: () => true },
 ];
 export const groupKey = (name: string) => (GROUP_DEFS.find((g) => g.test(name)) || GROUP_DEFS[GROUP_DEFS.length - 1]).key;
 
