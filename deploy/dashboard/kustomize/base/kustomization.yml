@@ -1,0 +1,8 @@
+generators:
+  - helmChart.yml
+
+resources:
+  # The inference namespace is owned by the inference-runtime app + CreateNamespace=true;
+  # the dashboard just deploys into it. This DopplerSecret mints the dashboard's own
+  # neon-credentials-for-dashboard secret (same content as Vector's, separate name).
+  - neon-credentials-for-dashboard.yml

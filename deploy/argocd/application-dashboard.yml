@@ -1,0 +1,28 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: inference-dashboard
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/rodis/inference.git
+    # Tracks deploy-state (like inference-runtime): publish-images.yml builds the
+    # inference-dashboard image and bumps this app's values.yml to sha-<short> there.
+    targetRevision: deploy-state
+    path: deploy/dashboard/kustomize/base
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: inference
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

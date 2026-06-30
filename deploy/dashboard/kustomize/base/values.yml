@@ -1,0 +1,53 @@
+# Aware dashboard on the Stakater `application` chart (same chart as the runtime).
+# A stateless web pod: serves the page + a read-only Neon API. No ingress yet (DNS
+# is added manually); reach it via the Service / port-forward for now.
+applicationName: aware-dashboard
+
+deployment:
+  replicas: 1
+  image:
+    repository: ghcr.io/rodis/inference-dashboard
+    tag: "sha-bootstrap"   # placeholder; publish-images.yml bumps this to sha-<short> on deploy-state
+    pullPolicy: IfNotPresent
+  env:
+    # Map Doppler's NEON_DATABASE_URL (dashboard-specific secret) to the DATABASE_URL
+    # the app reads. Read-only Neon access; the URL carries sslmode=require.
+    DATABASE_URL:
+      valueFrom:
+        secretKeyRef:
+          name: neon-credentials-for-dashboard
+          key: NEON_DATABASE_URL
+  ports:
+    - name: http
+      containerPort: 8000
+      protocol: TCP
+  livenessProbe:
+    httpGet:
+      path: /healthz
+      port: 8000
+    initialDelaySeconds: 10
+    periodSeconds: 20
+  readinessProbe:
+    httpGet:
+      path: /healthz
+      port: 8000
+    initialDelaySeconds: 5
+    periodSeconds: 10
+  resources:
+    requests:
+      cpu: 25m
+      memory: 96Mi
+    limits:
+      cpu: 150m
+      memory: 256Mi
+
+service:
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+      protocol: TCP
+
+# Intentionally no ingress for now — DNS/cert is handled manually later.
+ingress:
+  enabled: false
