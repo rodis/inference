@@ -11,7 +11,8 @@ deployment:
     pullPolicy: IfNotPresent
   env:
     # Map Doppler's NEON_DATABASE_URL (dashboard-specific secret) to the DATABASE_URL
-    # the app reads. Read-only Neon access; the URL carries sslmode=require.
+    # the app uses. Reads the events table; also writes its own dashboard_prefs table
+    # (per-user level/lift config). The URL carries sslmode=require.
     DATABASE_URL:
       valueFrom:
         secretKeyRef:
