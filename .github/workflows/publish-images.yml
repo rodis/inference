@@ -15,24 +15,38 @@ jobs:
   discover:
     runs-on: ubuntu-latest
     outputs:
-      workers: ${{ steps.find.outputs.workers }}
+      components: ${{ steps.find.outputs.components }}
     steps:
       - uses: actions/checkout@v4
 
       - id: find
-        name: Discover workers with a Dockerfile
+        name: Discover buildable components
         run: |
           set -euo pipefail
+          # Auto-discovered workers: workers/<name>/Dockerfile, built from the repo root,
+          # image inference-<slug>, manifest deploy/inference/kustomize/base/<slug>/values.yml.
           workers=$(
             find workers -mindepth 2 -maxdepth 2 -name Dockerfile \
-              | jq -R -s -c 'split("\n") | map(select(length>0) | split("/")[1])'
+              | jq -R -s -c '
+                  split("\n") | map(select(length>0) | split("/")[1])
+                  | map(. as $w | ($w | gsub("_";"-")) as $slug | {
+                      name: $w,
+                      dockerfile: ("workers/" + $w + "/Dockerfile"),
+                      context: ".",
+                      image: ("inference-" + $slug),
+                      values: ("deploy/inference/kustomize/base/" + $slug + "/values.yml")
+                    })'
           )
-          if [ "$workers" = "[]" ]; then
-            echo "::error::No workers/<name>/Dockerfile found"
+          # The dashboard lives outside workers/ (own dir + own deploy path), so it's
+          # declared explicitly rather than auto-discovered.
+          dashboard='[{"name":"dashboard","dockerfile":"dashboard/Dockerfile","context":"dashboard","image":"inference-dashboard","values":"deploy/dashboard/kustomize/base/values.yml"}]'
+          components=$(jq -c -n --argjson w "$workers" --argjson d "$dashboard" '$w + $d')
+          if [ "$components" = "[]" ]; then
+            echo "::error::No buildable components found"
             exit 1
           fi
-          echo "workers=$workers" >> "$GITHUB_OUTPUT"
-          echo "Discovered: $workers"
+          echo "components=$components" >> "$GITHUB_OUTPUT"
+          echo "Discovered: $components"
 
   build-push:
     needs: discover
@@ -43,7 +57,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        worker: ${{ fromJson(needs.discover.outputs.workers) }}
+        component: ${{ fromJson(needs.discover.outputs.components) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -55,24 +69,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - id: slug
-        name: Slugify worker name for image tag
-        env:
-          WORKER: ${{ matrix.worker }}
-        run: echo "name=${WORKER//_/-}" >> "$GITHUB_OUTPUT"
-
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/inference-${{ steps.slug.outputs.name }}
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.component.image }}
           tags: |
             type=raw,value=latest
             type=sha,format=short
 
       - uses: docker/build-push-action@v6
         with:
-          context: .
-          file: workers/${{ matrix.worker }}/Dockerfile
+          context: ${{ matrix.component.context }}
+          file: ${{ matrix.component.dockerfile }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -92,16 +100,16 @@ jobs:
 
       - name: Bump image tags in deploy/
         env:
-          WORKERS: ${{ needs.discover.outputs.workers }}
+          COMPONENTS: ${{ needs.discover.outputs.components }}
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           short="${SHA:0:7}"
-          echo "$WORKERS" | jq -r '.[]' | while read -r worker; do
-            slug="${worker//_/-}"
-            values="deploy/inference/kustomize/base/${slug}/values.yml"
+          echo "$COMPONENTS" | jq -c '.[]' | while read -r c; do
+            name=$(echo "$c" | jq -r '.name')
+            values=$(echo "$c" | jq -r '.values')
             if [ ! -f "$values" ]; then
-              echo "::warning::No manifest for $worker at $values, skipping"
+              echo "::warning::No manifest for $name at $values, skipping"
               continue
             fi
             yq -i ".deployment.image.tag = \"sha-${short}\"" "$values"

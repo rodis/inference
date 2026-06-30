@@ -1,0 +1,466 @@
+<title>Aware — life, inferred</title>
+<meta name="description" content="A Structured-style day timeline of a life inferred from phone and car signals — with a second, selectable timeline beside it on a shared time scale for comparing series, and a recursive dig-down into how each event was derived.">
+
+<style>
+  :root {
+    --canvas: #eceef3; --card: #ffffff; --card-2: #f6f7fa;
+    --ink: #20242e; --ink-2: #5b6373; --muted: #9298a6; --muted-2: #b4b9c5;
+    --hair: #e9ebf1; --hair-2: #dde0e8;
+    --accent: #fb6f6a; --accent-2: #fd9a63; --accent-soft: #ffe9e6; --good: #2fb27a;
+    --shadow-sm: 0 1px 2px rgba(24,28,40,0.06);
+    --shadow: 0 1px 2px rgba(24,28,40,0.05), 0 10px 26px rgba(24,28,40,0.07);
+    --shadow-lg: 0 2px 8px rgba(24,28,40,0.06), 0 22px 50px rgba(24,28,40,0.13);
+    --mono: ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+    --rounded: "SF Pro Rounded", ui-rounded, "SF Pro Display", -apple-system, system-ui, "Segoe UI", sans-serif;
+    --sans: "SF Pro Text", -apple-system, system-ui, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var(--sans); line-height: 1.5; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1340px; margin: 0 auto; padding: 36px 24px 96px; }
+
+  .appbar { display: flex; align-items: center; gap: 12px; margin-bottom: 26px; }
+  .applogo { width: 40px; height: 40px; border-radius: 12px; flex: none; background: linear-gradient(150deg, var(--accent), var(--accent-2)); display: flex; align-items: center; justify-content: center; font-size: 21px; box-shadow: 0 5px 14px rgba(251,111,106,0.4); }
+  .appbar .appname { font-family: var(--rounded); font-size: 19px; font-weight: 800; letter-spacing: -0.01em; }
+  .appbar .sub { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-left: auto; }
+
+  .datehead { font-family: var(--rounded); font-size: 30px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 16px; }
+  .datehead .dyear, .datehead .chev { color: var(--accent); }
+
+  .weekstrip { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 8px; }
+  .daycell { flex: 0 0 78px; background: none; border: 0; cursor: pointer; padding: 6px 4px 8px; border-radius: 14px; text-align: center; transition: background 0.14s; }
+  .daycell:hover { background: rgba(0,0,0,0.03); }
+  .daycell .dow { font-size: 12px; color: var(--muted); font-weight: 500; }
+  .daycell .dn { width: 34px; height: 34px; margin: 5px auto 0; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-family: var(--rounded); font-weight: 700; font-size: 16px; color: var(--ink); }
+  .daycell.sel .dow { color: var(--accent); }
+  .daycell.sel .dn { background: var(--accent); color: #fff; box-shadow: 0 4px 12px rgba(251,111,106,0.45); }
+  .daycell .dots { display: flex; gap: 3px; justify-content: center; margin-top: 6px; height: 6px; }
+  .daycell .dots i { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+
+  .summary { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 0; }
+  .pill { background: var(--card); border-radius: 11px; box-shadow: var(--shadow-sm); padding: 8px 12px; display: flex; align-items: baseline; gap: 7px; }
+  .pill .pv { font-family: var(--rounded); font-weight: 700; font-size: 15px; font-variant-numeric: tabular-nums; }
+  .pill .pk { font-size: 11.5px; color: var(--muted); }
+  .pill.a .pv { color: var(--accent); }
+
+  .cols { display: flex; gap: 28px; align-items: flex-start; margin-top: 18px; }
+  .col-main { flex: 1 1 800px; min-width: 0; }
+  .col-side { flex: 0 1 330px; position: sticky; top: 18px; }
+  @media (max-width: 980px) { .cols { flex-direction: column; } .col-side { position: static; flex-basis: auto; width: 100%; } }
+
+  .sheet { background: var(--card); border-radius: 26px; box-shadow: var(--shadow-lg); padding: 8px 20px 26px; }
+  .handle { width: 42px; height: 5px; border-radius: 3px; background: var(--hair-2); margin: 9px auto 8px; }
+
+  /* dual timeline header + columns share one width grid so the two timelines align */
+  .dualbar { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin: 6px 2px 16px; }
+  .dualbar-col { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-height: 30px; }
+  .dualbar-col .stitle { font-family: var(--rounded); font-weight: 700; font-size: 15px; }
+  .dualbar-col .stitle .accent { color: var(--accent); }
+  .seg { display: inline-flex; background: #eceef3; border-radius: 11px; padding: 3px; gap: 2px; }
+  .seg .lbl { font-family: var(--mono); font-size: 10px; color: var(--muted-2); align-self: center; padding: 0 6px 0 3px; text-transform: uppercase; letter-spacing: 0.06em; }
+  .seg button { border: 0; background: none; font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--ink-2); padding: 6px 10px; border-radius: 8px; cursor: pointer; transition: all 0.14s; }
+  .seg button:hover { color: var(--ink); }
+  .seg button[aria-pressed="true"] { background: var(--card); color: var(--accent); box-shadow: var(--shadow-sm); }
+  .cmpchips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .cmp-chip { font-family: var(--mono); font-size: 10.5px; padding: 4px 9px 4px 7px; border-radius: 999px; border: 1px solid var(--hair-2); background: var(--card-2); color: var(--ink-2); cursor: pointer; display: inline-flex; align-items: center; gap: 5px; transition: all 0.12s; }
+  .cmp-chip:hover { border-color: var(--muted-2); }
+  .cmp-chip .cd { width: 7px; height: 7px; border-radius: 50%; }
+
+  .dualwrap { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  @media (max-width: 620px) { .dualbar, .dualwrap { grid-template-columns: 1fr; } }
+
+  /* one vertical timeline (used by both main + compare) */
+  .vt { position: relative; min-height: 40px; }
+  .vt-line { position: absolute; left: 62px; transform: translateX(-50%); width: 3px; border-radius: 2px; z-index: 0; }
+  .vt-card { position: absolute; left: 0; right: 0; display: grid; grid-template-columns: 40px 44px 1fr; align-items: start; }
+  .vt-time { text-align: right; font-family: var(--mono); font-size: 11px; color: var(--muted); padding-top: 12px; font-variant-numeric: tabular-nums; }
+  .vt-circle { width: 38px; height: 38px; border-radius: 50%; margin: 1px auto 0; display: flex; align-items: center; justify-content: center; font-size: 18px; color: #fff; box-shadow: 0 3px 8px rgba(24,28,40,0.18); position: relative; z-index: 1; }
+  .vt-body { text-align: left; background: none; border: 0; color: inherit; cursor: pointer; padding: 6px 4px 12px 6px; border-radius: 12px; transition: background 0.12s; }
+  .vt-body:hover { background: var(--card-2); }
+  .ev-meta { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+  .ev-meta .dur { color: var(--accent); font-weight: 600; }
+  .ev-title { font-family: var(--rounded); font-weight: 650; font-size: 15px; letter-spacing: -0.01em; margin-top: 1px; }
+  .ev-tags { display: flex; gap: 6px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
+  .lchip { font-family: var(--mono); font-size: 10px; font-weight: 700; border-radius: 6px; padding: 2px 7px; }
+  .liftflag { font-family: var(--mono); font-size: 10px; color: var(--accent); background: var(--accent-soft); border-radius: 6px; padding: 2px 6px; white-space: nowrap; }
+  .dbadge { font-family: var(--mono); font-size: 10px; color: var(--ink-2); background: #eef0f4; border-radius: 6px; padding: 2px 6px; }
+  .vt-empty { font-family: var(--mono); font-size: 12px; color: var(--muted); padding: 16px 6px; }
+
+  /* assignment box */
+  .card-box { background: var(--card); border-radius: 20px; box-shadow: var(--shadow); padding: 18px 18px; }
+  .assign-head { margin-bottom: 14px; }
+  .assign-head .ah-title { font-family: var(--rounded); font-size: 14px; font-weight: 700; }
+  .assign-head .ah-hint { display: block; font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 3px; }
+  .assign-head code { color: var(--accent); background: var(--accent-soft); border-radius: 5px; padding: 1px 5px; font-family: var(--mono); }
+  .agroup { margin-bottom: 18px; }
+  .agroup:last-child { margin-bottom: 0; }
+  .agroup-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding-bottom: 7px; border-bottom: 1px solid var(--hair); }
+  .agroup-head .gi { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #fff; flex: none; }
+  .agroup-head .gn { font-family: var(--rounded); font-size: 11.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-2); }
+  .agroup-head .gc { font-family: var(--mono); font-size: 10px; color: var(--muted-2); }
+  .agroup-rows { display: grid; grid-template-columns: 1fr; gap: 4px; padding-left: 30px; }
+  .arow { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-top: 1px solid var(--hair); flex-wrap: wrap; row-gap: 6px; }
+  .agroup-rows .arow:first-child { border-top: 0; }
+  .arow .ai { width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; color: #fff; flex: none; }
+  .arow .an { font-family: var(--rounded); font-size: 12.5px; font-weight: 600; }
+  .arow .ad { font-family: var(--mono); font-size: 9px; color: var(--ink-2); background: #eef0f4; border-radius: 5px; padding: 2px 5px; }
+  .btns { display: inline-flex; background: #eef0f4; border-radius: 8px; padding: 2px; gap: 2px; }
+  .btns button { font-family: var(--mono); font-size: 11px; font-weight: 600; min-width: 24px; padding: 4px 0; background: none; color: var(--muted); border: 0; border-radius: 6px; cursor: pointer; transition: all 0.12s; }
+  .btns button:hover { color: var(--ink); }
+  .btns button.on { box-shadow: var(--shadow-sm); }
+  .liftgrp { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+  .liftgrp .lgl { font-family: var(--mono); font-size: 8.5px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted-2); }
+  .liftgrp .btns button.on { background: var(--accent); color: #fff; }
+
+  /* modal */
+  .ov { position: fixed; inset: 0; z-index: 100; background: rgba(28,32,46,0.4); backdrop-filter: blur(4px); display: none; align-items: flex-start; justify-content: center; padding: 7vh 16px; overflow-y: auto; }
+  .ov.show { display: flex; }
+  .modal { width: 100%; max-width: 560px; background: var(--card); border-radius: 22px; box-shadow: var(--shadow-lg); overflow: hidden; }
+  .modal-head { padding: 22px 22px 18px; position: relative; display: flex; gap: 14px; align-items: flex-start; }
+  .modal-head .htile { width: 46px; height: 46px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; font-size: 23px; color: #fff; }
+  .modal-head .mlabel { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+  .modal-head .mtitle { font-family: var(--rounded); font-size: 21px; font-weight: 750; letter-spacing: -0.02em; margin: 3px 0 0; }
+  .modal-head .mmeta { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; align-items: center; }
+  .modal-head .mt { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .modal-head .conf { font-family: var(--mono); font-size: 11px; color: var(--good); background: #e3f6ee; border-radius: 999px; padding: 3px 9px; }
+  .modal-head .planned { font-family: var(--mono); font-size: 11px; color: var(--muted); border: 1px dashed var(--hair-2); border-radius: 999px; padding: 3px 9px; }
+  .x { position: absolute; top: 16px; right: 16px; width: 30px; height: 30px; border-radius: 50%; border: 0; background: #eef0f4; color: var(--ink-2); font-size: 15px; cursor: pointer; }
+  .x:hover { background: #e3e6ee; }
+  .modal-body { padding: 4px 22px 22px; }
+  .modal-body .explain { font-size: 13px; color: var(--ink-2); margin: 0 0 16px; padding-top: 16px; border-top: 1px solid var(--hair); }
+  .modal-body .explain b { color: var(--ink); }
+  .drow { display: flex; align-items: center; gap: 11px; padding: 9px 11px; margin: 7px 0; border-radius: 12px; background: var(--card-2); border: 1px solid var(--hair); }
+  .drow .dtile { width: 30px; height: 30px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; font-size: 15px; color: #fff; }
+  .drow .dn { font-family: var(--rounded); font-size: 13.5px; font-weight: 600; }
+  .drow .dt { font-family: var(--mono); font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .drow .dg { flex: 1; }
+  .dkids { margin-left: 15px; padding-left: 16px; border-left: 2px solid var(--hair); }
+  .dleaf-note { font-family: var(--mono); font-size: 11px; color: var(--muted); padding: 4px 0 0 14px; }
+
+  footer { margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--hair); font-family: var(--mono); font-size: 11px; color: var(--muted); line-height: 1.7; }
+  footer b { color: var(--ink-2); font-weight: 600; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <div class="appbar">
+    <div class="applogo">🚗</div>
+    <span class="appname">Aware</span>
+    <span class="sub">personal telemetry · rods</span>
+  </div>
+
+  <div class="datehead" id="datehead"></div>
+  <div class="weekstrip" id="weekstrip"></div>
+  <div class="summary" id="summary"></div>
+
+  <div class="cols">
+  <div class="col-main">
+  <div class="sheet">
+    <div class="handle"></div>
+    <div class="dualbar">
+      <div class="dualbar-col">
+        <span class="stitle">Timeline</span>
+        <div class="seg" id="filter"><span class="lbl">level</span></div>
+      </div>
+      <div class="dualbar-col">
+        <span class="stitle"><span class="accent">Compare</span></span>
+        <div class="cmpchips" id="cmpSettings"></div>
+      </div>
+    </div>
+    <div class="dualwrap">
+      <div class="vt" id="timeline"></div>
+      <div class="vt" id="cmpTimeline"></div>
+    </div>
+  </div>
+  </div>
+
+  <div class="col-side">
+  <div class="card-box">
+    <div class="assign-head">
+      <span class="ah-title">Assign &amp; lift</span>
+      <span class="ah-hint">level = home lane · “also up to” lifts an event into higher views. Seeded from <code>logical_levels.json</code>.</span>
+    </div>
+    <div class="assign-wrap" id="assign"></div>
+  </div>
+  </div>
+  </div>
+
+  <footer>
+    <b>Aware</b> — from the <b>events</b> table in Neon (Postgres): <span id="ft-count"></span> events over <span id="ft-span"></span>.
+    Raw signals come from iPhone Shortcuts via Vector → Kafka; inferences from the runtime, each with a <b>derivation lineage</b>.
+    The two timelines share one per-day time scale, so rows at the same moment line up. <b>Car trip</b> is synthesized in this view.
+    Logical levels &amp; lifts are editable defaults seeded from <b>logical_levels.json</b>. Tap any event to trace how it was built.
+  </footer>
+</div>
+
+<div class="ov" id="ov" role="dialog" aria-modal="true" aria-label="Event derivation"><div class="modal" id="modal"></div></div>
+
+<script>
+(async () => {
+/* DATA_BOOT_START — replaced with literals by build_preview.py for the static Claude artifact */
+const EVENTS = await fetch("api/events").then(r => r.json());
+const LEVEL_SEED = await fetch("api/levels").then(r => r.json());
+/* DATA_BOOT_END */
+
+const VERBS = { car_trip:"Car trip", got_into_the_car:"Got into the car", got_out_the_car:"Got out of the car", car_door_opened:"Car door opened", car_door_closed:"Car door closed" };
+const RAW_LABEL = { device_connected_to_power:"Power connected", device_disconnected_from_power:"Power disconnected", device_connected_to_carplay:"CarPlay connected", device_disconnected_from_carplay:"CarPlay disconnected", car_lock_state_change:"Car lock changed" };
+const CAT = {
+  car_trip:{c:"#3d6cf7",e:"🚗"}, got_into_the_car:{c:"#18b26b",e:"➡️"}, got_out_the_car:{c:"#12a89b",e:"⬅️"},
+  car_door_opened:{c:"#7a5bff",e:"🚪"}, car_door_closed:{c:"#9b7bff",e:"🚪"}, car_lock_state_change:{c:"#e0567f",e:"🔑"},
+  device_connected_to_carplay:{c:"#6b5bff",e:"📲"}, device_disconnected_from_carplay:{c:"#8a7cff",e:"📲"},
+  device_connected_to_power:{c:"#f5a524",e:"🔌"}, device_disconnected_from_power:{c:"#e0892a",e:"🔌"},
+};
+const catOf = name => CAT[name] || { c:"#9298a6", e:"•" };
+const pad = n => String(n).padStart(2,"0");
+const fmtTime = d => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+const fmtTimeSec = d => `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+const titleize = s => s.replace(/_/g," ");
+const labelOf = e => (e.event_class==="derived" ? (VERBS[e.name]||titleize(e.name)) : (RAW_LABEL[e.name]||titleize(e.name)));
+const typeLabel = n => VERBS[n] || RAW_LABEL[n] || titleize(n);
+function humanDur(sec){ sec=Math.round(sec); if(sec<60) return sec+"s"; const m=Math.floor(sec/60), s=sec%60; if(m<60) return s?`${m}m ${s}s`:`${m} min`; return `${Math.floor(m/60)}h ${m%60}m`; }
+
+EVENTS.forEach(e => { e.epoch = +e.occurred_epoch; e.date = new Date(e.epoch*1000); });
+EVENTS.sort((a,b) => a.epoch-b.epoch);
+const byId = Object.fromEntries(EVENTS.map(e => [e.id, e]));
+const raw = EVENTS.filter(e => e.event_class==="raw");
+const derived = EVENTS.filter(e => e.event_class==="derived");
+
+const trips = [];
+EVENTS.filter(e => e.name==="got_into_the_car").forEach(start => {
+  const end = EVENTS.find(e => e.name==="got_out_the_car" && e.epoch>=start.epoch);
+  trips.push({ start, end });
+});
+const synthTrips = trips.filter(t => t.start && t.end).map((t,i) => ({
+  id:"trip-"+i, name:"car_trip", event_class:"derived", synthetic:true,
+  epoch:t.start.epoch, date:t.start.date, endEpoch:t.end.epoch, durationSec:t.end.epoch-t.start.epoch,
+  message:{ id:"trip-"+i, name:"car_trip", inference_type:"planned rollup · synthesized in view", confidence_score:null, derived_from:[{id:t.start.id},{id:t.end.id}] },
+}));
+synthTrips.forEach(ev => { byId[ev.id]=ev; });
+const ALL = [...EVENTS, ...synthTrips];
+
+const _dl = {};
+function derivLevel(e){ if(!e) return 1; if(_dl[e.id]!=null) return _dl[e.id]; _dl[e.id]=1;
+  const ps=(e.message.derived_from||[]).map(p=>byId[p.id]).filter(Boolean);
+  _dl[e.id]=ps.length?1+Math.max(...ps.map(derivLevel)):1; return _dl[e.id]; }
+
+const NLOG = 4;
+const LCHIP = { 1:{bg:"#e7eeff",fg:"#2f58d8"}, 2:{bg:"#e6f7ef",fg:"#178a55"}, 3:{bg:"#efeaff",fg:"#6a4cd0"}, 4:{bg:"#eef0f4",fg:"#7a8294"} };
+const logicalOf = Object.assign({}, (LEVEL_SEED && LEVEL_SEED.levels) || {});
+const liftOf = Object.assign({}, (LEVEL_SEED && LEVEL_SEED.lift) || {});
+const getL = name => logicalOf[name] || 4;
+const getCeil = name => { const h=getL(name); const k=liftOf[name]; return (k==null||k>h)?h:k; };
+function lchipHTML(lv){ const c=LCHIP[lv]; return `<span class="lchip" style="background:${c.bg};color:${c.fg}">L${lv}</span>`; }
+
+// summary
+const t0 = Math.min(...ALL.map(e=>e.epoch)), t1 = Math.max(...ALL.map(e=>e.epoch));
+const spanLabel = () => { const h=(t1-t0)/3600; return h>=1?`${h.toFixed(1)} h`:`${Math.round((t1-t0)/60)} min`; };
+const sumEl = document.getElementById("summary");
+[ {v:raw.length,k:"signals"}, {v:derived.length,k:"inferences",a:1}, {v:"D"+Math.max(...ALL.map(derivLevel)),k:"deepest",a:1}, {v:spanLabel(),k:"span"} ]
+.forEach(s => { const d=document.createElement("div"); d.className="pill"+(s.a?" a":""); d.innerHTML=`<span class="pv">${s.v}</span><span class="pk">${s.k}</span>`; sumEl.appendChild(d); });
+document.getElementById("ft-count").textContent = EVENTS.length;
+document.getElementById("ft-span").textContent = spanLabel();
+
+// ---- day strip ----
+const dayKey = d => d.toISOString().slice(0,10);
+const DAYS = [...new Set(ALL.map(e => dayKey(e.date)))].sort();
+let selectedDay = DAYS[DAYS.length-1];
+const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const MON = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const weekEl = document.getElementById("weekstrip");
+const dateEl = document.getElementById("datehead");
+function renderDateHead() {
+  const d = new Date(selectedDay+"T00:00:00");
+  dateEl.innerHTML = `<span class="dnum">${d.getDate()}.</span> <span class="dmon">${MON[d.getMonth()]}</span> <span class="dyear">${d.getFullYear()}</span> <span class="chev">›</span>`;
+}
+function renderWeek() {
+  weekEl.innerHTML = "";
+  DAYS.forEach(dk => {
+    const d = new Date(dk+"T00:00:00");
+    const cats = [...new Set(ALL.filter(e => dayKey(e.date)===dk).map(e => catOf(e.name).c))].slice(0,4);
+    const cell = document.createElement("button");
+    cell.className = "daycell" + (dk===selectedDay ? " sel" : "");
+    cell.innerHTML = `<div class="dow">${DOW[d.getDay()]}</div><div class="dn">${d.getDate()}</div><div class="dots">${cats.map(c=>`<i style="background:${c}"></i>`).join("")}</div>`;
+    cell.addEventListener("click", () => { selectedDay=dk; renderWeek(); renderDateHead(); renderBoth(); });
+    weekEl.appendChild(cell);
+  });
+}
+
+// ---- shared per-day time scale: same timestamp -> same y in both timelines ----
+const ROW = 92, GAP_MAX = 150, PXMIN = 1.2;
+function buildScale(epochs) {
+  const E = [...new Set(epochs)].sort((a,b)=>a-b);
+  const y = {}; let cur = 0;
+  E.forEach((t,i) => { if(i>0){ const gapMin=(t-E[i-1])/60; cur += Math.min(GAP_MAX, Math.max(ROW, gapMin*PXMIN)); } y[t]=cur; });
+  return { y, h: cur + ROW };
+}
+
+// ---- one vertical timeline ----
+function renderVT(el, evs, scale) {
+  el.innerHTML = "";
+  el.style.height = scale.h + "px";
+  const sorted = [...evs].sort((a,b) => a.epoch-b.epoch);
+  if (!sorted.length) { el.style.height="auto"; el.innerHTML = `<div class="vt-empty">— nothing here —</div>`; return; }
+  // placed Y (de-overlap events that share a timestamp within this column)
+  const placed = []; let last = -1e9;
+  sorted.forEach(e => { let y = scale.y[e.epoch] ?? 0; if (y < last + ROW) y = last + ROW; placed.push({e,y}); last = y; });
+  el.style.height = Math.max(scale.h, last + ROW) + "px";
+  // colored spine segments between consecutive circles
+  for (let i=0; i<placed.length-1; i++) {
+    const a=placed[i], b=placed[i+1];
+    const line=document.createElement("div"); line.className="vt-line";
+    line.style.top=(a.y+19)+"px"; line.style.height=(b.y-a.y)+"px"; line.style.background=catOf(a.e.name).c;
+    el.appendChild(line);
+  }
+  placed.forEach(({e,y}) => {
+    const cat=catOf(e.name), home=getL(e.name), ceil=getCeil(e.name), isDer=e.event_class==="derived";
+    let meta;
+    if (e.synthetic) meta = `<span class="dur">${humanDur(e.durationSec)}</span> · until ${fmtTime(new Date(e.endEpoch*1000))}`;
+    else if (isDer) meta = `inferred · D${derivLevel(e)} · ${(e.message.derived_from||[]).length} sources`;
+    else meta = `signal${e.message.car?" · "+e.message.car:e.message.device?" · "+e.message.device:""}`;
+    const card=document.createElement("div"); card.className="vt-card"; card.style.top=y+"px";
+    card.innerHTML = `<div class="vt-time">${fmtTime(e.date)}</div>
+      <div class="vt-circ"><div class="vt-circle" style="background:${cat.c}">${cat.e}</div></div>`;
+    const body=document.createElement("button"); body.className="vt-body";
+    body.innerHTML = `<div class="ev-meta">${meta}</div><div class="ev-title">${labelOf(e)}</div>
+      <div class="ev-tags">${ceil<home?`<span class="liftflag">↑ L${ceil}</span>`:""}${lchipHTML(home)}<span class="dbadge">D${derivLevel(e)}</span></div>`;
+    body.addEventListener("click", () => openModal(e));
+    card.appendChild(body);
+    el.appendChild(card);
+  });
+}
+
+// ---- render both timelines on the shared scale ----
+const tlEl = document.getElementById("timeline");
+const cmpEl = document.getElementById("cmpTimeline");
+let filterLevel = 1;
+const cmpSel = new Set();
+function renderBoth() {
+  const dayMain = ALL.filter(e => dayKey(e.date)===selectedDay && getCeil(e.name)<=filterLevel && filterLevel<=getL(e.name));
+  const dayCmp  = ALL.filter(e => dayKey(e.date)===selectedDay && cmpSel.has(e.name));
+  // scale spans only the events actually shown (in either column), so no dead space up top
+  const scale = buildScale([...dayMain, ...dayCmp].map(e => e.epoch));
+  renderVT(tlEl, dayMain, scale);
+  renderVT(cmpEl, dayCmp, scale);
+}
+
+// level filter (controls the left timeline)
+const filterEl = document.getElementById("filter");
+[1,2,3,4].forEach(lv => {
+  const b=document.createElement("button"); b.type="button"; b.textContent="L"+lv;
+  b.setAttribute("aria-pressed", lv===filterLevel?"true":"false");
+  b.addEventListener("click", () => { filterLevel=lv; filterEl.querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed","false")); b.setAttribute("aria-pressed","true"); renderBoth(); });
+  filterEl.appendChild(b);
+});
+
+// compare chips (controls the right timeline) — default to the car signal cluster
+const cmpSettingsEl = document.getElementById("cmpSettings");
+const ALL_TYPES = [...new Set(ALL.map(e=>e.name))];
+["car_lock_state_change","device_connected_to_carplay","device_disconnected_from_carplay","car_door_opened","car_door_closed"]
+  .filter(n => ALL_TYPES.includes(n)).forEach(n => cmpSel.add(n));
+function renderCmpChips() {
+  cmpSettingsEl.innerHTML = "";
+  // order chips by derivation then name for stability
+  const order = ALL_TYPES.slice().sort((a,b) => (CAT[a]?0:1)-(CAT[b]?0:1) || a.localeCompare(b));
+  order.forEach(name => {
+    const cat=catOf(name), on=cmpSel.has(name);
+    const chip=document.createElement("button"); chip.className="cmp-chip"+(on?" on":"");
+    chip.style.cssText = on ? `background:${cat.c};border-color:${cat.c};color:#fff` : "";
+    chip.innerHTML = `<span class="cd" style="background:${on?"#fff":cat.c}"></span>${typeLabel(name)}`;
+    chip.addEventListener("click", () => { cmpSel.has(name)?cmpSel.delete(name):cmpSel.add(name); renderCmpChips(); renderBoth(); });
+    cmpSettingsEl.appendChild(chip);
+  });
+}
+
+renderDateHead(); renderWeek(); renderCmpChips(); renderBoth();
+
+// ---- assignment box ----
+const assignEl = document.getElementById("assign");
+const sampleOf = {};
+ALL.forEach(e => { if(!sampleOf[e.name]) sampleOf[e.name]=e; });
+const TYPE_ORDER = Object.keys(sampleOf).sort((a,b) => derivLevel(sampleOf[b])-derivLevel(sampleOf[a]) || a.localeCompare(b));
+const GROUP_DEFS = [
+  { key:"trip", label:"Car & trip", icon:"🚗", color:"#3d6cf7", test:n => n==="car_trip"||n.includes("got_in")||n.includes("got_out")||n.includes("trip") },
+  { key:"door", label:"Doors", icon:"🚪", color:"#7a5bff", test:n => n.includes("door") },
+  { key:"lock", label:"Lock", icon:"🔑", color:"#e0567f", test:n => n.includes("lock") },
+  { key:"carplay", label:"CarPlay", icon:"📲", color:"#6b5bff", test:n => n.includes("carplay") },
+  { key:"power", label:"Power", icon:"🔌", color:"#f5a524", test:n => n.includes("power") },
+  { key:"other", label:"Other", icon:"•", color:"#9298a6", test:()=>true },
+];
+const groupKey = name => (GROUP_DEFS.find(g => g.test(name)) || GROUP_DEFS[GROUP_DEFS.length-1]).key;
+function arow(name) {
+  const home=getL(name), ceil=getCeil(name), cat=catOf(name);
+  let hbtns="";
+  for (let L=1; L<=NLOG; L++){ const on=home===L, c=LCHIP[L];
+    hbtns += `<button type="button" data-name="${name}" data-act="home" data-l="${L}" class="${on?"on":""}" style="${on?`background:${c.bg};color:${c.fg}`:""}">${L}</button>`; }
+  let lift="";
+  if (home>1){ let lb=`<button type="button" data-name="${name}" data-act="lift" data-l="${home}" class="${ceil===home?"on":""}">—</button>`;
+    for (let L=1; L<home; L++) lb+=`<button type="button" data-name="${name}" data-act="lift" data-l="${L}" class="${ceil===L?"on":""}">L${L}</button>`;
+    lift=`<span class="liftgrp"><span class="lgl">up to</span><span class="btns">${lb}</span></span>`; }
+  const row=document.createElement("div"); row.className="arow";
+  row.innerHTML=`<span class="ai" style="background:${cat.c}">${cat.e}</span>
+    <span class="an">${typeLabel(name)}</span><span class="ad">D${derivLevel(sampleOf[name])}</span>
+    <span class="btns">${hbtns}</span>${lift}`;
+  return row;
+}
+function renderAssign() {
+  assignEl.innerHTML="";
+  GROUP_DEFS.forEach(g => {
+    const members = TYPE_ORDER.filter(n => groupKey(n)===g.key);
+    if(!members.length) return;
+    const block=document.createElement("div"); block.className="agroup";
+    block.innerHTML=`<div class="agroup-head"><span class="gi" style="background:${g.color}">${g.icon}</span><span class="gn">${g.label}</span><span class="gc">${members.length}</span></div>`;
+    const rows=document.createElement("div"); rows.className="agroup-rows";
+    members.forEach(n => rows.appendChild(arow(n)));
+    block.appendChild(rows); assignEl.appendChild(block);
+  });
+}
+assignEl.addEventListener("click", ev => {
+  const b = ev.target.closest("button[data-name]"); if(!b) return;
+  const name=b.dataset.name, v=+b.dataset.l;
+  if (b.dataset.act==="home"){ logicalOf[name]=v; liftOf[name]=v; } else liftOf[name]=v;
+  renderAssign(); renderWeek(); renderBoth();
+});
+renderAssign();
+
+// ---- modal ----
+const ov = document.getElementById("ov");
+const modalEl = document.getElementById("modal");
+function dnodeHTML(e) {
+  const kids=(e.message.derived_from||[]).map(p=>byId[p.id]).filter(Boolean); const cat=catOf(e.name);
+  let inner=`<div class="drow"><span class="dtile" style="background:${cat.c}">${cat.e}</span>
+      <span class="dn">${labelOf(e)}</span><span class="dg"></span>
+      <span class="dt">${fmtTimeSec(e.date)}</span>${lchipHTML(getL(e.name))}<span class="dbadge">D${derivLevel(e)}</span></div>`;
+  if (kids.length) inner += `<div class="dkids">`+kids.map(dnodeHTML).join("")+`</div>`;
+  return `<div class="dnode">${inner}</div>`;
+}
+function openModal(e) {
+  const kids=(e.message.derived_from||[]).map(p=>byId[p.id]).filter(Boolean);
+  const conf=e.message.confidence_score, dl=derivLevel(e), cat=catOf(e.name);
+  const explain = kids.length
+    ? `Aware built this from <b>${kids.length}</b> event${kids.length>1?"s":""} — derivation level <b>D${dl}</b>. Each was itself built from what's beneath it, down to raw signals.`
+    : `A <b>raw signal</b> — derivation level <b>D1</b>. Nothing precedes it; it's what the phone actually sensed.`;
+  modalEl.innerHTML = `
+    <div class="modal-head">
+      <button class="x" id="xbtn" aria-label="Close">✕</button>
+      <div class="htile" style="background:${cat.c}">${cat.e}</div>
+      <div>
+        <div class="mlabel">${e.event_class==="derived" ? "Inference · "+(e.message.inference_type||"weighted_window") : "Raw signal · "+(e.source_app||"shortcut")}</div>
+        <div class="mtitle">${labelOf(e)}</div>
+        <div class="mmeta">
+          <span class="mt">${fmtTimeSec(e.date)}${e.durationSec!=null?" · "+humanDur(e.durationSec):""}</span>
+          ${lchipHTML(getL(e.name))}<span class="dbadge">D${dl}</span>
+          ${conf!=null?`<span class="conf">confidence ${conf}</span>`:(e.synthetic?`<span class="planned">planned rollup</span>`:"")}
+        </div>
+      </div>
+    </div>
+    <div class="modal-body">
+      <p class="explain">${explain}</p>
+      ${kids.length ? `<div class="dtree">`+kids.map(dnodeHTML).join("")+`</div>` : `<div class="dleaf-note">— end of lineage —</div>`}
+    </div>`;
+  modalEl.querySelector("#xbtn").addEventListener("click", closeModal);
+  ov.classList.add("show");
+}
+function closeModal(){ ov.classList.remove("show"); }
+ov.addEventListener("click", ev => { if(ev.target===ov) closeModal(); });
+document.addEventListener("keydown", ev => { if(ev.key==="Escape") closeModal(); });
+})();
+</script>

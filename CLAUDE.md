@@ -52,11 +52,11 @@ Env/secrets live in `workers/.env` (gitignored). The entrypoint loads it via `fi
 
 ## Deploy-state branch
 
-`deploy/` holds: [`deploy/inference/kustomize/`](deploy/inference/kustomize/) (the runtime), [`deploy/vector/kustomize/`](deploy/vector/kustomize/) (Vector — ingest gateway + Neon persister), and [`deploy/argocd/`](deploy/argocd/) (the two `Application` manifests). Both deploy into the **`inference`** namespace. The `inference-runtime` app tracks `deploy-state`; `inference-vector` tracks `main` directly.
+`deploy/` holds: [`deploy/inference/kustomize/`](deploy/inference/kustomize/) (the runtime), [`deploy/vector/kustomize/`](deploy/vector/kustomize/) (Vector — ingest gateway + Neon persister), [`deploy/dashboard/kustomize/`](deploy/dashboard/kustomize/) (the read-only Aware dashboard — Stakater chart, reads Neon, no ingress yet), and [`deploy/argocd/`](deploy/argocd/) (the three `Application` manifests). All deploy into the **`inference`** namespace. The `inference-runtime` and `inference-dashboard` apps track `deploy-state`; `inference-vector` tracks `main` directly.
 
 `main` is the source branch. Two workflows keep `deploy-state` (which Argo CD watches) in sync — never commit to `deploy-state`, it is force-pushed:
 
-- **Code changes** (`paths-ignore: deploy/**`) trigger [`publish-images.yml`](.github/workflows/publish-images.yml): build the image, bump `deploy/inference/kustomize/base/*/values.yml` to `sha-<short>`, commit, force-push `deploy-state`.
+- **Code changes** (`paths-ignore: deploy/**`) trigger [`publish-images.yml`](.github/workflows/publish-images.yml): build each **component** image (auto-discovered `workers/<name>/Dockerfile` → `inference-<slug>`, plus the explicitly-declared `dashboard/Dockerfile` → `inference-dashboard`), bump that component's `values.yml` (`deploy/inference/kustomize/base/<slug>/values.yml` for workers, `deploy/dashboard/kustomize/base/values.yml` for the dashboard) to `sha-<short>`, commit, force-push `deploy-state`.
 - **Deploy-only changes** (`paths: deploy/**`) trigger [`mirror-deploy-state.yml`](.github/workflows/mirror-deploy-state.yml): mirror `main`→`deploy-state` **carrying the existing `deploy-state` image tag forward**.
 
 Pushing **both** code and `deploy/**` in one commit races on the `deploy-state` force-push — split them into separate pushes (code first).

@@ -1,0 +1,19 @@
+{
+  "_comment": "Logical level per event type — how much YOU care (1=Headline … 4=Background). Distinct from derivation level (structural). 'lift' lets an event ALSO appear in higher (more important) lanes up to the given ceiling — e.g. an L2 event lifted to 1 shows in both L1 and L2. Exploration seed only; later this becomes user-set and stored in the DB. The aware dashboard reads this file at build time.",
+  "levels": {
+    "car_trip": 1,
+    "got_into_the_car": 2,
+    "got_out_the_car": 2,
+    "car_door_opened": 3,
+    "car_door_closed": 3,
+    "car_lock_state_change": 4,
+    "device_connected_to_carplay": 4,
+    "device_disconnected_from_carplay": 4,
+    "device_connected_to_power": 4,
+    "device_disconnected_from_power": 4
+  },
+  "lift": {
+    "got_into_the_car": 1,
+    "got_out_the_car": 1
+  }
+}
