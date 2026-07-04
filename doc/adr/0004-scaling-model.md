@@ -216,6 +216,94 @@ Getting there forced two design changes worth recording:
    of derived events (true here — the old per-event workers are decommissioned); an
    external producer of a derived event would not be seen.
 
+## Core / adapter split (2026-07-04) — the derivation core is transport-agnostic
+
+The shared router grew organically inside one `quix.py` file, which ended up doing three
+unrelated jobs — resolve definitions, decide/route/shape events, and speak Quix/Kafka. Two
+of those are the *value* of the system (the derivation DAG + output shape) and one is
+*plumbing* (the broker). They were split along a single enforceable rule:
+
+- [`inference.runtime.core`](../../src/inference/runtime/core.py) — the **transport-agnostic
+  inference core**: entity keying (`Router.key_for`), routing + in-process recursion (the `Router`),
+  output shaping (`to_event`), and the pure definition→topology planning (`RoutingPlan`, one
+  value object built from the definitions). **INVARIANT: this module must not import `quixstreams`** (or any
+  transport/state backend).
+- [`inference.runtime.quix`](../../src/inference/runtime/quix.py) — the **Quix/Kafka adapter**
+  and composition root: builds the `Application`, wires the one keyed pipeline, and injects the
+  source events + per-entity `State` into the core.
+
+**Why this is a scaling-model concern, not just tidiness.** The engines were already a clean,
+swappable layer (protocol + registry + implementations) because they are the axis of *variation*.
+The substrate they run on — keying, routing, state — is the axis of *invariance*, so it never got
+a boundary. But invariant ≠ structureless: making the core Quix-free names the **ports** this ADR
+implicitly relies on. Engines depend only on a plain event dict + a `get`/`set` state port
+(`StateStore`) + returning a `Decision`; the core depends only on that same state port. So the
+Kafka/Quix choice is confined to one adapter file, and the whole derivation graph is portable —
+a different transport or state backend is a new adapter, engines and core unchanged. This is the
+hexagonal (ports & adapters) reading of the same "place/execute by something other than the
+transport" thesis the rest of this ADR argues at the partition level.
+
+Deliberately **not** done: no `RuntimeProtocol` with a single implementation (there is one
+transport and one intended state backend — a protocol would be speculative indirection). The rule
+is *cohesion + a Quix-free import boundary*, not polymorphism. The one second implementation that
+already earns the seam is an **in-memory adapter for tests** — drive `core.Router(plan).route` from a list
+with a dict-backed `StateStore`, no broker (demonstrated at the split; the repo still has no test suite,
+but this is what unblocks one). Formalize additional ports only when a second real adapter arrives.
+
+### Shape (as implemented)
+
+```
+                    DRIVING ADAPTERS   (own the transport; drive the core)
+
+    +------------------------------+          +------------------------------+
+    |  Quix / Kafka adapter        |          |  in-memory test harness      |
+    |  quix.py                     |          |  no broker                   |
+    |  raw_sensors -> ... -> sinks |          |  feeds events as a list      |
+    +------------------------------+          +------------------------------+
+                   |                                         |
+                   '--------------------+--------------------'
+                                        |  inbound port
+                                        |  Router.route(event, state) -> list[dict]
+                                        v
+    +------------------------------------------------------------------------------+
+    |  CORE - inference.runtime.core                    (never imports quixstreams)|
+    |                                                                              |
+    |    Router.key_for         entity key (partition / state unit)                |
+    |    Router.route           in-process derivation DAG (resolves recursion)     |
+    |    to_event               shapes the high_level_events record                |
+    |    RoutingPlan            consumers index + sink_for + source_topic          |
+    |      .from_definitions    built once from the YAML definitions               |
+    +---------------+------------------------------------------+-------------------+
+                    |                                          |
+        state port                                strategy port
+        StateStore: .get()/.set()                 Engine protocol
+        (wrapped per-def in                       decide(event, state)
+         ScopedState)                             input_event_names()
+                    |                                          |
+                    v                                          v
+    +------------------------------+          +----------------------------------------+
+    |  Quix State          [prod]  |          |  inference.engines  (registry)         |
+    |    RocksDB + changelog       |          |    weighted_window                     |
+    |  dict{}              [test]  |          |    decaying_window                     |
+    |    in-memory StateStore      |          |    naive_bayes_window                  |
+    +------------------------------+          |    session_window                      |
+      DRIVEN ADAPTERS (state)                 +----------------------------------------+
+                                                STRATEGY ADAPTERS (engines)
+```
+
+Three ports, each with swappable adapters; the core (hexagon interior) depends only on the ports:
+
+- **Inbound port** — `Router.route(event, state) -> list[dict]`. Made concrete as the `Router`
+  object (built from a `RoutingPlan`): its signature matches the stream framework's stateful callback,
+  so the Quix/Kafka adapter (`quix.py` `_wire_topology`) mounts `router.route` directly — no lambda —
+  turning the `raw_sensors` stream into calls and sending the returned derived events to
+  `high_level_events`; the test adapter feeds a list and collects the return.
+- **State port** — `StateStore` (`get`/`set`). Adapters: Quix `State` (RocksDB + changelog) in
+  production, a `dict` in tests. `Router.route` wraps whatever it's handed in a `ScopedState`
+  (per-definition key prefix), so the raw store only ever sees `get`/`set`.
+- **Strategy port** — the `Engine` protocol (`decide`, `input_event_names`); its adapters are the four
+  registered engines. This is ADR 0001's swappable-engine seam, orthogonal to the two above.
+
 ## Open questions
 
 - **Key granularity** — per entity, or per entity-per-session/trip? Finer keys = more parallelism but
@@ -234,7 +322,7 @@ Getting there forced two design changes worth recording:
 
 1. **Goal 1 — `user_id` entity key (multi-user, correctness).** The single change that makes the design
    scale to many users (throughput aside): every producer stamps a consistent `user_id` into the payload,
-   and `key_for` reads it (the fallback chain already drafts `vehicle_id or user_id or source_app`). It's
+   and `Router.key_for` reads it (the fallback chain already drafts `vehicle_id or user_id or source_app`). It's
    primarily a **producer/ingest contract**, not runtime code. Everything else falls out: cooldowns/windows
    become per-user automatically, topic footprint unchanged, no cross-key issue (a user's events all share
    that user's key). Does **not** require goal 2.
