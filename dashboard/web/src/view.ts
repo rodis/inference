@@ -66,14 +66,25 @@ export { ROW };
  *  leaves the layout as altitude changes, lower-layer events *grow* in/out smoothly
  *  instead of popping. Positions are keyed per event id (handles same-timestamp events). */
 const PACK_MIN = 16;
+const HIDDEN_RUN_MAX = 26;   // a *run* of consecutive hidden events collapses to at most this,
+const VIS_EPS = 0.06;        // so long quiet stretches don't stack into a tall empty gap (mobile)
 export function packScale(events: AwareEvent[], reveal: (e: AwareEvent) => number): { pos: Map<string, number>; h: number } {
   const sorted = [...events].sort((a, b) => a.epoch - b.epoch);
   const pos = new Map<string, number>();
   const ys: number[] = [];
-  let y = 0, first = true;
+  let y = 0, first = true, runH = 0;
   for (const e of sorted) {
     const r = Math.max(0, Math.min(1, reveal(e)));
-    if (!first) y += PACK_MIN + (ROW - PACK_MIN) * r; // space this event claims above it
+    if (!first) {
+      if (r > VIS_EPS) {                                       // (partly) visible: full row, grows with reveal
+        y += PACK_MIN + (ROW - PACK_MIN) * r;
+        runH = 0;
+      } else {                                                 // hidden: add to the run, capped so N slivers ≈ one
+        const add = Math.min(PACK_MIN, Math.max(0, HIDDEN_RUN_MAX - runH));
+        y += add;
+        runH += add;
+      }
+    }
     pos.set(e.id, y);
     ys.push(y);
     first = false;
