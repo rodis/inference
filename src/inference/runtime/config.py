@@ -15,7 +15,10 @@ APP_NAME = "inference"
 
 # Env-backed settings with safe defaults (the defaults are baked into the image / .env).
 EVENTS_DIR = Path(os.environ.get("EVENTS_DIR", "events"))
-CONSUMER_GROUP = os.environ.get("QUIX_CONSUMER_GROUP", "inference-quix-runtime-v1")
+# Bumped v1 -> v2 with the InferredEvent shaping change: engine state format changed
+# ({ts,id} -> {ts,event}), so a fresh group = a fresh changelog = fresh, self-healing
+# state. The old v1 changelog is orphaned (harmless; delete to reclaim the topic slot).
+CONSUMER_GROUP = os.environ.get("QUIX_CONSUMER_GROUP", "inference-quix-runtime-v2")
 STATE_DIR = os.environ.get("QUIX_STATE_DIR", "state")
 
 
