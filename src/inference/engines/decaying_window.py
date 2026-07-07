@@ -45,12 +45,13 @@ class DecayingWindowEngine:
             return None
         now = int(msg.get("timestamp", 0))
 
-        # window: {name: {"ts": latest_ts, "id": event_id}} — keep the FRESHEST sighting
-        # per contributor (decay rewards recency, unlike weighted_window's earliest), pruned to window.
+        # window: {name: {"ts": latest_ts, "event": full_event}} — keep the FRESHEST sighting
+        # per contributor (decay rewards recency, unlike weighted_window's earliest), pruned to
+        # window. Full body retained so the Decision can carry it as a `source` (see Decision.sources).
         window = state.get("window", {})
         window = {k: v for k, v in window.items() if now - v["ts"] <= self.window}
         if name not in window or now > window[name]["ts"]:
-            window[name] = {"ts": now, "id": msg.get("id")}
+            window[name] = {"ts": now, "event": event}
         state.set("window", window)
 
         # decayed score: each distinct contributor's weight faded by its age at `now`
@@ -63,8 +64,5 @@ class DecayingWindowEngine:
 
         # event-time = latest contributing signal (the moment the pattern completed)
         occurred_at = max(v["ts"] for v in window.values())
-        contributors = tuple(
-            {"name": k, "timestamp": v["ts"], "id": v["id"]}
-            for k, v in window.items()
-        )
-        return Decision(occurred_at=occurred_at, score=round(score, 3), contributors=contributors)
+        sources = tuple(v["event"] for v in window.values())
+        return Decision(occurred_at=occurred_at, score=round(score, 3), sources=sources)

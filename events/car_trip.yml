@@ -15,3 +15,8 @@ engine_config:
 
 source_topic: raw_sensors
 sink_topic: high_level_events
+
+# Output axes (independent): it carries an interval (start/end derived from its
+# got_into/got_out lineage) AND we present it as a span on the timeline.
+capabilities: [interval]
+role: span

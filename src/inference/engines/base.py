@@ -17,14 +17,20 @@ class Decision:
     """An engine's verdict that a derived event should fire.
 
     The runtime turns this into the emitted message (and stamps the entity key), so
-    engines only *decide* — they don't shape envelopes/lineage. `contributors` are
-    the source events that triggered it (shaped into `derived_from` lineage by the
-    runtime); `score` is the engine's confidence metric.
+    engines only *decide* — they don't shape envelopes/lineage/capabilities. `score` is
+    the engine's confidence metric.
+
+    `sources` are the **full source event records** the engine used (the whole bodies as
+    consumed, not a trimmed projection). The shaping stage derives everything downstream
+    from them: the `derived_from` lineage is a *projection* of these (id/name/timestamp),
+    and capabilities (e.g. an interval) are derived from them too — so a future capability
+    that needs fields beyond timestamps has them. Keeping full bodies here is what lets the
+    data-model layer own derivation without any engine coupling.
     """
 
     occurred_at: float
     score: float
-    contributors: tuple[dict, ...]   # each: {"name", "timestamp", "id"}
+    sources: tuple[dict, ...]        # full source event records (NOT the {id,name,timestamp} lineage)
 
 
 class ScopedState:

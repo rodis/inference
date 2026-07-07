@@ -30,7 +30,9 @@ from dataclasses import dataclass
 from typing import NamedTuple, Protocol
 
 # importing names from the package runs inference/engines/__init__.py, which registers the built-in engines
-from inference.engines import Decision, Engine, ScopedState, build_engine
+from inference.engines import Engine, ScopedState, build_engine
+from inference.capabilities import derive_capability
+from inference.event import Capability, Contributor, InferredEvent, Role
 from inference.runtime import config
 
 logger = logging.getLogger("inference.core")
@@ -59,57 +61,22 @@ class Consumer(NamedTuple):
     engine: Engine
 
 
-def to_event(name: str, inference_type: str, decision: Decision, user_id: str) -> dict:
-    """Shape an engine `Decision` into the full `high_level_events` record.
-
-    `name` is the event produced (the definition's name, e.g. "car_door_opened");
-    `inference_type` is the engine *type* that produced it (e.g. "weighted_window").
-
-    The core owns the whole record now — the old `decide → finalize → Vector-re-wraps`
-    hop is gone; the adapter produces this straight to Kafka. So this is one step:
-    mint the event `id` (inside `message`), build the rest of the `message` (the
-    derived event + `derived_from` lineage from the decision's contributors, stamped
-    with the entity `user_id`), and add the top-level metadata. Engines only decide;
-    all shaping lives here.
-
-    The top-level wrapper is kept identical to the one Vector mints for raw events,
-    so every Kafka topic carries the same shape: `name`, `source_app`, `source_type`,
-    `message`. `source_type="kafka"` records the entry mechanism (derived events are
-    produced straight to Kafka; raw events enter via Vector's `http_server`, so theirs
-    reads `"http_server"`). It is metadata only — Vector's persister drops it, so it
-    never reaches Neon.
-
-    There is no produce-time / inference-time stamp on the record: the only event-time
-    is `message.timestamp` (when the event occurred), and "when the system handled it"
-    is the DB-set `ingested_at` column (authoritative persist time). The old wrapper
-    `timestamp` (emit time) and `message.processed_at` (inference time) were ~the same
-    instant as `ingested_at` and were dropped.
-
-    The per-event id lives in `message.id` — the inference app mints it for derived
-    events, Vector mints the same for raw events at ingest (there is no top-level
-    "envelope" wrapper id anymore). Lineage is one field: `derived_from`
-    (`[{id, name, timestamp}]`). The derived-only `inference_type` (the engine type
-    that produced it) also lives in `message`; its presence is how Vector's persister
-    keys `event_class=derived` — see deploy/vector/.../shape_for_neon.yml.
+class OutputSpec(NamedTuple):
+    """A produced event's two independent output axes, resolved from its definition:
+    `role` (presentation intent) and `capabilities` (facts to derive from evidence).
+    Consumed by the `Shaper` stage — never by routing/detection.
     """
-    contributors = decision.contributors
-    return {
-        "name": name,
-        "source_app": config.APP_NAME,
-        "source_type": "kafka",
-        "message": {
-            "id": str(uuid.uuid4()),
-            "name": name,
-            "inference_type": inference_type,
-            "user_id": user_id,
-            "timestamp": int(decision.occurred_at),   # single event-time field (raw events carry it too); engine windows on it, Neon occurred_at column derives from it
-            "confidence_score": decision.score,
-            "derived_from": [
-                {"id": c["id"], "name": c["name"], "timestamp": c["timestamp"]}
-                for c in contributors
-            ],
-        },
-    }
+
+    role: Role
+    capabilities: tuple[Capability, ...]
+
+
+def _lineage(source: dict) -> Contributor:
+    """Project a full source event down to its `derived_from` lineage record. The two are
+    different things (see `Decision.sources`): this is the trimmed provenance pointer we
+    persist, distinct from the full body capabilities are derived from."""
+    msg = source.get("message") or {}
+    return Contributor(id=msg["id"], name=msg["name"], timestamp=msg["timestamp"])
 
 
 @dataclass(frozen=True)
@@ -125,11 +92,14 @@ class RoutingPlan:
       on it; the graph a `Router` walks. A name absent from the map is terminal and stops a cascade.
     - `sink_for` — produced event name → the topic it is emitted to.
     - `source_topic` — the single external source topic the runtime consumes.
+    - `output_for` — produced event name → its `OutputSpec` (role + capabilities); used by
+      the `Shaper` stage, kept out of routing.
     """
 
     consumers: dict[str, list[Consumer]]
     sink_for: dict[str, str]
     source_topic: str
+    output_for: dict[str, OutputSpec]
 
     @property
     def sink_topics(self) -> set[str]:
@@ -148,12 +118,14 @@ class RoutingPlan:
         """
         consumers: dict[str, list[Consumer]] = defaultdict(list)
         sink_for: dict[str, str] = {}
+        output_for: dict[str, OutputSpec] = {}
         declared_sources: set[str] = set()
         for d in definitions:
             engine = build_engine(d)
             for input_name in engine.input_event_names():
                 consumers[input_name].append(Consumer(produces=d.name, engine=engine))
             sink_for[d.name] = d.sink_topic
+            output_for[d.name] = OutputSpec(role=d.role, capabilities=tuple(d.capabilities))
             declared_sources.add(d.source_topic)
 
         # Consume exactly ONE external source (declared sources minus our own sinks).
@@ -169,7 +141,8 @@ class RoutingPlan:
                 "(Vector). See doc/adr/0004-scaling-model.md."
             )
 
-        return cls(consumers=dict(consumers), sink_for=sink_for, source_topic=external[0])
+        return cls(consumers=dict(consumers), sink_for=sink_for,
+                   source_topic=external[0], output_for=output_for)
 
 
 class Router:
@@ -230,6 +203,13 @@ class Router:
         this entity's persisted state — no Kafka round-trip. The consumer graph keeps the
         cascade a DAG: a terminal event matches no consumer and stops.
 
+        This is *detection only* — it mints the event's identity envelope (id/name/type/
+        entity/time/score) and carries its `sources` (the full events the engine used)
+        forward for the downstream `Shaper`. It does NOT touch presentation or capabilities:
+        no `role`, no `derived_from`, no `interval`. That keeps routing ignorant of output
+        shaping and, crucially, the event re-enqueued for recursion is the *clean* envelope
+        (no sources sidecar), so an engine consuming it never stores a fattened, nested body.
+
         `state` is the per-entity store the adapter injects (a `StateStore` port — Quix
         `State` in production), wrapped per produced event in a `ScopedState` so definitions
         share one keyed store without colliding and the core stays backend-agnostic.
@@ -241,11 +221,69 @@ class Router:
         while queue:
             ev = queue.pop(0)
             name = (ev.get("message") or {}).get("name")
-            for produces, engine in self._plan.consumers.get(name, []):
-                decision = engine.decide(ev, ScopedState(state, f"{produces}:"))   # state scoped per produced event
+            for c in self._plan.consumers.get(name, []):
+                decision = c.engine.decide(ev, ScopedState(state, f"{c.produces}:"))   # state scoped per produced event
                 if decision:
-                    logger.info("FIRED %s via %s user=%s score=%s", produces, engine.name, user_id, decision.score)
-                    derived = to_event(produces, engine.name, decision, user_id)
-                    out.append(derived)
-                    queue.append(derived)
+                    logger.info("FIRED %s via %s user=%s score=%s", c.produces, c.engine.name, user_id, decision.score)
+                    base = {"message": {
+                        "id": str(uuid.uuid4()),
+                        "name": c.produces,
+                        "inference_type": c.engine.name,
+                        "user_id": user_id,
+                        "timestamp": int(decision.occurred_at),   # canonical event-time; == interval.ended_at for spans
+                        "confidence_score": decision.score,
+                    }}
+                    out.append({**base, "sources": list(decision.sources)})   # sidecar consumed by the Shaper
+                    queue.append(base)                                        # clean envelope drives recursion
         return out
+
+
+class Shaper:
+    """The output-shaping stage — a distinct step from routing (detection). Built from the
+    same `RoutingPlan`, mounted by the adapter *after* `Router.route`. Where the router
+    decides *that* an event fires and with what identity, the shaper decides *how the emitted
+    event looks*: it projects the lineage, derives the declared capabilities from the full
+    source events, applies the declared role, and mints the final `high_level_events` record.
+
+    Capabilities scale by addition (see `inference.capabilities`): the shaper never names one
+    — it runs whatever the definition declared. Keeping this out of `route` is what lets the
+    two concerns — inference and data model — evolve independently.
+    """
+
+    def __init__(self, plan: RoutingPlan):
+        self._plan = plan
+
+    def shape(self, item: dict) -> dict:
+        """Turn one `route` output (`{message: envelope, sources: [...]}`) into the full
+        emitted record. The top-level wrapper is kept identical to the one Vector mints for
+        raw events, so every Kafka topic carries the same shape: `name`, `source_app`,
+        `source_type`, `message`. `source_type="kafka"` records the entry mechanism (metadata
+        only — Vector's persister drops it). The only event-time is `message.timestamp`; "when
+        the system handled it" is the DB-set `ingested_at`. Vector keys `event_class=derived`
+        off the presence of `message.inference_type` — see deploy/vector/.../shape_for_neon.yml.
+        """
+        envelope = item["message"]
+        sources = item["sources"]
+        spec = self._plan.output_for[envelope["name"]]
+
+        fragments: dict = {}                       # capability-contributed InferredEvent fields
+        for capability in spec.capabilities:
+            fragments.update(derive_capability(capability, sources))
+
+        event = InferredEvent(
+            id=envelope["id"],
+            name=envelope["name"],
+            inference_type=envelope["inference_type"],
+            user_id=envelope["user_id"],
+            timestamp=envelope["timestamp"],
+            confidence_score=envelope["confidence_score"],
+            derived_from=[_lineage(s) for s in sources],
+            role=spec.role,
+            **fragments,
+        )
+        return {
+            "name": event.name,
+            "source_app": config.APP_NAME,
+            "source_type": "kafka",
+            "message": event.model_dump(mode="json"),
+        }

@@ -13,6 +13,8 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from inference.event import Capability, Role
+
 logger = logging.getLogger(__name__)
 
 
@@ -27,6 +29,10 @@ class EventDefinition(BaseModel):
     engine_config: dict = {}        # engine-specific (threshold, window_seconds, cooldown_seconds, weights)
     source_topic: str               # external topic the raw contributors arrive on (one per ADR 0004)
     sink_topic: str                 # where the derived event is produced
+
+    # Two independent axes on the emitted event (see inference.event):
+    capabilities: list[Capability] = []   # structured facts to derive from evidence (e.g. interval)
+    role: Role = Role.POINT               # presentation intent only — NOT tied to capabilities
 
 
 def load_definitions(events_dir: Path) -> list[EventDefinition]:

@@ -35,8 +35,9 @@ class SessionWindowEngine:
         now = int(msg.get("timestamp", 0))
 
         if name == self.start_event:
-            # remember the (latest) open start; the matching end closes it
-            state.set("open", {"ts": now, "id": msg.get("id")})
+            # remember the (latest) open start; the matching end closes it. Stash the full
+            # event body (not just ts/id) so it can be carried as a `source` — see Decision.sources.
+            state.set("open", {"ts": now, "event": event})
             return None
 
         if name == self.end_event:
@@ -48,10 +49,7 @@ class SessionWindowEngine:
                 return None                       # stale start — don't pair across an implausible gap
             # event-time = the later of the two, keeping lineage monotonic (derived ts >= contributors)
             occurred_at = max(now, start["ts"])
-            contributors = (
-                {"name": self.start_event, "timestamp": start["ts"], "id": start["id"]},
-                {"name": self.end_event, "timestamp": now, "id": msg.get("id")},
-            )
-            return Decision(occurred_at=occurred_at, score=1.0, contributors=contributors)
+            sources = (start["event"], event)     # start then end; the shaper projects lineage + interval from these
+            return Decision(occurred_at=occurred_at, score=1.0, sources=sources)
 
         return None

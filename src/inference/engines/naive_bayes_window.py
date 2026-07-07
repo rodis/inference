@@ -39,12 +39,13 @@ class NaiveBayesWindowEngine:
             return None
         now = int(msg.get("timestamp", 0))
 
-        # window: {name: {"ts": earliest_ts, "id": event_id}} — presence-based, pruned to window
-        # (mirrors weighted_window so the only difference here is the *scoring*, not the bookkeeping)
+        # window: {name: {"ts": earliest_ts, "event": full_event}} — presence-based, pruned to
+        # window (mirrors weighted_window; the only difference here is the *scoring*, not the
+        # bookkeeping). Full body retained so the Decision can carry it as a `source`.
         window = state.get("window", {})
         window = {k: v for k, v in window.items() if now - v["ts"] <= self.window}
         if name not in window or now < window[name]["ts"]:
-            window[name] = {"ts": now, "id": msg.get("id")}
+            window[name] = {"ts": now, "event": event}
         state.set("window", window)
 
         # accumulate log-odds: prior + sum of log(LR) over distinct observed signals
@@ -60,8 +61,5 @@ class NaiveBayesWindowEngine:
         state.set("last_fired", now)
 
         occurred_at = max(v["ts"] for v in window.values())
-        contributors = tuple(
-            {"name": k, "timestamp": v["ts"], "id": v["id"]}
-            for k, v in window.items()
-        )
-        return Decision(occurred_at=occurred_at, score=round(posterior, 3), contributors=contributors)
+        sources = tuple(v["event"] for v in window.values())
+        return Decision(occurred_at=occurred_at, score=round(posterior, 3), sources=sources)

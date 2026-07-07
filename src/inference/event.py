@@ -31,12 +31,24 @@ from pydantic import BaseModel, ConfigDict, computed_field
 
 
 class Role(str, Enum):
-    """Declared intent — orthogonal to capability. Two events with the same shape can
-    differ here, so it is a *choice* recorded on the definition, never sniffed."""
+    """Declared intent — *presentation* only, fully independent of capability. Two events
+    with the same capabilities can differ here, so it is a *choice* recorded on the
+    definition, never sniffed. Governs how a consumer surfaces the event, nothing about
+    what data it carries."""
 
     POINT = "point"    # a point-in-time event (the default)
     SPAN = "span"      # an interval worth rendering as a span (start → end), e.g. car_trip
     HIDDEN = "hidden"  # exists only to feed higher-level events; not surfaced on its own
+
+
+class Capability(str, Enum):
+    """A structured, *derivable* fact an event carries — declared on the definition,
+    independent of `Role`. The runtime derives the capability's data generically from the
+    event's evidence (its contributors), so which capability an event has is a data-model
+    decision, never an engine's concern. Today just one; a second becomes a registry of
+    name → deriver (mirroring the engine seam)."""
+
+    INTERVAL = "interval"   # spans time — start/end derived from the lineage's extent
 
 
 class Contributor(BaseModel):

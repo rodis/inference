@@ -28,11 +28,13 @@ class WeightedWindowEngine:
             return None
         now = int(msg.get("timestamp", 0))
 
-        # window: {name: {"ts": earliest_ts, "id": event_id}} — dedup-earliest, pruned to window
+        # window: {name: {"ts": earliest_ts, "event": full_event}} — dedup-earliest, pruned to
+        # window. The full event body is retained (not just id/ts) so the Decision can carry it
+        # as a `source` for capability derivation downstream — see Decision.sources.
         window = state.get("window", {})
         window = {k: v for k, v in window.items() if now - v["ts"] <= self.window}
         if name not in window or now < window[name]["ts"]:
-            window[name] = {"ts": now, "id": msg.get("id")}
+            window[name] = {"ts": now, "event": event}
         state.set("window", window)
 
         score = sum(self.weights.get(k, 0) for k in window)
@@ -47,8 +49,5 @@ class WeightedWindowEngine:
         # every contributor) and anchors cooldown/window math to real time — averaging
         # stamped derived events earlier than their own triggering signal.
         occurred_at = max(v["ts"] for v in window.values())
-        contributors = tuple(
-            {"name": k, "timestamp": v["ts"], "id": v["id"]}
-            for k, v in window.items()
-        )
-        return Decision(occurred_at=occurred_at, score=score, contributors=contributors)
+        sources = tuple(v["event"] for v in window.values())
+        return Decision(occurred_at=occurred_at, score=score, sources=sources)

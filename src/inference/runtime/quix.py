@@ -28,25 +28,29 @@ import logging
 from quixstreams import Application
 
 from inference.runtime import config
-from inference.runtime.core import RoutingPlan, Router
+from inference.runtime.core import RoutingPlan, Router, Shaper
 from inference.runtime.definition import load_definitions
 
 logger = logging.getLogger("inference.quix")
 
 
-def _wire_topology(app: Application, router: Router) -> None:
+def _wire_topology(app: Application, router: Router, shaper: Shaper) -> None:
     """Wire the one keyed pipeline: consume the source → `group_by` entity key → the
-    stateful `router.route` (expand=True) → route each produced event to its sink topic.
+    stateful `router.route` (detection, expand=True) → `shaper.shape` (output shaping) →
+    route each produced event to its sink topic.
 
-    Depends only on the `Router` (the routing port) — never on the underlying `RoutingPlan`
-    or any bare core function. This is the adapter↔core seam: `group_by(router.key_for)`
-    injects the core keying policy, and the stateful `apply` hands the `Router` its event +
-    the per-entity Quix `State`.
+    Two distinct stages on purpose: `route` decides *that* events fire (and recurses in
+    -process), `shape` decides *how they look* (lineage projection + declared capabilities +
+    role). `group_by(router.key_for)` injects the core keying policy and the stateful `apply`
+    hands `route` the per-entity Quix `State`; `shape` is stateless (a pure map over each
+    routed event). The adapter depends only on the `Router`/`Shaper` ports, never on bare
+    core functions.
     """
     sinks = {t: app.topic(t, value_serializer="json") for t in sorted(router.sink_topics)}
     sdf = app.dataframe(app.topic(router.source_topic, value_deserializer="json"))
     sdf = sdf.group_by(router.key_for, name="entity")
     sdf = sdf.apply(router.route, stateful=True, expand=True)
+    sdf = sdf.apply(shaper.shape)
     sdf.to_topic(lambda value, key, ts, headers: sinks[router.sink_for[value["name"]]])
 
 
@@ -55,7 +59,8 @@ def build_runtime() -> Application:
     if not definitions:
         raise RuntimeError(f"No enabled event definitions found under {config.EVENTS_DIR}")
 
-    router = Router(RoutingPlan.from_definitions(definitions))
+    plan = RoutingPlan.from_definitions(definitions)
+    router, shaper = Router(plan), Shaper(plan)
     logger.info("Loaded %d definition(s): %s; consuming %s; sinks %s",
                 len(definitions), [d.name for d in definitions],
                 router.source_topic, sorted(router.sink_topics))
@@ -69,7 +74,7 @@ def build_runtime() -> Application:
         producer_extra_config=ssl,
         state_dir=config.STATE_DIR,
     )
-    _wire_topology(app, router)
+    _wire_topology(app, router, shaper)
     return app
 
 
