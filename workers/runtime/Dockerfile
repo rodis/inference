@@ -20,7 +20,7 @@ COPY events/ ./events/
 # RocksDB recovered from the Kafka changelog — /tmp is writable by the non-root user.
 ENV EVENTS_DIR=/app/events \
     QUIX_STATE_DIR=/tmp/quix-state \
-    QUIX_CONSUMER_GROUP=inference-quix-runtime-v1
+    QUIX_CONSUMER_GROUP=inference-quix-runtime-v2
 
 RUN useradd -u 1000 -m worker
 USER 1000
