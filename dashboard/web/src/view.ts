@@ -162,6 +162,7 @@ export function prepare(events: AwareEvent[]): Prepared {
     return memo[e.id];
   };
 
-  const days = [...new Set(all.map((e) => dayKey(e.date)))].sort();
+  // Cap the day selector to the most recent week so it never grows unbounded.
+  const days = [...new Set(all.map((e) => dayKey(e.date)))].sort().slice(-7);
   return { all, byId, raw, derived, days, derivLevel };
 }
