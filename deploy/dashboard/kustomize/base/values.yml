@@ -18,6 +18,13 @@ deployment:
         secretKeyRef:
           name: neon-credentials-for-dashboard
           key: NEON_DATABASE_URL
+    # Shared HTTP Basic password guarding the public dashboard (one user for now).
+    # Same managed secret as the DB URL; the app 401s every request if this is unset.
+    DASHBOARD_PASSWORD:
+      valueFrom:
+        secretKeyRef:
+          name: neon-credentials-for-dashboard
+          key: DASHBOARD_PASSWORD
   ports:
     - name: http
       containerPort: 8000
