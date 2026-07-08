@@ -25,21 +25,40 @@ each event's derivation lineage.
 
 **Read-only**: the dashboard only reads Neon; the inference runtime is the sole writer.
 
+## Authentication
+
+The dashboard exposes one user's life data on a public URL, so the whole surface (page,
+static assets, `/api/*`, SSE) sits behind **HTTP Basic auth** — one shared credential, the
+simplest thing that fully closes the hole while we have a single user. It's enforced as
+middleware in `app.py` (so it also covers the static mount and SPA fallback, which per-route
+dependencies don't reach); the browser handles the login prompt and caches the credential,
+so the SPA needs no code change.
+
+- `DASHBOARD_PASSWORD` — **required**. If unset, every request except `/healthz` returns
+  401 (fail closed). In prod it comes from the `neon-credentials-for-dashboard` Doppler
+  secret; set it locally to serve the app.
+- `DASHBOARD_USER` — the username, defaults to `aware`.
+- `/healthz` is exempt so K8s liveness/readiness probes (which send no credentials) pass.
+
 ## Run locally
 
 ```bash
 cd dashboard
 pip install -r requirements.txt
 export DATABASE_URL="postgres://USER:PASS@HOST/neondb?sslmode=require"   # Neon connection string
+export DASHBOARD_PASSWORD="pick-something"                               # else every request 401s
 uvicorn app:app --reload
-# open http://localhost:8000
+# open http://localhost:8000  (log in as aware / pick-something)
 ```
 
 ## Container
 
 ```bash
 docker build -t aware-dashboard dashboard/
-docker run -p 8000:8000 -e DATABASE_URL="postgres://…?sslmode=require" aware-dashboard
+docker run -p 8000:8000 \
+  -e DATABASE_URL="postgres://…?sslmode=require" \
+  -e DASHBOARD_PASSWORD="pick-something" \
+  aware-dashboard
 ```
 
 ## Deploying as a pod
@@ -49,9 +68,11 @@ same as the runtime) with a standalone ArgoCD app `deploy/argocd/application-das
 (tracks `main`, like Vector). It deploys into the `inference` namespace, **no ingress yet**
 (reach it via port-forward or add DNS later).
 
-- **Neon secret**: `neon-credentials-for-dashboard.yml` is a `DopplerSecret` (same source
-  as Vector's, separate managed secret). It mints `neon-credentials-for-dashboard` with key
-  `NEON_DATABASE_URL`; the Deployment maps that to the app's `DATABASE_URL`.
+- **Secret**: `neon-credentials-for-dashboard.yml` is a `DopplerSecret` (same source as
+  Vector's, separate managed secret). It mints `neon-credentials-for-dashboard` with keys
+  `NEON_DATABASE_URL` (mapped to the app's `DATABASE_URL`) and `DASHBOARD_PASSWORD` (the
+  Basic-auth credential). **Both keys must exist in the Doppler `kafka-aiven-credentials/prd`
+  config** — add `DASHBOARD_PASSWORD` there before this rolls out, or the Doppler sync fails.
 - **Image (CI-built, sha-pinned)**: `publish-images.yml` builds `inference-dashboard` from
   `dashboard/Dockerfile` and bumps `values.yml` to `sha-<short>` on `deploy-state` (same flow
   as the runtime). The app tracks `deploy-state`. To build manually instead:

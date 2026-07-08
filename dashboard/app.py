@@ -16,16 +16,22 @@ state lives in Neon.
 """
 
 import asyncio
+import base64
+import binascii
 import json
+import logging
 import os
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Body, FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi import Body, FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
+
+log = logging.getLogger("aware-dashboard")
 
 HERE = Path(__file__).parent
 DIST = HERE / "web" / "dist"          # Vite build output (absent in local dev — Vite serves it)
@@ -80,6 +86,54 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="aware-dashboard", lifespan=lifespan)
+
+
+# --- HTTP Basic auth ------------------------------------------------------------
+# The dashboard exposes one user's life data on a public URL, so the whole surface
+# (SPA, static assets, API, SSE) sits behind a single shared credential. We have one
+# user today; Basic auth is the simplest thing that fully closes the hole, and the
+# browser handles the login prompt + credential caching natively, so the SPA needs no
+# change. Enforced as middleware (not a per-route dependency) precisely so it also
+# covers the StaticFiles mount and the SPA fallback, which dependencies don't reach.
+#
+# Credentials come from env: DASHBOARD_PASSWORD (required to serve; unset = fail
+# CLOSED, everything 401s) and DASHBOARD_USER (defaults to "aware"). /healthz is
+# exempt so K8s probes, which send no credentials, keep working.
+_BASIC_USER = os.environ.get("DASHBOARD_USER", "aware")
+_BASIC_PASSWORD = os.environ.get("DASHBOARD_PASSWORD")
+
+if not _BASIC_PASSWORD:
+    log.warning(
+        "DASHBOARD_PASSWORD is unset — every request except /healthz will 401. "
+        "Set it (Doppler in prod, env locally) to serve the dashboard."
+    )
+
+_UNAUTHORIZED = Response(
+    status_code=401,
+    headers={"WWW-Authenticate": 'Basic realm="aware", charset="UTF-8"'},
+)
+
+
+def _authorized(header: str | None) -> bool:
+    if not _BASIC_PASSWORD or not header or not header.startswith("Basic "):
+        return False
+    try:
+        user, _, password = base64.b64decode(header[6:]).decode("utf-8").partition(":")
+    except (binascii.Error, UnicodeDecodeError):
+        return False
+    # compare_digest on both halves keeps the check constant-time per field.
+    return secrets.compare_digest(user, _BASIC_USER) and secrets.compare_digest(
+        password, _BASIC_PASSWORD
+    )
+
+
+@app.middleware("http")
+async def basic_auth(request: Request, call_next):
+    if request.url.path == "/healthz":
+        return await call_next(request)
+    if not _authorized(request.headers.get("authorization")):
+        return _UNAUTHORIZED
+    return await call_next(request)
 
 
 @app.get("/api/users")
