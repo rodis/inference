@@ -72,8 +72,8 @@ Quix `State` is local RocksDB at `/tmp/quix-state` (set in the Dockerfile). The 
 
 ## What is intentionally not here yet
 
-- **No tests, no lint/typecheck in CI, no liveness/readiness probes.** Ruff is configured in `pyproject.toml` but never invoked by a workflow.
-- **Enricher chain not run** in the Quix runtime (lineage inlined, geo unimplemented).
+- **No liveness/readiness probes.** (Tests + CI now exist — see below — but the runtime has no health probes yet.)
+- **Enricher chain** — the capability seam (`src/inference/capabilities.py`) is the enricher chain re-established (ADR 0001); geo enrichment is still unimplemented.
 - **Single source partition** (`raw_sensors` = 1 partition) — correct and keyed, but no horizontal parallelism until partitions are added (by design — see ADR 0004).
 
 ## Commands
@@ -86,9 +86,14 @@ cd workers/runtime && python quix_main.py
 # Build the runtime image locally
 docker build -f workers/runtime/Dockerfile -t inference-runtime .
 
-# Lint (configured but not wired into CI)
-ruff check .
+# Lint + tests (both run in CI — .github/workflows/ci.yml)
+uv run ruff check .
+uv run pytest                # tests/ exercise the import-clean core in-memory (no Kafka/Quix)
+
+# Regenerate the shared contract after changing inference.event (CI checks it's current)
+uv run python scripts/emit_event_schema.py            # -> contracts/inferred_event.schema.json
+(cd dashboard/web && npm run gen:types)               # -> src/generated/events.ts
 
 # Install into a venv for editing
-uv sync                      # or: pip install -e .
+uv sync --extra dev          # dev extras = pytest + ruff; or: pip install -e .
 ```
