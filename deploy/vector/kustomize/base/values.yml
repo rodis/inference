@@ -73,8 +73,6 @@ envFrom:
       name: kafka-credentials-for-vector
   - secretRef:
       name: neon-credentials-for-vector   # must exist before deploy; provides NEON_DATABASE_URL
-  - secretRef:
-      name: pushcut-credentials-for-vector   # provides PUSHCUT_WEBHOOK_URL for the outbound action lane
   
 args:
   - --config-dir
