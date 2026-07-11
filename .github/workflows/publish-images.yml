@@ -12,6 +12,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Gate: the same ruff/pytest/typecheck/drift checks CI runs on PRs. build-push depends on
+  # this, so red code never gets built or deployed. (deploy-only pushes skip this whole
+  # workflow via paths-ignore, and are handled by mirror-deploy-state.)
+  checks:
+    uses: ./.github/workflows/_ci-checks.yml
+
   discover:
     runs-on: ubuntu-latest
     outputs:
@@ -49,7 +55,7 @@ jobs:
           echo "Discovered: $components"
 
   build-push:
-    needs: discover
+    needs: [checks, discover]
     runs-on: ubuntu-latest
     permissions:
       contents: read

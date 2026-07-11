@@ -1,10 +1,9 @@
 name: CI
 
+# On pull requests, run the shared checks. On pushes to main the SAME checks run as a gate
+# inside publish-images.yml (deploy is blocked if they fail), so there's no push trigger here
+# — that avoids running the suite twice per push.
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - 'deploy/**'
   pull_request:
   workflow_dispatch:
 
@@ -13,61 +12,5 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  python:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-
-      - name: Install test deps + package (no transport stack)
-        # The derivation core is import-clean (never imports quixstreams), so the tests need
-        # only the domain deps — installing the package with --no-deps keeps CI fast AND
-        # guards that invariant: a stray transport import in tested code fails here, loudly,
-        # instead of passing on the back of an incidentally-installed quixstreams.
-        run: |
-          python -m pip install --upgrade pip
-          pip install pytest 'ruff>=0.6' pydantic pyyaml
-          pip install -e . --no-deps
-
-      - name: Lint (ruff)
-        run: ruff check .
-
-      - name: Test (pytest)
-        run: pytest
-
-      - name: Contract schema is up to date
-        # The committed JSON Schema must match what inference.event emits — regenerate and
-        # fail if it drifted (model changed but scripts/emit_event_schema.py wasn't re-run).
-        run: |
-          python scripts/emit_event_schema.py
-          git diff --exit-code contracts/ \
-            || { echo "::error::contracts/ is stale — run 'python scripts/emit_event_schema.py' and commit"; exit 1; }
-
-  web:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: dashboard/web
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: dashboard/web/package-lock.json
-
-      - run: npm ci
-
-      - name: Typecheck (tsc)
-        run: npx tsc -b
-
-      - name: Generated types are up to date
-        # The committed TS must match the committed schema — regenerate and fail on drift.
-        run: |
-          npm run gen:types
-          git diff --exit-code src/generated/ \
-            || { echo "::error::generated types stale — run 'npm run gen:types' and commit"; exit 1; }
+  checks:
+    uses: ./.github/workflows/_ci-checks.yml
