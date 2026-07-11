@@ -1,6 +1,6 @@
 type: remap
 inputs:
-  - http_server_data_in
+  - route_ingest._unmatched   # everything except OwnTracks (which has its own lane)
 source: |
   # 1. Path Parsing
   path_str = to_string!(.path)

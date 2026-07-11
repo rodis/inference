@@ -1,0 +1,9 @@
+type: route
+inputs:
+  - http_server_data_in
+# Split OwnTracks traffic off BEFORE classify_domain: OwnTracks posts a bare
+# _type-tagged body (no {"payload":...}, no event_name), which classify_domain would
+# reject. Everything else (sensor POSTs to /sensors/...) falls through to _unmatched
+# and continues down the original path unchanged.
+route:
+  owntracks: starts_with(to_string(.path) ?? "", "/owntracks")

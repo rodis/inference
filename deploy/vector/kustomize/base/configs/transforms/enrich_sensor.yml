@@ -1,6 +1,7 @@
 type: remap
 inputs:
   - route_by_domain.sensor_traffic
+  - owntracks_to_canonical        # OwnTracks lane arrives pre-shaped; share id minting + kafka sink
 source: |
   # Normalize producer payload keys: some Shortcuts emit trailing/leading spaces
   # (e.g. "amount ", "timestamp ") which create malformed columns and, worse, a NULL

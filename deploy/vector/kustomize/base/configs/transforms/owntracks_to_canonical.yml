@@ -1,0 +1,85 @@
+type: remap
+inputs:
+  - route_ingest.owntracks
+# OwnTracks HTTP mode -> the canonical raw-event shape produced by classify_domain, so
+# it can join enrich_sensor (id minting) and reach the same raw_sensors Kafka sink.
+#
+# OwnTracks posts a BARE _type-tagged JSON object (owntracks.org/booklet/tech/http):
+# no {"payload":...} wrapper, no event_name, no user_id, and `tst` (unix SECONDS)
+# instead of `timestamp`. We translate:
+#   - user_id  <- X-Limit-U header (username set in the app)
+#   - timestamp <- tst  (already the int epoch-seconds the engines read; no conversion)
+#   - name     <- _type (+ transition event): a transition to waypoint "Gym" becomes
+#                 entered_gym / left_gym (slugified desc) so a session_window can pair
+#                 them per-zone with no engine change; location -> location_ping.
+source: |
+  raw_type = ._type
+  otype = if raw_type == null { "" } else { to_string(raw_type) ?? "" }
+
+  # Identity — from the X-Limit-U header (HTTP header case may vary; try both). Reject
+  # rather than guess, mirroring classify_domain's strict user_id policy.
+  uid = .["X-Limit-U"]
+  if uid == null { uid = .["x-limit-u"] }
+  if uid == null || uid == "" {
+      log("Rejected OwnTracks event: missing X-Limit-U header (set a username in the app)", level: "error")
+      abort
+  }
+
+  # tst is unix epoch SECONDS = the int message.timestamp the engines read directly.
+  ts = to_int(.tst) ?? 0
+  if ts == 0 {
+      log("Rejected OwnTracks event: missing/invalid tst", level: "error")
+      abort
+  }
+
+  # _type (+ transition event) -> stable event name; carry the useful fields; drop the rest.
+  ev_name = null
+  payload = {}
+  if otype == "transition" {
+      desc = .desc
+      if desc == null || (to_string(desc) ?? "") == "" {
+          log("Dropping OwnTracks transition with no waypoint desc", level: "warn")
+          abort
+      }
+      # slug: lowercase, non-alphanumeric runs -> "_", trim edge underscores. "Gym" -> "gym".
+      slug = downcase(to_string!(desc))
+      slug = replace(slug, r'[^a-z0-9]+', "_")
+      slug = replace(slug, r'^_+|_+$', "")
+
+      direction = to_string(.event) ?? ""
+      if direction == "enter" {
+          ev_name = "entered_" + slug
+      } else if direction == "leave" {
+          ev_name = "left_" + slug
+      } else {
+          log("Dropping OwnTracks transition with unknown event: " + direction, level: "warn")
+          abort
+      }
+      payload = { "zone": desc, "direction": direction, "lat": .lat, "lon": .lon, "acc": .acc, "trigger": .t }
+  } else if otype == "location" {
+      ev_name = "location_ping"
+      payload = { "lat": .lat, "lon": .lon, "acc": .acc, "vel": .vel, "batt": .batt, "tid": .tid, "trigger": .t }
+  }
+
+  if ev_name == null {
+      # lwt / status / card / waypoints / cmd / beacon / steps — not actionable here.
+      log("Dropping non-actionable OwnTracks _type: " + otype, level: "debug")
+      abort
+  }
+
+  # Assemble the canonical wrapper fields (classify_domain's output contract). enrich_sensor
+  # then mints message.id and the aiven kafka sink routes on .kafka_topic.
+  msg = payload
+  msg.name = ev_name
+  msg.user_id = to_string!(uid)
+  msg.timestamp = ts
+  .message = msg
+  .name = ev_name
+  .source_app = "owntracks"
+  .event_domain = "owntracks"
+  .kafka_topic = "raw_sensors"
+
+  # Drop the raw OwnTracks root fields + captured headers (everything now lives in .message).
+  del(.tst); del(._type); del(.event); del(.desc)
+  del(.lat); del(.lon); del(.acc); del(.vel); del(.batt); del(.tid); del(.t)
+  del(.["X-Limit-U"]); del(.["x-limit-u"]); del(.["X-Limit-D"]); del(.["x-limit-d"])

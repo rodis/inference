@@ -4,3 +4,9 @@ decoding:
   codec: json
 path: ""
 strict_path: false
+# Capture OwnTracks' identity headers as event fields. OwnTracks HTTP mode has no
+# body user_id; it sends X-Limit-U (username) / X-Limit-D (device). The owntracks
+# lane reads X-Limit-U -> message.user_id. Harmless for sensor traffic (absent there).
+headers:
+  - X-Limit-U
+  - X-Limit-D
