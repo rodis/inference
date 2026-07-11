@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'deploy/**'
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install (with dev extras)
+        run: uv sync --extra dev
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Test (pytest)
+        run: uv run pytest
+
+      - name: Contract schema is up to date
+        # The committed JSON Schema must match what inference.event emits — regenerate and
+        # fail if it drifted (model changed but scripts/emit_event_schema.py wasn't re-run).
+        run: |
+          uv run python scripts/emit_event_schema.py
+          git diff --exit-code contracts/ \
+            || { echo "::error::contracts/ is stale — run 'uv run python scripts/emit_event_schema.py' and commit"; exit 1; }
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: dashboard/web/package-lock.json
+
+      - run: npm ci
+
+      - name: Typecheck (tsc)
+        run: npx tsc -b
+
+      - name: Generated types are up to date
+        # The committed TS must match the committed schema — regenerate and fail on drift.
+        run: |
+          npm run gen:types
+          git diff --exit-code src/generated/ \
+            || { echo "::error::generated types stale — run 'npm run gen:types' and commit"; exit 1; }

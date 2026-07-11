@@ -23,7 +23,14 @@ dependencies = [
 packages = ["src/inference"]
 
 [project.optional-dependencies]
-dev = []
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
 
 [tool.ruff]
 line-length = 100
