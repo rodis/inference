@@ -1,0 +1,23 @@
+type: remap
+inputs:
+  - kafka_persist
+# Outbound action lane (the reverse of the OwnTracks ingest lane): turn a chosen
+# high_level_event into a Pushcut notification so the phone can run a Shortcut on tap.
+# This shares the kafka_persist source with the Neon persister — it's a second, filtered
+# consumer of the same stream, not a new Kafka connection.
+source: |
+  # Fire on ONE event for the first loop, so the phone only buzzes on what we care
+  # about. `phone_is_charging` is the easy repeatable test trigger (plug in → unplug).
+  # Retarget by changing this name (e.g. "car_trip", "gym_visit").
+  if .name != "phone_is_charging" {
+      abort
+  }
+
+  # Reshape into Pushcut's notification JSON. `title`/`text` render on the banner;
+  # `input` is handed to the Shortcut the notification runs (as a text string). Keep
+  # only these keys — the raw event wrapper would confuse the Pushcut API.
+  . = {
+      "title": "Inference: " + string!(.name),
+      "text": "Fired for " + string(.message.user_id ?? "unknown"),
+      "input": encode_json(.message)
+  }
