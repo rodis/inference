@@ -1,0 +1,25 @@
+# Inference event, defined as data. Loaded by the Quix runtime (ADR 0004).
+# Arrival-by-car (Experience): entered_home AND got_out_the_car co-occurring ⟹ you
+# arrived home in the car. Entailment (ADR 0002): entered_home (OwnTracks geofence
+# transition) ⟹ you crossed into the home region; got_out_the_car ⟹ you exited the car;
+# both within one window ⟹ arrived home by car.
+#
+# Pairs the raw entered_home transition (fires as you cross the ~150m fence inbound while
+# driving) with the Activity-level got_out_the_car (DERIVED — fed back in-process), which
+# follows a bit later once you've parked. Both required (weights sum to threshold), so
+# walking home (no got_out_the_car) or moving the car without arriving (no entered_home)
+# won't fire it. Terminal node — nothing derives from it (DAG).
+name: arrived_home_by_car
+enabled: true
+
+engine: weighted_window
+engine_config:
+  threshold: 10
+  window_seconds: 900     # 15 min — cross the home fence → park → got_out_the_car
+  cooldown_seconds: 900   # fire at most once per arrival
+  weights:
+    entered_home: 5
+    got_out_the_car: 5
+
+source_topic: raw_sensors
+sink_topic: high_level_events

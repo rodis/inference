@@ -1,0 +1,25 @@
+# Inference event, defined as data. Loaded by the Quix runtime (ADR 0004).
+# Departure-by-car (Experience): got_into_the_car AND left_home co-occurring ⟹ you left
+# home in the car (vs on foot/bike/bus). Entailment, not correlation (ADR 0002):
+# got_into_the_car ⟹ you're in the car; left_home (OwnTracks geofence transition) ⟹ you
+# crossed out of the home region; both within one window ⟹ departed home by car.
+#
+# Pairs the Activity-level got_into_the_car (DERIVED — fed back in-process by the router,
+# ADR 0002) with the raw left_home transition. Both required (weights sum to threshold),
+# so it can't fire on either alone (getting in the car without leaving, or leaving on
+# foot). left_home lags got_into_the_car by the drive from the driveway to the ~150m
+# fence edge, hence the generous window. Terminal node — nothing derives from it (DAG).
+name: left_home_by_car
+enabled: true
+
+engine: weighted_window
+engine_config:
+  threshold: 10
+  window_seconds: 900     # 15 min — got_into_the_car → cross the home fence (traffic-tolerant)
+  cooldown_seconds: 900   # fire at most once per departure
+  weights:
+    got_into_the_car: 5
+    left_home: 5
+
+source_topic: raw_sensors
+sink_topic: high_level_events
