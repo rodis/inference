@@ -18,8 +18,8 @@ source: |
 
   # Identity — from the X-Limit-U header (HTTP header case may vary; try both). Reject
   # rather than guess, mirroring classify_domain's strict user_id policy.
-  uid = .["X-Limit-U"]
-  if uid == null { uid = .["x-limit-u"] }
+  uid = ."X-Limit-U"
+  if uid == null { uid = ."x-limit-u" }
   if uid == null || uid == "" {
       log("Rejected OwnTracks event: missing X-Limit-U header (set a username in the app)", level: "error")
       abort
@@ -82,4 +82,4 @@ source: |
   # Drop the raw OwnTracks root fields + captured headers (everything now lives in .message).
   del(.tst); del(._type); del(.event); del(.desc)
   del(.lat); del(.lon); del(.acc); del(.vel); del(.batt); del(.tid); del(.t)
-  del(.["X-Limit-U"]); del(.["x-limit-u"]); del(.["X-Limit-D"]); del(.["x-limit-d"])
+  del(."X-Limit-U"); del(."x-limit-u"); del(."X-Limit-D"); del(."x-limit-d")
