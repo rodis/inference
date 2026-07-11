@@ -67,19 +67,21 @@ source: |
       abort
   }
 
-  # Assemble the canonical wrapper fields (classify_domain's output contract). enrich_sensor
-  # then mints message.id and the aiven kafka sink routes on .kafka_topic.
   msg = payload
   msg.name = ev_name
   msg.user_id = to_string!(uid)
   msg.timestamp = ts
-  .message = msg
-  .name = ev_name
-  .source_app = "owntracks"
-  .event_domain = "owntracks"
-  .kafka_topic = "raw_sensors"
 
-  # Drop the raw OwnTracks root fields + captured headers (everything now lives in .message).
-  del(.tst); del(._type); del(.event); del(.desc)
-  del(.lat); del(.lon); del(.acc); del(.vel); del(.batt); del(.tid); del(.t)
-  del(."X-Limit-U"); del(."x-limit-u"); del(."X-Limit-D"); del(."x-limit-d")
+  # Rebuild the root as EXACTLY the canonical wrapper (classify_domain's output contract:
+  # {name, source_app, source_type, message} + the sink's kafka_topic). OwnTracks posts
+  # many extra top-level fields (alt, bs, cog, conn, inregions, p, topic, vac, ...);
+  # reconstructing — rather than del-ing a known list — drops them all and stays correct
+  # when OwnTracks adds fields. enrich_sensor then mints message.id; the aiven sink routes
+  # on kafka_topic (and strips it via except_fields).
+  . = {
+      "name": ev_name,
+      "source_app": "owntracks",
+      "source_type": "http_server",
+      "message": msg,
+      "kafka_topic": "raw_sensors",
+  }
