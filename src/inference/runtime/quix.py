@@ -30,6 +30,7 @@ from quixstreams import Application
 from inference.runtime import config
 from inference.runtime.core import RoutingPlan, Router, Shaper
 from inference.runtime.definition import load_definitions
+from inference.runtime.regions import load_region_definitions
 
 logger = logging.getLogger("inference.quix")
 
@@ -58,6 +59,14 @@ def build_runtime() -> Application:
     definitions = load_definitions(config.EVENTS_DIR)
     if not definitions:
         raise RuntimeError(f"No enabled event definitions found under {config.EVENTS_DIR}")
+
+    # Geofence regions come from Neon (data, not code) and expand into entered_*/left_*
+    # definitions. Best-effort: a Neon blip must not take the whole runtime down — it just
+    # means no region events derive until the next restart.
+    try:
+        definitions += load_region_definitions(config.neon_dsn())
+    except Exception:
+        logger.exception("Failed to load geofence regions from Neon; continuing without them")
 
     plan = RoutingPlan.from_definitions(definitions)
     router, shaper = Router(plan), Shaper(plan)

@@ -27,6 +27,12 @@ def kafka_bootstrap() -> str:
     return os.environ["KAFKA_BOOTSTRAP_SERVERS"]
 
 
+def neon_dsn() -> str | None:
+    """Neon connection string for loading geofence regions (optional). Unset -> the
+    regions feature is off (the runtime derives no region events). Read lazily."""
+    return os.environ.get("NEON_DATABASE_URL")
+
+
 def kafka_ssl() -> dict:
     """librdkafka mTLS config. Defaults match the kafka-ssl Secret volume mount in
     deploy/inference/kustomize/base/runtime/values.yml.

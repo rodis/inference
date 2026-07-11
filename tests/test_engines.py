@@ -2,6 +2,7 @@
 each engine now carries the FULL source event bodies on the Decision (not {id,ts})."""
 
 from inference.engines.decaying_window import DecayingWindowEngine
+from inference.engines.geofence import GeofenceEngine
 from inference.engines.naive_bayes_window import NaiveBayesWindowEngine
 from inference.engines.session_window import SessionWindowEngine
 from inference.engines.weighted_window import WeightedWindowEngine
@@ -101,3 +102,46 @@ def test_session_drops_stale_start(state, event):
 def test_session_end_without_start_does_not_fire(state, event):
     eng = SessionWindowEngine({"start_event": "in", "end_event": "out"})
     assert eng.decide(event("out", 1000), state) is None
+
+
+# --- geofence -------------------------------------------------------------------
+
+# Region centre (a real fix the phone reported) + a point ~11km away that is clearly out.
+_IN = dict(lat=47.2069, lon=8.5748)
+_OUT = dict(lat=47.30, lon=8.70)
+
+
+def _geofence(direction, **over):
+    cfg = {"lat": 47.2069, "lon": 8.5748, "radius_m": 150, "direction": direction, "owner": "rods"}
+    cfg.update(over)
+    return GeofenceEngine(cfg)
+
+
+def _ping(event, t, **over):
+    kw = {"user_id": "rods", "acc": 10, **_IN, **over}
+    return event("location_ping", t, **kw)
+
+
+def test_geofence_enter_fires_once_on_boundary_cross(state, event):
+    eng = _geofence("enter")
+    assert eng.decide(_ping(event, T, **_OUT), state) is None          # outside -> no fire
+    d = eng.decide(_ping(event, T + 60), state)                        # crossed in -> fire
+    assert d is not None and d.occurred_at == T + 60
+    assert eng.decide(_ping(event, T + 120), state) is None            # still inside -> no re-fire
+
+
+def test_geofence_leave_fires_on_exit(state, event):
+    eng = _geofence("leave")
+    assert eng.decide(_ping(event, T), state) is None                  # inside first -> leave doesn't fire
+    assert eng.decide(_ping(event, T + 60, **_OUT), state) is not None  # inside -> outside -> fire
+
+
+def test_geofence_ignores_other_users(state, event):
+    eng = _geofence("enter")
+    assert eng.decide(_ping(event, T, user_id="alice"), state) is None  # not the region owner
+
+
+def test_geofence_accuracy_gate_ignores_imprecise_points(state, event):
+    eng = _geofence("enter", radius_m=100)                             # max_accuracy defaults to radius
+    assert eng.decide(_ping(event, T, acc=500), state) is None         # too vague -> ignored, state untouched
+    assert eng.decide(_ping(event, T + 60, acc=10), state) is not None  # precise inside -> fires (state wasn't flipped)

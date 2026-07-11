@@ -17,6 +17,7 @@ dependencies = [
     "pydantic>=2.6",
     "python-dotenv",
     "pyyaml",
+    "psycopg[binary]>=3.1",   # runtime reads geofence regions from Neon (adapter-only; imported lazily)
 ]
 
 [tool.hatch.build.targets.wheel]

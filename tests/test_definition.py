@@ -4,6 +4,7 @@ from pathlib import Path
 
 from inference.runtime.core import Router, RoutingPlan
 from inference.runtime.definition import load_definitions
+from inference.runtime.regions import region_definitions
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -54,3 +55,33 @@ def test_real_gym_visit_pairs_owntracks_zone_events(event, state):
     out = router.route(event("left_gym", 4600, id="E"), state)
     gym = [i for i in out if i["message"]["name"] == "gym_visit"]
     assert len(gym) == 1 and len(gym[0]["sources"]) == 2
+
+
+# --- regions -> geofence definitions --------------------------------------------
+
+def test_region_rows_expand_to_geofence_definitions():
+    rows = [{"user_id": "rods", "name": "Gym", "lat": 47.2, "lon": 8.5, "radius_m": 150}]
+    defs = region_definitions(rows)
+    assert [d.name for d in defs] == ["entered_gym", "left_gym"]
+    assert all(d.engine == "geofence" and d.source_topic == "raw_sensors" for d in defs)
+    assert defs[0].engine_config["direction"] == "enter"
+    assert defs[0].engine_config["owner"] == "rods"
+
+
+def test_location_stream_cascades_through_geofence_to_gym_visit(event, state):
+    """Full server-side path in-memory: a location stream crosses a Neon-defined region,
+    the geofence engine emits entered_gym/left_gym, and the real gym_visit session pairs
+    them — proving regions + existing defs compose via in-process recursion, no phone."""
+    rows = [{"user_id": "rods", "name": "Gym", "lat": 47.2069, "lon": 8.5748, "radius_m": 150}]
+    defs = load_definitions(REPO_ROOT / "events") + region_definitions(rows)
+    router = Router(RoutingPlan.from_definitions(defs))
+
+    def ping(t, lat, lon):
+        return event("location_ping", t, user_id="rods", lat=lat, lon=lon, acc=10)
+
+    router.route(ping(1000, 47.30, 8.70), state)                       # outside — establishes state
+    entered = router.route(ping(2000, 47.2069, 8.5748), state)         # cross in
+    assert "entered_gym" in {i["message"]["name"] for i in entered}
+    out = router.route(ping(5000, 47.30, 8.70), state)                 # cross out
+    names = {i["message"]["name"] for i in out}
+    assert "left_gym" in names and "gym_visit" in names                # visit fired via the cascade
