@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from inference.runtime.core import RoutingPlan
+from inference.runtime.core import Router, RoutingPlan
 from inference.runtime.definition import load_definitions
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -42,3 +42,15 @@ def test_real_definitions_build_a_valid_plan():
     plan = RoutingPlan.from_definitions(defs)
     assert plan.source_topic == "raw_sensors"
     assert "high_level_events" in plan.sink_topics
+
+
+def test_real_gym_visit_pairs_owntracks_zone_events(event, state):
+    """The OwnTracks Vector lane emits entered_gym / left_gym (slugified from the "Gym"
+    waypoint desc); the real gym_visit def must consume exactly those names. This guards
+    the ingest-slug <-> def-name contract that spans two components (Vector VRL + YAML)."""
+    defs = load_definitions(REPO_ROOT / "events")
+    router = Router(RoutingPlan.from_definitions(defs))
+    assert router.route(event("entered_gym", 1000, id="S"), state) == []   # open the session
+    out = router.route(event("left_gym", 4600, id="E"), state)
+    gym = [i for i in out if i["message"]["name"] == "gym_visit"]
+    assert len(gym) == 1 and len(gym[0]["sources"]) == 2
