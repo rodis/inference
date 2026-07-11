@@ -7,8 +7,6 @@ inputs:
 # and continues down the original path unchanged.
 #
 # Unified URL grammar: every producer is /sensors/<app>/<topic>; the <app> segment
-# selects its adapter. OwnTracks is /sensors/owntracks/raw_sensors. The legacy flat
-# /owntracks is accepted TRANSITIONALLY so no data drops while the phone is migrated —
-# remove that clause once the OwnTracks app URL is on the /sensors/owntracks form.
+# selects its adapter. OwnTracks is /sensors/owntracks/raw_sensors.
 route:
-  owntracks: starts_with(to_string(.path) ?? "", "/sensors/owntracks") || starts_with(to_string(.path) ?? "", "/owntracks")
+  owntracks: starts_with(to_string(.path) ?? "", "/sensors/owntracks")
