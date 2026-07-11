@@ -18,6 +18,6 @@ source: |
   # only these keys — the raw event wrapper would confuse the Pushcut API.
   . = {
       "title": "Inference: " + string!(.name),
-      "text": "Fired for " + string(.message.user_id ?? "unknown"),
+      "text": "Fired for " + (string(.message.user_id) ?? "unknown"),
       "input": encode_json(.message)
   }
