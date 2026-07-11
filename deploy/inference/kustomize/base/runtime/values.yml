@@ -12,6 +12,15 @@ deployment:
         configMapKeyRef:
           name: inference-worker-config
           key: KAFKA_BOOTSTRAP_SERVERS
+    # Geofence regions are read from Neon at startup (regions-as-data). Reuse the
+    # existing Doppler-synced Neon secret in this namespace (same NEON_DATABASE_URL the
+    # Vector persister uses) rather than mint a second one. Optional: if the runtime
+    # can't reach Neon it logs and runs without region events (build_runtime is best-effort).
+    NEON_DATABASE_URL:
+      valueFrom:
+        secretKeyRef:
+          name: neon-credentials-for-vector
+          key: NEON_DATABASE_URL
   volumes:
     kafka-ssl:
       secret:
