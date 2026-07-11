@@ -37,6 +37,16 @@ export const labelOf = (e: AwareEvent) =>
 export const typeLabel = (n: string) => VERBS[n] || RAW_LABEL[n] || titleize(n);
 export const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 
+// --- presentation config (dashboard-owned) --------------------------------------
+// Which derived events render as a time *span*. The backend emits the `interval`
+// capability as data — car_trip AND phone_is_charging both carry it — but whether to
+// *draw* an event as a span is a view decision, so it lives here, not in the event
+// definition. car_trip: yes; phone_is_charging: no (its duration is data we just don't
+// surface on the timeline). This is the "role" that used to (wrongly) live in the backend.
+export const SPAN_EVENTS = new Set<string>(["car_trip"]);
+export const intervalOf = (e: AwareEvent) => e.message.interval ?? null;
+export const isSpan = (e: AwareEvent) => SPAN_EVENTS.has(e.name) && !!e.message.interval;
+
 export function humanDur(sec: number): string {
   sec = Math.round(sec);
   if (sec < 60) return sec + "s";
@@ -121,36 +131,16 @@ export interface Prepared {
   derivLevel: (e: AwareEvent | undefined) => number;
 }
 
-/** Decorate API events with epoch/date, synthesize trips when none are real, and
- *  expose a memoized derivation-level function over the lineage graph. */
+/** Decorate API events with epoch/date and expose a memoized derivation-level function
+ *  over the lineage graph. (car_trip is now a real derived event carrying its own
+ *  interval — no client-side synthesis; spans render from message.interval, see isSpan.) */
 export function prepare(events: AwareEvent[]): Prepared {
   const evs = events.map((e) => ({ ...e, epoch: +e.occurred_epoch, date: new Date(+e.occurred_epoch * 1000) }));
   evs.sort((a, b) => a.epoch - b.epoch);
   const byId: Record<string, AwareEvent> = Object.fromEntries(evs.map((e) => [e.id, e]));
   const raw = evs.filter((e) => e.event_class === "raw");
   const derived = evs.filter((e) => e.event_class === "derived");
-
-  // car_trip is a real derived event (session_window). Only synthesize start/end
-  // pairs when none have been produced, so we never double-count a trip.
-  const hasRealTrips = evs.some((e) => e.name === "car_trip");
-  const synthTrips: AwareEvent[] = [];
-  if (!hasRealTrips) {
-    evs.filter((e) => e.name === "got_into_the_car").forEach((start, i) => {
-      const end = evs.find((e) => e.name === "got_out_the_car" && e.epoch >= start.epoch);
-      if (!end) return;
-      synthTrips.push({
-        id: "trip-" + i, name: "car_trip", event_class: "derived", synthetic: true,
-        occurred_epoch: start.epoch, epoch: start.epoch, date: start.date,
-        endEpoch: end.epoch, durationSec: end.epoch - start.epoch,
-        message: {
-          id: "trip-" + i, name: "car_trip", inference_type: "planned rollup · synthesized in view",
-          confidence_score: null, derived_from: [{ id: start.id }, { id: end.id }],
-        },
-      });
-    });
-  }
-  synthTrips.forEach((ev) => { byId[ev.id] = ev; });
-  const all = [...evs, ...synthTrips];
+  const all = evs;
 
   const memo: Record<string, number> = {};
   const derivLevel = (e: AwareEvent | undefined): number => {

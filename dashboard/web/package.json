@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "gen:types": "json2ts -i ../../contracts/inferred_event.schema.json -o src/generated/events.ts --bannerComment \"/* AUTO-GENERATED from contracts/inferred_event.schema.json — do not edit. Regenerate: uv run python scripts/emit_event_schema.py && npm run gen:types */\"",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -19,6 +20,7 @@
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
+    "json-schema-to-typescript": "^15.0.3",
     "typescript": "^5.5.3",
     "vite": "^5.4.0"
   }

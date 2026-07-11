@@ -1,5 +1,5 @@
 import type { AwareEvent } from "../types";
-import { ROW, catOf, fmtTime, humanDur, labelOf, LCHIP } from "../view";
+import { ROW, catOf, fmtTime, humanDur, labelOf, LCHIP, isSpan, intervalOf } from "../view";
 import type { Scale } from "../view";
 
 interface Props {
@@ -78,9 +78,9 @@ export default function VTimeline({ events, scale, posOf, packedHeight, getL, ge
         const isDer = e.event_class === "derived";
         const r = reveal(e);
         const hidden = hiddenBeneath(e);
+        const iv = isSpan(e) ? intervalOf(e) : null;    // a span (e.g. car_trip) → show duration + range
         let meta: string;
-        if (e.synthetic) meta = `${humanDur(e.durationSec!)} · until ${fmtTime(new Date(e.endEpoch! * 1000))}`;
-        else if (isDer) meta = `inferred · D${derivLevel(e)} · ${(e.message.derived_from || []).length} sources`;
+        if (isDer) meta = `inferred · D${derivLevel(e)} · ${(e.message.derived_from || []).length} sources`;
         else meta = `signal${e.message.car ? " · " + e.message.car : e.message.device ? " · " + e.message.device : ""}`;
         return (
           <div key={e.id} className="vt-card" style={{ top: y, opacity: r, pointerEvents: r < 0.1 ? "none" : undefined }}>
@@ -89,8 +89,8 @@ export default function VTimeline({ events, scale, posOf, packedHeight, getL, ge
               <div className="vt-circle" style={{ background: cat.c, transform: `scale(${0.82 + 0.18 * r})` }}><cat.Icon size={18} strokeWidth={2.25} /></div>
             </div>
             <button className="vt-body" onClick={() => onSelect(e)} tabIndex={r < 0.1 ? -1 : undefined}>
-              {e.synthetic ? (
-                <div className="ev-meta"><span className="dur">{humanDur(e.durationSec!)}</span>{` · until ${fmtTime(new Date(e.endEpoch! * 1000))}`}</div>
+              {iv ? (
+                <div className="ev-meta"><span className="dur">{humanDur(iv.duration_seconds)}</span>{` · ${fmtTime(new Date(iv.started_at * 1000))}–${fmtTime(new Date(iv.ended_at * 1000))}`}</div>
               ) : (
                 <div className="ev-meta">{meta}</div>
               )}

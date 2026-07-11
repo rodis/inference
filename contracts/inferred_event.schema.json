@@ -1,0 +1,112 @@
+{
+  "$defs": {
+    "Contributor": {
+      "additionalProperties": false,
+      "description": "One source event in the lineage graph (an entry in `derived_from`).",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "timestamp": {
+          "title": "Timestamp",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "timestamp"
+      ],
+      "title": "Contributor",
+      "type": "object"
+    },
+    "Interval": {
+      "additionalProperties": false,
+      "description": "The *interval capability*: an event that spans time. Its presence on an\n`InferredEvent` is the capability \u2014 \"this event has a start and an end\".\n\n`duration_seconds` is derived here, once, in the one authoritative place. As a\n`computed_field` it also serializes into the contract, so the stored JSON and the\ngenerated TS type both carry it \u2014 nothing downstream re-derives it (and can't drift\nfrom it). It is kept self-contained (`ended_at` duplicates the envelope `timestamp`\nfor spans) so the capability reads on its own without reaching back into the envelope.",
+      "properties": {
+        "started_at": {
+          "title": "Started At",
+          "type": "integer"
+        },
+        "ended_at": {
+          "title": "Ended At",
+          "type": "integer"
+        },
+        "duration_seconds": {
+          "readOnly": true,
+          "title": "Duration Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "started_at",
+        "ended_at",
+        "duration_seconds"
+      ],
+      "title": "Interval",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "A derived event's `message` payload \u2014 the unit shared across Python and TS.\n\nStrict (`extra=\"forbid\"`): derived events are wholly minted by the runtime, so their\nshape is closed and worth enforcing. (Raw producer events flow through the same JSONB\ncolumn but stay loosely typed \u2014 they are not modeled here.)",
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "inference_type": {
+      "title": "Inference Type",
+      "type": "string"
+    },
+    "user_id": {
+      "title": "User Id",
+      "type": "string"
+    },
+    "timestamp": {
+      "title": "Timestamp",
+      "type": "integer"
+    },
+    "confidence_score": {
+      "title": "Confidence Score",
+      "type": "number"
+    },
+    "derived_from": {
+      "items": {
+        "$ref": "#/$defs/Contributor"
+      },
+      "title": "Derived From",
+      "type": "array"
+    },
+    "interval": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Interval"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "id",
+    "name",
+    "inference_type",
+    "user_id",
+    "timestamp",
+    "confidence_score",
+    "derived_from"
+  ],
+  "title": "InferredEvent",
+  "type": "object"
+}

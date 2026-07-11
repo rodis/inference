@@ -80,12 +80,10 @@ export default function EventModal({ event, byId, getL, derivLevel, onClose }: P
             </div>
             <div className="mtitle">{labelOf(e)}</div>
             <div className="mmeta">
-              <span className="mt">{fmtTimeSec(e.date)}{e.durationSec != null ? " · " + humanDur(e.durationSec) : ""}</span>
+              <span className="mt">{fmtTimeSec(e.date)}{e.message.interval ? " · " + humanDur(e.message.interval.duration_seconds) : ""}</span>
               <LChip lv={getL(e.name)} />
               <span className="dbadge">D{dl}</span>
-              {conf != null
-                ? <span className="conf">confidence {conf}</span>
-                : e.synthetic ? <span className="planned">planned rollup</span> : null}
+              {conf != null ? <span className="conf">confidence {conf}</span> : null}
             </div>
           </div>
         </div>
