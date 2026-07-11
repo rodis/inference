@@ -1,6 +1,6 @@
 type: http
 inputs:
-  - event_to_pushcut
+  - shape_for_pushcut
 # Full Pushcut webhook URL (https://api.pushcut.io/<secret>/notifications/<name>),
 # injected from a K8s secret — the account secret must not live in git.
 uri: "${PUSHCUT_WEBHOOK_URL}"

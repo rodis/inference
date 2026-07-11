@@ -21,7 +21,7 @@ configMapGenerator:
       - ./configs/transforms/owntracks_to_canonical.yml
       - ./configs/transforms/enrich_sensor.yml
       - ./configs/transforms/shape_for_neon.yml
-      - ./configs/transforms/event_to_pushcut.yml
+      - ./configs/transforms/shape_for_pushcut.yml
   - name: vector-sinks
     namespace: inference
     files:
