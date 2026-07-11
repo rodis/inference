@@ -32,7 +32,7 @@ from typing import NamedTuple, Protocol
 # importing names from the package runs inference/engines/__init__.py, which registers the built-in engines
 from inference.engines import Engine, ScopedState, build_engine
 from inference.capabilities import derive_capability
-from inference.event import Capability, Contributor, InferredEvent, Role
+from inference.event import Capability, Contributor, InferredEvent
 from inference.runtime import config
 
 logger = logging.getLogger("inference.core")
@@ -61,16 +61,6 @@ class Consumer(NamedTuple):
     engine: Engine
 
 
-class OutputSpec(NamedTuple):
-    """A produced event's two independent output axes, resolved from its definition:
-    `role` (presentation intent) and `capabilities` (facts to derive from evidence).
-    Consumed by the `Shaper` stage — never by routing/detection.
-    """
-
-    role: Role
-    capabilities: tuple[Capability, ...]
-
-
 def _lineage(source: dict) -> Contributor:
     """Project a full source event down to its `derived_from` lineage record. The two are
     different things (see `Decision.sources`): this is the trimmed provenance pointer we
@@ -92,14 +82,14 @@ class RoutingPlan:
       on it; the graph a `Router` walks. A name absent from the map is terminal and stops a cascade.
     - `sink_for` — produced event name → the topic it is emitted to.
     - `source_topic` — the single external source topic the runtime consumes.
-    - `output_for` — produced event name → its `OutputSpec` (role + capabilities); used by
+    - `capabilities_for` — produced event name → the capabilities to derive for it; used by
       the `Shaper` stage, kept out of routing.
     """
 
     consumers: dict[str, list[Consumer]]
     sink_for: dict[str, str]
     source_topic: str
-    output_for: dict[str, OutputSpec]
+    capabilities_for: dict[str, tuple[Capability, ...]]
 
     @property
     def sink_topics(self) -> set[str]:
@@ -118,14 +108,14 @@ class RoutingPlan:
         """
         consumers: dict[str, list[Consumer]] = defaultdict(list)
         sink_for: dict[str, str] = {}
-        output_for: dict[str, OutputSpec] = {}
+        capabilities_for: dict[str, tuple[Capability, ...]] = {}
         declared_sources: set[str] = set()
         for d in definitions:
             engine = build_engine(d)
             for input_name in engine.input_event_names():
                 consumers[input_name].append(Consumer(produces=d.name, engine=engine))
             sink_for[d.name] = d.sink_topic
-            output_for[d.name] = OutputSpec(role=d.role, capabilities=tuple(d.capabilities))
+            capabilities_for[d.name] = tuple(d.capabilities)
             declared_sources.add(d.source_topic)
 
         # Consume exactly ONE external source (declared sources minus our own sinks).
@@ -142,7 +132,7 @@ class RoutingPlan:
             )
 
         return cls(consumers=dict(consumers), sink_for=sink_for,
-                   source_topic=external[0], output_for=output_for)
+                   source_topic=external[0], capabilities_for=capabilities_for)
 
 
 class Router:
@@ -241,9 +231,10 @@ class Router:
 class Shaper:
     """The output-shaping stage — a distinct step from routing (detection). Built from the
     same `RoutingPlan`, mounted by the adapter *after* `Router.route`. Where the router
-    decides *that* an event fires and with what identity, the shaper decides *how the emitted
-    event looks*: it projects the lineage, derives the declared capabilities from the full
-    source events, applies the declared role, and mints the final `high_level_events` record.
+    decides *that* an event fires and with what identity, the shaper decides *what data the
+    emitted event carries*: it projects the lineage and derives the declared capabilities from
+    the full source events, then mints the final `high_level_events` record. Presentation
+    (span/point/hidden) is deliberately NOT here — it is a consumer concern (see inference.event).
 
     Capabilities scale by addition (see `inference.capabilities`): the shaper never names one
     — it runs whatever the definition declared. Keeping this out of `route` is what lets the
@@ -264,10 +255,9 @@ class Shaper:
         """
         envelope = item["message"]
         sources = item["sources"]
-        spec = self._plan.output_for[envelope["name"]]
 
         fragments: dict = {}                       # capability-contributed InferredEvent fields
-        for capability in spec.capabilities:
+        for capability in self._plan.capabilities_for[envelope["name"]]:
             fragments.update(derive_capability(capability, sources))
 
         event = InferredEvent(
@@ -278,7 +268,6 @@ class Shaper:
             timestamp=envelope["timestamp"],
             confidence_score=envelope["confidence_score"],
             derived_from=[_lineage(s) for s in sources],
-            role=spec.role,
             **fragments,
         )
         return {

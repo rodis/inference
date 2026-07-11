@@ -13,7 +13,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from inference.event import Capability, Role
+from inference.event import Capability
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +30,9 @@ class EventDefinition(BaseModel):
     source_topic: str               # external topic the raw contributors arrive on (one per ADR 0004)
     sink_topic: str                 # where the derived event is produced
 
-    # Two independent axes on the emitted event (see inference.event):
-    capabilities: list[Capability] = []   # structured facts to derive from evidence (e.g. interval)
-    role: Role = Role.POINT               # presentation intent only — NOT tied to capabilities
+    # Structured facts to derive from the event's evidence (e.g. interval). Data-model
+    # only — presentation (span/point/hidden) is a consumer concern, not declared here.
+    capabilities: list[Capability] = []
 
 
 def load_definitions(events_dir: Path) -> list[EventDefinition]:

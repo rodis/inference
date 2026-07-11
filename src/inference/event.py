@@ -11,15 +11,18 @@ arrives over Kafka or is read back out of Neon's JSONB. It deliberately does NOT
 transport wrapper (`name`/`source_app`/`source_type`/`message`) or the Neon row columns;
 those are shaping concerns that stay in the core/adapter.
 
-The model has three parts, kept apart on purpose (see the design discussion):
+The model has two parts, kept apart on purpose (see the design discussion):
 
 - **envelope** — the fields every derived event has (id, lineage, entity, time, confidence);
 - **capabilities** — optional structured facts an event *may* carry (today: `interval`).
   Presence == the capability. A capability being present commits a consumer to nothing —
   it is a latent affordance, not a behavior. Sniffable structurally (`event.interval`).
-- **role** — the *declared* intent: what the event is for / how to treat it. NEVER inferred
-  from structure, because structure underdetermines it: `car_trip` and `phone_is_charging`
-  are structurally identical (both spans) yet differ here (SPAN vs POINT).
+
+Deliberately absent: **presentation / role** (span vs point vs hidden). That is a *view*
+decision — how one consumer chooses to surface an event — not an intrinsic fact about the
+event, so it lives in the consumer (the dashboard), never in this data model. A capability
+(e.g. `interval`) is data; how to render it is presentation. `car_trip` and
+`phone_is_charging` both carry `interval`; only the dashboard decides one is drawn as a span.
 
 Import-clean: pure Pydantic, no transport/state backend, so the transport-agnostic core
 (`inference.runtime.core`) can build it without violating its no-`quixstreams` invariant.
@@ -30,21 +33,10 @@ from enum import Enum
 from pydantic import BaseModel, ConfigDict, computed_field
 
 
-class Role(str, Enum):
-    """Declared intent — *presentation* only, fully independent of capability. Two events
-    with the same capabilities can differ here, so it is a *choice* recorded on the
-    definition, never sniffed. Governs how a consumer surfaces the event, nothing about
-    what data it carries."""
-
-    POINT = "point"    # a point-in-time event (the default)
-    SPAN = "span"      # an interval worth rendering as a span (start → end), e.g. car_trip
-    HIDDEN = "hidden"  # exists only to feed higher-level events; not surfaced on its own
-
-
 class Capability(str, Enum):
     """A structured, *derivable* fact an event carries — declared on the definition,
-    independent of `Role`. The runtime derives the capability's data generically from the
-    event's evidence (its contributors), so which capability an event has is a data-model
+    independent of presentation. The runtime derives the capability's data generically from
+    the event's evidence (its contributors), so which capability an event has is a data-model
     decision, never an engine's concern. Today just one; a second becomes a registry of
     name → deriver (mirroring the engine seam)."""
 
@@ -101,9 +93,6 @@ class InferredEvent(BaseModel):
     timestamp: int                   # canonical event-time; for a SPAN this equals interval.ended_at
     confidence_score: float
     derived_from: list[Contributor]
-
-    # --- declared intent ------------------------------------------------------
-    role: Role = Role.POINT
 
     # --- capabilities (present == has the capability) -------------------------
     interval: Interval | None = None

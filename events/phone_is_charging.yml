@@ -17,7 +17,7 @@ engine_config:
 source_topic: raw_sensors
 sink_topic: high_level_events
 
-# Independence in action: it genuinely IS an interval (so we carry the capability —
-# its charge duration is real data), but role stays the default `point` — we don't
-# want it drawn as a span on the timeline. Same capability as car_trip, different role.
+# It genuinely IS an interval, so we carry the capability — its charge duration is real
+# data. Same capability as car_trip; whether either is drawn as a span is the dashboard's
+# call, not declared here (that's the presentation/data-model split).
 capabilities: [interval]
