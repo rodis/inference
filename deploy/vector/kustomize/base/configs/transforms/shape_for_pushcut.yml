@@ -13,11 +13,8 @@ source: |
       abort
   }
 
-  # Reshape into Pushcut's notification JSON. `title`/`text` render on the banner;
-  # `input` is handed to the Shortcut the notification runs (as a text string). Keep
-  # only these keys — the raw event wrapper would confuse the Pushcut API.
-  . = {
-      "title": "Inference: " + string!(.name),
-      "text": "Fired for " + (string(.message.user_id) ?? "unknown"),
-      "input": encode_json(.message)
-  }
+  # Send an EMPTY body: dynamic title/text/input in the POST are Pushcut Pro-only, so a
+  # free-tier account rejects them with a "buy Pro" message. An empty object just fires
+  # the notification as predefined in the app (its own title/text + the Shortcut it runs).
+  # Trade-off: no per-event text and no data passed into the Shortcut (both need Pro).
+  . = {}
