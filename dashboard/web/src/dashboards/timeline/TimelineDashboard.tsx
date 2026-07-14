@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useAware } from "../../app/useAware";
 import type { AwareEvent } from "../../types";
-import { dayKey, packScale } from "../../view";
+import { absorbedIds, dayKey, dayScale } from "../../view";
 import VTimeline from "../../components/VTimeline";
 import WeekStrip from "../../components/WeekStrip";
 import AssignPanel from "../../components/AssignPanel";
@@ -26,11 +26,16 @@ export default function TimelineDashboard() {
     return Math.max(0, Math.min(1, altitude - displayLevel + 1));
   }, [altitude, getCeil]);
 
-  // All of the day's events stay in the layout; packScale grows each event's slot with its
-  // reveal, so lower-layer events grow in/out instead of popping the layout.
+  // All of the day's events stay in the layout; dayScale positions each by *time of day*
+  // (proportional, quiet gaps collapsed) and grows/reveals detail with altitude, so lower-
+  // layer events fade in/out at their true time instead of popping the layout. A visible
+  // span's get-in/get-out contributors fold into its capsule (revealDay), so the day reads as
+  // a flat list of activities rather than a capsule plus its redundant boundary rows.
   const dayAll = useMemo(() => all.filter((e) => dayKey(e.date) === selectedDay), [all, selectedDay]);
-  const packed = useMemo(() => packScale(dayAll, revealOf), [dayAll, revealOf]);
-  const shownCount = useMemo(() => dayAll.reduce((n, e) => (revealOf(e) > 0.5 ? n + 1 : n), 0), [dayAll, revealOf]);
+  const absorbed = useMemo(() => absorbedIds(dayAll, revealOf), [dayAll, revealOf]);
+  const revealDay = useCallback((e: AwareEvent) => (absorbed.has(e.id) ? 0 : revealOf(e)), [absorbed, revealOf]);
+  const packed = useMemo(() => dayScale(dayAll, revealDay), [dayAll, revealDay]);
+  const shownCount = useMemo(() => dayAll.reduce((n, e) => (revealDay(e) > 0.5 ? n + 1 : n), 0), [dayAll, revealDay]);
 
   // --- anchored zoom plumbing -------------------------------------------------
   // refs let the once-attached gesture listeners read current layout without re-binding.
@@ -180,7 +185,7 @@ export default function TimelineDashboard() {
               <span className="zoom-hint">pinch or ⌘-scroll on the timeline to zoom · {shownCount} shown</span>
             </div>
             <div className="vtwrap" ref={wrapRef}>
-              <VTimeline events={dayAll} posOf={(e) => packed.pos.get(e.id) ?? 0} packedHeight={packed.h} getL={getL} getCeil={getCeil} derivLevel={derivLevel} onSelect={setModalEvent} revealOf={revealOf} byId={byId} />
+              <VTimeline events={dayAll} posOf={(e) => packed.pos.get(e.id) ?? 0} packedHeight={packed.h} spans={packed.spans} gaps={packed.gaps} overlaps={packed.overlaps} getL={getL} getCeil={getCeil} derivLevel={derivLevel} onSelect={setModalEvent} revealOf={revealDay} byId={byId} />
             </div>
           </div>
         </div>

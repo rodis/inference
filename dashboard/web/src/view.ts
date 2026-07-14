@@ -38,14 +38,17 @@ export const typeLabel = (n: string) => VERBS[n] || RAW_LABEL[n] || titleize(n);
 export const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 
 // --- presentation config (dashboard-owned) --------------------------------------
-// Which derived events render as a time *span*. The backend emits the `interval`
-// capability as data — car_trip AND phone_is_charging both carry it — but whether to
-// *draw* an event as a span is a view decision, so it lives here, not in the event
-// definition. car_trip: yes; phone_is_charging: no (its duration is data we just don't
-// surface on the timeline). This is the "role" that used to (wrongly) live in the backend.
-export const SPAN_EVENTS = new Set<string>(["car_trip"]);
+// Which derived events render as a time *span* (a duration capsule on the day timeline).
+// The backend emits the `interval` capability as data; whether to *draw* an event as a
+// span is a view decision, so it lives here, not in the event definition. Both events that
+// carry an interval today (a trip, a charge) read naturally as durations, so both render as
+// capsules whose length is proportional to how long they lasted.
+export const SPAN_EVENTS = new Set<string>(["car_trip", "phone_is_charging"]);
 export const intervalOf = (e: AwareEvent) => e.message.interval ?? null;
 export const isSpan = (e: AwareEvent) => SPAN_EVENTS.has(e.name) && !!e.message.interval;
+/** A span's start on the clock (its capsule top); a point event has no extent, so its
+ *  timestamp is both. Used to order and place events by *when they began*. */
+export const startOf = (e: AwareEvent) => (isSpan(e) ? intervalOf(e)!.started_at : e.epoch);
 
 export function humanDur(sec: number): string {
   sec = Math.round(sec);
@@ -70,44 +73,118 @@ export function buildScale(epochs: number[]): Scale {
 }
 export { ROW };
 
-/** Reveal-weighted vertical layout for semantic zoom. Every event keeps a slot, but the
- *  slot height grows with the event's reveal (0..1): hidden events collapse to a sliver
- *  (holding their place), revealed events take a full row. Because nothing enters or
- *  leaves the layout as altitude changes, lower-layer events *grow* in/out smoothly
- *  instead of popping. Positions are keyed per event id (handles same-timestamp events). */
-const PACK_MIN = 16;
-const HIDDEN_RUN_MAX = 26;   // a *run* of consecutive hidden events collapses to at most this,
-const VIS_EPS = 0.06;        // so long quiet stretches don't stack into a tall empty gap (mobile)
-export function packScale(events: AwareEvent[], reveal: (e: AwareEvent) => number): { pos: Map<string, number>; h: number } {
-  const sorted = [...events].sort((a, b) => a.epoch - b.epoch);
+/** Time-proportional day layout with duration capsules, collapsed quiet gaps, and
+ *  semantic-zoom reveal.
+ *
+ *  Vertical position maps to *time of day* — the fix for the old equal-spacing spine that
+ *  didn't read as "a day". Events are ordered and placed by when they *began* (a span's
+ *  start; a point event's timestamp). A duration event (a trip, a charge) renders as a
+ *  capsule whose height is proportional to how long it lasted, on a shared px-per-minute
+ *  scale — so a long activity is visibly longer than a short one, and its length reads
+ *  against the day. Each event reserves vertical room (its capsule height, or a card row for
+ *  a point event) so nothing overlaps; the step to the next event adds proportional extra for
+ *  the elapsed time, and a genuinely quiet stretch (gap over QUIET_GAP_MIN) collapses to a
+ *  short labeled divider instead of a big blank (the "broken scale" pattern). When an event
+ *  starts while an earlier one is still running, the two *interlock* — the later capsule tucks
+ *  into the tail of the earlier and is flagged "overlapping" (the Structured convention),
+ *  rather than being pushed below it after a false gap. Idle time is measured from the latest
+ *  end still open, so an ongoing span is never mislabeled "quiet". Hidden events (faded by
+ *  altitude) are interpolated onto the same scale. Positions are keyed per event id. */
+const VIS_EPS = 0.06;
+const PPM = 2.5;             // px per minute — shared by capsule heights and gap proportionality
+const CAP_MIN = 50;         // shortest a duration capsule can be (its icon must fit)
+const CAP_MAX = 420;        // …and tallest, so a multi-hour span doesn't dominate the column
+const SLOPE = 1.4;          // px per minute of *extra* spacing between two events…
+const EXTRA_MAX = 64;       // …capped, so a busy afternoon doesn't run off-screen
+const QUIET_GAP_MIN = 50;   // a gap wider than this collapses to a divider instead of stretching
+const GAP_H = 52;           // height of a collapsed-gap divider
+const NOTCH = 18;           // px two overlapping capsules interlock by
+/** Height of a span's capsule: proportional to its duration, clamped for legibility. */
+export const spanHeight = (e: AwareEvent): number => {
+  const iv = intervalOf(e); if (!iv) return CAP_MIN;
+  return Math.max(CAP_MIN, Math.min(CAP_MAX, (iv.duration_seconds / 60) * PPM));
+};
+/** When an event ends on the clock: a span's end; a point event's instant. */
+const endOf = (e: AwareEvent) => (isSpan(e) ? intervalOf(e)!.ended_at : e.epoch);
+export interface DayLayout {
+  pos: Map<string, number>;                                // event id → top y (capsule/card top)
+  spans: Map<string, { top: number; height: number }>;     // span id → proportional capsule box
+  gaps: { y: number; seconds: number }[];                  // collapsed quiet gaps (for dividers)
+  overlaps: Set<string>;                                   // ids that start while an earlier event runs
+  h: number;
+}
+export function dayScale(events: AwareEvent[], reveal: (e: AwareEvent) => number): DayLayout {
+  const sorted = [...events].sort((a, b) => startOf(a) - startOf(b));
   const pos = new Map<string, number>();
-  const ys: number[] = [];
-  let y = 0, first = true, runH = 0;
-  for (const e of sorted) {
-    const r = Math.max(0, Math.min(1, reveal(e)));
-    if (!first) {
-      if (r > VIS_EPS) {                                       // (partly) visible: full row, grows with reveal
-        y += PACK_MIN + (ROW - PACK_MIN) * r;
-        runH = 0;
-      } else {                                                 // hidden: add to the run, capped so N slivers ≈ one
-        const add = Math.min(PACK_MIN, Math.max(0, HIDDEN_RUN_MAX - runH));
-        y += add;
-        runH += add;
+  const spans = new Map<string, { top: number; height: number }>();
+  const gaps: { y: number; seconds: number }[] = [];
+  const overlaps = new Set<string>();
+  if (!sorted.length) return { pos, spans, gaps, overlaps, h: 40 };
+
+  const vis = (e: AwareEvent) => reveal(e) > VIS_EPS;
+  const foot = (e: AwareEvent) => (isSpan(e) ? spanHeight(e) : ROW);   // vertical room an event needs
+  const anchors = sorted.filter(vis);
+  if (!anchors.length) {                                    // nothing visible — hold places as slivers
+    let y = 0; for (const e of sorted) { pos.set(e.id, y); y += 16; }
+    return { pos, spans, gaps, overlaps, h: y + ROW };
+  }
+
+  // Walk the visible events in start order. Each reserves its footprint; the step to the next
+  // is: interlock (overlap) if it starts before everything so far has ended; otherwise the
+  // idle time since the last end, collapsed to a divider when quiet.
+  const yAt = new Map<number, number>();                    // anchor start-time → y (for interpolation)
+  const place = (e: AwareEvent, y: number) => {
+    pos.set(e.id, y);
+    yAt.set(startOf(e), y);
+    if (isSpan(e)) spans.set(e.id, { top: y, height: spanHeight(e) });
+  };
+  let y = 0;
+  place(anchors[0], 0);
+  let openEnd = endOf(anchors[0]);                          // latest end among everything placed so far
+  for (let i = 1; i < anchors.length; i++) {
+    const prev = anchors[i - 1], cur = anchors[i];
+    if (startOf(cur) < openEnd - 30) {                      // still-open event → interlock, flag overlap
+      y += Math.max(NOTCH, foot(prev) - NOTCH);
+      overlaps.add(cur.id);
+    } else {
+      const idleMin = Math.max(0, (startOf(cur) - openEnd) / 60);
+      if (idleMin > QUIET_GAP_MIN) {
+        gaps.push({ y: y + foot(prev) + GAP_H / 2, seconds: startOf(cur) - openEnd });
+        y += foot(prev) + GAP_H;
+      } else {
+        y += foot(prev) + Math.min(EXTRA_MAX, idleMin * SLOPE);
       }
     }
-    pos.set(e.id, y);
-    ys.push(y);
-    first = false;
+    place(cur, y);
+    openEnd = Math.max(openEnd, endOf(cur));
   }
-  // Trim collapsed head/tail: the timeline should start at the first visible event and end
-  // at the last, so leading/trailing hidden slivers don't add whitespace. Interior slivers
-  // stay (they hint at detail between visible events).
-  let lo = 0; while (lo < sorted.length && reveal(sorted[lo]) < 0.02) lo++;
-  let hi = sorted.length - 1; while (hi >= 0 && reveal(sorted[hi]) < 0.02) hi--;
-  if (lo > hi) return { pos, h: y + ROW }; // nothing clearly visible — leave as-is
-  const offset = ys[lo];
-  for (const [k, v] of pos) pos.set(k, Math.max(0, v - offset));
-  return { pos, h: ys[hi] - offset + ROW };
+  const lastY = y + foot(anchors[anchors.length - 1]);
+
+  // Hidden events (faded by altitude) interpolate onto the same scale so they sit at their
+  // true time and grow into place when you descend, without opening dead space.
+  const A = anchors.map(startOf);
+  const yOf = (t: number): number => {
+    if (t <= A[0]) return pos.get(anchors[0].id)!;
+    if (t >= A[A.length - 1]) return pos.get(anchors[anchors.length - 1].id)!;
+    let i = 1; while (i < A.length && A[i] < t) i++;
+    const t0 = A[i - 1], t1 = A[i], y0 = yAt.get(t0)!, y1 = yAt.get(t1)!;
+    return t1 === t0 ? y0 : y0 + (y1 - y0) * ((t - t0) / (t1 - t0));
+  };
+  for (const e of sorted) if (!pos.has(e.id)) pos.set(e.id, yOf(startOf(e)));
+
+  return { pos, spans, gaps, overlaps, h: lastY };
+}
+
+/** When a span is on screen, its capsule already represents its start and end (a car trip's
+ *  get-in/get-out ARE the capsule's ends), so showing those contributor events as separate
+ *  rows is redundant. Return the ids to fold into the capsule — the caller zeros their reveal.
+ *  They stay in the lineage (tap the capsule to trace them); they just don't clutter the day. */
+export function absorbedIds(events: AwareEvent[], reveal: (e: AwareEvent) => number): Set<string> {
+  const out = new Set<string>();
+  for (const e of events) {
+    if (isSpan(e) && reveal(e) > VIS_EPS) for (const p of e.message.derived_from || []) out.add(p.id);
+  }
+  return out;
 }
 
 export interface GroupDef { key: string; label: string; Icon: LucideIcon; color: string; test: (n: string) => boolean }

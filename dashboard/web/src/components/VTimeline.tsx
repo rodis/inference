@@ -5,7 +5,7 @@ import type { Scale } from "../view";
 interface Props {
   events: AwareEvent[];
   scale?: Scale;                          // time-aligned layout (Compare lanes)
-  posOf?: (e: AwareEvent) => number;      // reveal-weighted per-event layout (Day timeline)
+  posOf?: (e: AwareEvent) => number;      // time-proportional per-event layout (Day timeline)
   packedHeight?: number;                  // total height when posOf is used
   getL: (name: string) => number;
   getCeil: (name: string) => number;
@@ -15,6 +15,12 @@ interface Props {
   revealOf?: (e: AwareEvent) => number;
   /** lineage lookup, so a visible inference can count detail hidden beneath it. */
   byId?: Record<string, AwareEvent>;
+  /** duration events drawn as a proportional capsule (Day timeline): id → {top,height}. */
+  spans?: Map<string, { top: number; height: number }>;
+  /** collapsed quiet stretches, rendered as labeled dividers (Day timeline). */
+  gaps?: { y: number; seconds: number }[];
+  /** ids that start while an earlier event is still running (Day timeline) — flagged "overlapping". */
+  overlaps?: Set<string>;
 }
 
 function LChip({ lv }: { lv: number }) {
@@ -25,7 +31,7 @@ function LChip({ lv }: { lv: number }) {
 /** One vertical timeline — absolute-positioned cards with a colored spine between
  *  consecutive events. Two layout modes: a shared time scale (Compare), or a
  *  reveal-weighted packed layout (Day timeline) where slots grow with altitude. */
-export default function VTimeline({ events, scale, posOf, packedHeight, getL, getCeil, derivLevel, onSelect, revealOf, byId }: Props) {
+export default function VTimeline({ events, scale, posOf, packedHeight, getL, getCeil, derivLevel, onSelect, revealOf, byId, spans, gaps, overlaps }: Props) {
   const reveal = revealOf ?? (() => 1);
   const sorted = [...events].sort((a, b) => a.epoch - b.epoch);
   if (!sorted.length) {
@@ -50,6 +56,8 @@ export default function VTimeline({ events, scale, posOf, packedHeight, getL, ge
     });
     height = Math.max(sc.h, last + ROW);
   }
+  // Draw top→down: dayScale places spans by their *start*, so y order ≠ epoch order.
+  placed.sort((a, b) => a.y - b.y);
 
   // how many direct contributors of `e` are currently collapsed (below altitude)
   const hiddenBeneath = (e: AwareEvent): number => {
@@ -62,11 +70,19 @@ export default function VTimeline({ events, scale, posOf, packedHeight, getL, ge
 
   return (
     <div className="vt" style={{ height }}>
+      {/* collapsed quiet stretches → a small labeled divider instead of a big blank */}
+      {gaps && gaps.map((g, i) => (
+        <div key={"gap-" + i} className="vt-gap" style={{ top: g.y }}>
+          <span>{humanDur(g.seconds)} quiet</span>
+        </div>
+      ))}
       {placed.filter((p) => reveal(p.e) > 0.04).map((a, i, vis) => {
         const b = vis[i + 1];
         if (!b) return null;
         // connect consecutive *visible* events, spanning across any collapsed ones between
-        // them, so the spine stays continuous through the zoom transition.
+        // them, so the spine stays continuous through the zoom transition. Skip it under
+        // interlocking capsules (the overlap tucks them together — no thread to show).
+        if (b.y - a.y < 24) return null;
         const op = Math.min(reveal(a.e), reveal(b.e));
         return (
           <div key={"line-" + a.e.id} className="vt-line"
@@ -78,17 +94,24 @@ export default function VTimeline({ events, scale, posOf, packedHeight, getL, ge
         const isDer = e.event_class === "derived";
         const r = reveal(e);
         const hidden = hiddenBeneath(e);
-        const iv = isSpan(e) ? intervalOf(e) : null;    // a span (e.g. car_trip) → show duration + range
+        const iv = isSpan(e) ? intervalOf(e) : null;    // a span (e.g. car_trip) → capsule + range
+        const box = spans?.get(e.id);                   // a duration capsule, sized ∝ how long it lasted
+        const timeLabel = iv ? fmtTime(new Date(iv.started_at * 1000)) : fmtTime(e.date);
         let meta: string;
         if (isDer) meta = `inferred · D${derivLevel(e)} · ${(e.message.derived_from || []).length} sources`;
         else meta = `signal${e.message.car ? " · " + e.message.car : e.message.device ? " · " + e.message.device : ""}`;
         return (
           <div key={e.id} className="vt-card" style={{ top: y, opacity: r, pointerEvents: r < 0.1 ? "none" : undefined }}>
-            <div className="vt-time">{fmtTime(e.date)}</div>
+            <div className="vt-time">{timeLabel}</div>
             <div className="vt-circ">
-              <div className="vt-circle" style={{ background: cat.c, transform: `scale(${0.82 + 0.18 * r})` }}><cat.Icon size={18} strokeWidth={2.25} /></div>
+              {box ? (
+                <div className="vt-capsule" style={{ background: cat.c, height: box.height }}><cat.Icon size={18} strokeWidth={2.25} /></div>
+              ) : (
+                <div className="vt-circle" style={{ background: cat.c, transform: `scale(${0.82 + 0.18 * r})` }}><cat.Icon size={18} strokeWidth={2.25} /></div>
+              )}
             </div>
             <button className="vt-body" onClick={() => onSelect(e)} tabIndex={r < 0.1 ? -1 : undefined}>
+              {overlaps?.has(e.id) && <div className="ev-overlap">⇅ overlapping</div>}
               {iv ? (
                 <div className="ev-meta"><span className="dur">{humanDur(iv.duration_seconds)}</span>{` · ${fmtTime(new Date(iv.started_at * 1000))}–${fmtTime(new Date(iv.ended_at * 1000))}`}</div>
               ) : (
