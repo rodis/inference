@@ -107,57 +107,65 @@ def test_session_end_without_start_does_not_fire(state, event):
 
 # --- session_gated_window -------------------------------------------------------
 
+# Mirrors got_out_the_car: carplay-disconnect (6) is the reliable single signal, lock (5)
+# is ambiguous/shared, power-disconnect (5) is noisy; gate_weight 4, threshold 10.
 def _gated(**over):
-    cfg = {"trigger": "close", "gate_event": "in", "max_open_seconds": 21600,
-           "window_seconds": 600, "support_threshold": 4,
-           "support_weights": {"carplay_off": 4, "power_off": 4}, "cooldown_seconds": 600}
+    cfg = {"gate_event": "in", "gate_weight": 4, "max_open_seconds": 21600,
+           "window_seconds": 600, "threshold": 10,
+           "weights": {"carplay_off": 6, "lock": 5, "power_off": 5}, "cooldown_seconds": 600}
     cfg.update(over)
     return SessionGatedWindowEngine(cfg)
 
 
-def test_gated_trigger_alone_fires_while_session_open(state, event):
-    # got in, then only the door-close reaches us (disconnect happened mid-drive, aged out) —
-    # the open session is enough to close the trip. This is the July-13 recovery.
+def test_gated_reliable_signal_plus_open_session_fires(state, event):
+    # got in, then only the CarPlay-disconnect reaches us (charger unplugged mid-drive) —
+    # the open session lets that reliable single signal close the trip. 6 + gate 4 = 10.
     eng = _gated()
     assert eng.decide(event("in", T, id="IN"), state) is None            # opens the gate
-    d = eng.decide(event("close", T + 800, id="C"), state)               # door alone, no support in window
-    assert d is not None and d.occurred_at == T + 800 and d.score == 1.0
-    assert {s["message"]["name"] for s in d.sources} == {"close"}        # gate is contextual, not lineage
+    d = eng.decide(event("carplay_off", T + 800, id="C"), state)
+    assert d is not None and d.occurred_at == T + 800 and d.score == 10
+    assert {s["message"]["name"] for s in d.sources} == {"carplay_off"}  # gate is contextual, not lineage
 
 
-def test_gated_trigger_alone_does_not_fire_without_session(state, event):
+def test_gated_two_raw_signals_fire_without_session(state, event):
+    # real arrival with no open trip: any two raw signals reach 10 on their own (6 + 5).
     eng = _gated()
-    assert eng.decide(event("close", T, id="C"), state) is None          # no open trip, no corroboration
+    eng.decide(event("carplay_off", T, id="C"), state)
+    d = eng.decide(event("lock", T + 10, id="L"), state)
+    assert d is not None and {s["message"]["name"] for s in d.sources} == {"carplay_off", "lock"}
 
 
-def test_gated_trigger_plus_support_fires_without_session(state, event):
-    # backward-compatible strict path: no open trip, but a disconnect corroborates the close.
+def test_gated_single_signal_without_session_does_not_fire(state, event):
     eng = _gated()
-    eng.decide(event("close", T, id="C"), state)
-    d = eng.decide(event("power_off", T + 10, id="P"), state)
-    assert d is not None and {s["message"]["name"] for s in d.sources} == {"close", "power_off"}
+    assert eng.decide(event("carplay_off", T, id="C"), state) is None    # 6 < 10, no corroboration
 
 
-def test_gated_disconnects_alone_never_fire(state, event):
-    # the trigger is necessary: two disconnects while in a trip must not end it without a door-close.
+def test_gated_ambiguous_lock_plus_session_does_not_fire(state, event):
+    # a lock-change right after entry (gate just opened) must NOT close the trip: 5 + 4 = 9.
     eng = _gated()
     eng.decide(event("in", T), state)
-    eng.decide(event("carplay_off", T + 10), state)
-    assert eng.decide(event("power_off", T + 20), state) is None
+    assert eng.decide(event("lock", T + 5), state) is None
 
 
-def test_gated_stale_session_falls_back_to_strict(state, event):
+def test_gated_noisy_power_plus_session_does_not_fire(state, event):
+    # a mid-drive charger unplug must NOT close the trip: 5 + 4 = 9.
+    eng = _gated()
+    eng.decide(event("in", T), state)
+    assert eng.decide(event("power_off", T + 300), state) is None
+
+
+def test_gated_stale_session_ignored(state, event):
     eng = _gated(max_open_seconds=100)
     eng.decide(event("in", T), state)
-    assert eng.decide(event("close", T + 500, id="C"), state) is None    # gate stale -> door alone insufficient
+    assert eng.decide(event("carplay_off", T + 500, id="C"), state) is None  # gate stale -> 6 < 10
 
 
 def test_gated_consumes_session_so_sequential_trips_dont_reuse_it(state, event):
     eng = _gated(cooldown_seconds=0)
     eng.decide(event("in", T), state)
-    assert eng.decide(event("close", T + 100), state) is not None        # trip 1 closes (gated)
-    # a second door-close with no new "in" must NOT fire on the consumed gate
-    assert eng.decide(event("close", T + 5000), state) is None
+    assert eng.decide(event("carplay_off", T + 100), state) is not None  # trip 1 closes (gated single)
+    # a second lone CarPlay-disconnect with no new "in" must NOT fire on the consumed gate
+    assert eng.decide(event("carplay_off", T + 5000), state) is None
 
 
 # --- geofence -------------------------------------------------------------------

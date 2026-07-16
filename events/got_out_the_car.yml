@@ -1,33 +1,33 @@
-# Recursive derivation (ADR 0002/0004): got_out_the_car derives from RAW signals
-# (device_disconnected_from_carplay / device_disconnected_from_power) + a DERIVED event
-# (car_door_closed). The derived contributor is fed back IN-PROCESS by the runtime's
-# router — NOT re-consumed from high_level_events — so the only external source is
-# raw_sensors. Still a DAG: nothing derives got_out_the_car, so the cascade terminates.
-# Mirror of got_into_the_car, on the disconnect signals (leaving the car).
+# Getting out of the car, derived directly from the 3 raw exit signals + a session gate
+# (ADR 0005). The old car_door_closed intermediate was dropped (same AND-gate fragility as
+# car_door_opened). This is a 2-of-3 over the raw exit signals, PLUS an open-trip gate:
+# got_into_the_car latches "a trip is in progress", and while open a single *reliable* exit
+# signal can close it (the start entails an end).
+#
+# Weights are tuned so the gate only trusts the reliable single signal:
+#   - device_disconnected_from_carplay (6): CarPlay tracks the car, so a disconnect is a
+#     trustworthy exit. 6 + gate(4) = 10 → a CarPlay-disconnect alone closes a known-open trip.
+#   - car_lock_state_change (5): direction-ambiguous and SHARED with got_into — 5 + gate(4) = 9,
+#     so a lock-change right after entry (gate just opened) can't false-close the trip.
+#   - device_disconnected_from_power (5): blips mid-drive when the phone comes off the charger —
+#     5 + gate(4) = 9, so a mid-drive unplug can't false-close either.
+# Any TWO raw signals still reach 10 with no gate (e.g. CarPlay-disconnect + lock = 11,
+# lock + power = 10), so a real arrival fires even when no session is open.
 name: got_out_the_car
 enabled: true
 
 engine: session_gated_window
 engine_config:
-  # car_door_closed is the REQUIRED trigger — no disconnect (or pair of them) can end a trip
-  # without it. got_into_the_car is the gate: while a trip is open, the door-close alone
-  # closes it, because we already know we're in the car (the start entails an end). When no
-  # trip is open the engine stays strict and needs a disconnect to corroborate.
-  #
-  # This fixes the arrival dependence on device_disconnected_from_power: it only fires if the
-  # phone was still on the wireless charger at arrival, which breaks when it's pulled off
-  # mid-drive (observed 2026-07-13: two trips never closed because the only disconnect_from_power
-  # happened minutes into the drive, aging out of the window). device_disconnected_from_carplay
-  # (CarPlay tracks the car) is the more robust corroborator for the no-open-trip case.
-  trigger: car_door_closed
   gate_event: got_into_the_car
+  gate_weight: 4
   max_open_seconds: 21600   # 6h — a trip open longer than this is stale (mirrors car_trip)
   window_seconds: 600
-  support_threshold: 4      # any one disconnect corroborates when no trip is open
-  support_weights:
-    device_disconnected_from_carplay: 4
-    device_disconnected_from_power: 4
+  threshold: 10
   cooldown_seconds: 600     # 10 min — fires at most once per trip
+  weights:
+    device_disconnected_from_carplay: 6
+    car_lock_state_change: 5
+    device_disconnected_from_power: 5
 
 source_topic: raw_sensors
 sink_topic: high_level_events

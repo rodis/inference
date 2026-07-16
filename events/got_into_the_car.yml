@@ -1,20 +1,23 @@
-# Recursive derivation (ADR 0002/0004): got_into_the_car derives from a RAW event
-# (device_connected_to_power) + a DERIVED event (car_door_opened). The derived
-# contributor is fed back IN-PROCESS by the runtime's router — NOT re-consumed from
-# high_level_events — so the only external source is raw_sensors. Still a DAG:
-# nothing derives got_into_the_car, so the cascade terminates.
+# Getting into the car, derived directly from the 3 raw entry signals (ADR 0005). The old
+# car_door_opened intermediate was dropped: it hard-required car_lock_state_change AND a
+# CarPlay-connect (an AND gate), so a missing lock-change killed the whole chain — observed
+# 2026-07-16, when entry fired CarPlay + power but no lock-change, so no trip formed.
+#
+# Now it's a 2-of-3 over the raw signals: any two agreeing fire it, so no single (flaky)
+# signal is mandatory. car_lock_state_change is direction-ambiguous and CarPlay/charger can
+# each be absent, but two of them together unambiguously mean "got in". A single signal, or
+# an exit (which carries the *disconnect* variants — not counted here), can't reach threshold.
 name: got_into_the_car
 enabled: true
 
 engine: weighted_window
 engine_config:
-  # car_door_opened + device_connected_to_power together mean: opened the door, sat
-  # in the driver seat, put the phone on the wireless charger. Equally important.
   threshold: 10
   window_seconds: 600
   cooldown_seconds: 600   # 10 min — fires at most once per trip
   weights:
-    car_door_opened: 5
+    device_connected_to_carplay: 5
+    car_lock_state_change: 5
     device_connected_to_power: 5
 
 source_topic: raw_sensors
