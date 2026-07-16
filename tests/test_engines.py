@@ -4,6 +4,7 @@ each engine now carries the FULL source event bodies on the Decision (not {id,ts
 from inference.engines.decaying_window import DecayingWindowEngine
 from inference.engines.geofence import GeofenceEngine
 from inference.engines.naive_bayes_window import NaiveBayesWindowEngine
+from inference.engines.session_gated_window import SessionGatedWindowEngine
 from inference.engines.session_window import SessionWindowEngine
 from inference.engines.weighted_window import WeightedWindowEngine
 
@@ -102,6 +103,61 @@ def test_session_drops_stale_start(state, event):
 def test_session_end_without_start_does_not_fire(state, event):
     eng = SessionWindowEngine({"start_event": "in", "end_event": "out"})
     assert eng.decide(event("out", 1000), state) is None
+
+
+# --- session_gated_window -------------------------------------------------------
+
+def _gated(**over):
+    cfg = {"trigger": "close", "gate_event": "in", "max_open_seconds": 21600,
+           "window_seconds": 600, "support_threshold": 4,
+           "support_weights": {"carplay_off": 4, "power_off": 4}, "cooldown_seconds": 600}
+    cfg.update(over)
+    return SessionGatedWindowEngine(cfg)
+
+
+def test_gated_trigger_alone_fires_while_session_open(state, event):
+    # got in, then only the door-close reaches us (disconnect happened mid-drive, aged out) —
+    # the open session is enough to close the trip. This is the July-13 recovery.
+    eng = _gated()
+    assert eng.decide(event("in", T, id="IN"), state) is None            # opens the gate
+    d = eng.decide(event("close", T + 800, id="C"), state)               # door alone, no support in window
+    assert d is not None and d.occurred_at == T + 800 and d.score == 1.0
+    assert {s["message"]["name"] for s in d.sources} == {"close"}        # gate is contextual, not lineage
+
+
+def test_gated_trigger_alone_does_not_fire_without_session(state, event):
+    eng = _gated()
+    assert eng.decide(event("close", T, id="C"), state) is None          # no open trip, no corroboration
+
+
+def test_gated_trigger_plus_support_fires_without_session(state, event):
+    # backward-compatible strict path: no open trip, but a disconnect corroborates the close.
+    eng = _gated()
+    eng.decide(event("close", T, id="C"), state)
+    d = eng.decide(event("power_off", T + 10, id="P"), state)
+    assert d is not None and {s["message"]["name"] for s in d.sources} == {"close", "power_off"}
+
+
+def test_gated_disconnects_alone_never_fire(state, event):
+    # the trigger is necessary: two disconnects while in a trip must not end it without a door-close.
+    eng = _gated()
+    eng.decide(event("in", T), state)
+    eng.decide(event("carplay_off", T + 10), state)
+    assert eng.decide(event("power_off", T + 20), state) is None
+
+
+def test_gated_stale_session_falls_back_to_strict(state, event):
+    eng = _gated(max_open_seconds=100)
+    eng.decide(event("in", T), state)
+    assert eng.decide(event("close", T + 500, id="C"), state) is None    # gate stale -> door alone insufficient
+
+
+def test_gated_consumes_session_so_sequential_trips_dont_reuse_it(state, event):
+    eng = _gated(cooldown_seconds=0)
+    eng.decide(event("in", T), state)
+    assert eng.decide(event("close", T + 100), state) is not None        # trip 1 closes (gated)
+    # a second door-close with no new "in" must NOT fire on the consumed gate
+    assert eng.decide(event("close", T + 5000), state) is None
 
 
 # --- geofence -------------------------------------------------------------------

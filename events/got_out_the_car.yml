@@ -1,22 +1,33 @@
-# Recursive derivation (ADR 0002/0004): got_out_the_car derives from a RAW event
-# (device_disconnected_from_power) + a DERIVED event (car_door_closed). The derived
-# contributor is fed back IN-PROCESS by the runtime's router — NOT re-consumed from
-# high_level_events — so the only external source is raw_sensors. Still a DAG:
-# nothing derives got_out_the_car, so the cascade terminates.
+# Recursive derivation (ADR 0002/0004): got_out_the_car derives from RAW signals
+# (device_disconnected_from_carplay / device_disconnected_from_power) + a DERIVED event
+# (car_door_closed). The derived contributor is fed back IN-PROCESS by the runtime's
+# router — NOT re-consumed from high_level_events — so the only external source is
+# raw_sensors. Still a DAG: nothing derives got_out_the_car, so the cascade terminates.
 # Mirror of got_into_the_car, on the disconnect signals (leaving the car).
 name: got_out_the_car
 enabled: true
 
-engine: weighted_window
+engine: session_gated_window
 engine_config:
-  # car_door_closed + device_disconnected_from_power together mean: took the phone off
-  # the wireless charger, got out, closed the door. Equally important.
-  threshold: 10
+  # car_door_closed is the REQUIRED trigger — no disconnect (or pair of them) can end a trip
+  # without it. got_into_the_car is the gate: while a trip is open, the door-close alone
+  # closes it, because we already know we're in the car (the start entails an end). When no
+  # trip is open the engine stays strict and needs a disconnect to corroborate.
+  #
+  # This fixes the arrival dependence on device_disconnected_from_power: it only fires if the
+  # phone was still on the wireless charger at arrival, which breaks when it's pulled off
+  # mid-drive (observed 2026-07-13: two trips never closed because the only disconnect_from_power
+  # happened minutes into the drive, aging out of the window). device_disconnected_from_carplay
+  # (CarPlay tracks the car) is the more robust corroborator for the no-open-trip case.
+  trigger: car_door_closed
+  gate_event: got_into_the_car
+  max_open_seconds: 21600   # 6h — a trip open longer than this is stale (mirrors car_trip)
   window_seconds: 600
-  cooldown_seconds: 600   # 10 min — fires at most once per trip
-  weights:
-    car_door_closed: 5
-    device_disconnected_from_power: 5
+  support_threshold: 4      # any one disconnect corroborates when no trip is open
+  support_weights:
+    device_disconnected_from_carplay: 4
+    device_disconnected_from_power: 4
+  cooldown_seconds: 600     # 10 min — fires at most once per trip
 
 source_topic: raw_sensors
 sink_topic: high_level_events
