@@ -45,34 +45,23 @@ def test_real_definitions_build_a_valid_plan():
     assert "high_level_events" in plan.sink_topics
 
 
-def test_real_gym_visit_pairs_owntracks_zone_events(event, state):
-    """The OwnTracks Vector lane emits entered_gym / left_gym (slugified from the "Gym"
-    waypoint desc); the real gym_visit def must consume exactly those names. This guards
-    the ingest-slug <-> def-name contract that spans two components (Vector VRL + YAML)."""
-    defs = load_definitions(REPO_ROOT / "events")
-    router = Router(RoutingPlan.from_definitions(defs))
-    assert router.route(event("entered_gym", 1000, id="S"), state) == []   # open the session
-    out = router.route(event("left_gym", 4600, id="E"), state)
-    gym = [i for i in out if i["message"]["name"] == "gym_visit"]
-    assert len(gym) == 1 and len(gym[0]["sources"]) == 2
-
-
 # --- regions -> geofence definitions --------------------------------------------
 
 def test_region_rows_expand_to_geofence_definitions():
-    rows = [{"user_id": "rods", "name": "Gym", "lat": 47.2, "lon": 8.5, "radius_m": 150}]
+    rows = [{"user_id": "rods", "name": "Home", "lat": 47.2, "lon": 8.5, "radius_m": 150}]
     defs = region_definitions(rows)
-    assert [d.name for d in defs] == ["entered_gym", "left_gym"]
+    assert [d.name for d in defs] == ["entered_home", "left_home"]
     assert all(d.engine == "geofence" and d.source_topic == "raw_sensors" for d in defs)
     assert defs[0].engine_config["direction"] == "enter"
     assert defs[0].engine_config["owner"] == "rods"
 
 
-def test_location_stream_cascades_through_geofence_to_gym_visit(event, state):
-    """Full server-side path in-memory: a location stream crosses a Neon-defined region,
-    the geofence engine emits entered_gym/left_gym, and the real gym_visit session pairs
-    them — proving regions + existing defs compose via in-process recursion, no phone."""
-    rows = [{"user_id": "rods", "name": "Gym", "lat": 47.2069, "lon": 8.5748, "radius_m": 150}]
+def test_location_stream_cascades_through_geofence(event, state):
+    """Server-side path in-memory: a location stream crosses a Neon-defined region and the
+    geofence engine emits entered_/left_ transitions — proving regions compose into the plan
+    and fire via in-process recursion, no phone. (Downstream, arrived_home_by_car /
+    left_home_by_car pair these with car activity; here we assert the transitions themselves.)"""
+    rows = [{"user_id": "rods", "name": "Home", "lat": 47.2069, "lon": 8.5748, "radius_m": 150}]
     defs = load_definitions(REPO_ROOT / "events") + region_definitions(rows)
     router = Router(RoutingPlan.from_definitions(defs))
 
@@ -81,10 +70,9 @@ def test_location_stream_cascades_through_geofence_to_gym_visit(event, state):
 
     router.route(ping(1000, 47.30, 8.70), state)                       # outside — establishes state
     entered = router.route(ping(2000, 47.2069, 8.5748), state)         # cross in
-    assert "entered_gym" in {i["message"]["name"] for i in entered}
+    assert "entered_home" in {i["message"]["name"] for i in entered}
     out = router.route(ping(5000, 47.30, 8.70), state)                 # cross out
-    names = {i["message"]["name"] for i in out}
-    assert "left_gym" in names and "gym_visit" in names                # visit fired via the cascade
+    assert "left_home" in {i["message"]["name"] for i in out}          # left transition fires
 
 
 # --- home-by-car derivations (geofence transitions + car activity) --------------

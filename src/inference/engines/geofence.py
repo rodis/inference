@@ -4,14 +4,14 @@ Turns a raw `location_ping` stream into region enter/leave events, moving geofen
 OFF the phone (where iOS region-monitoring config is fragile — it's wiped whenever the
 OwnTracks mode/endpoint changes) and onto the server, where regions are just data. The
 phone drops to a dumb sensor at the bottom of the abstraction ladder (it only reports
-lat/lon); "am I inside the gym?" is decided here.
+lat/lon); "am I inside this region?" is decided here.
 
 One definition per (region, direction): `entered_<slug>` fires on the outside->inside
 edge, `left_<slug>` on inside->outside. Each keeps its own per-entity `inside` flag in
 state and fires only on the transition, so a steady stream of pings inside a region
 emits exactly one `entered_*`. The fired events feed the windowed/session engines via
-the runtime's in-process recursion — e.g. `location_ping` -> `entered_gym` ->
-(session_window) `gym_visit` — so no engine downstream changes.
+the runtime's in-process recursion — e.g. `location_ping` -> `entered_home` ->
+(weighted_window) `arrived_home_by_car` — so no engine downstream changes.
 
 Region definitions come from Neon and are expanded into these definitions in the
 adapter (`inference.runtime.regions`); the engine itself only needs the geometry in its
@@ -19,7 +19,7 @@ adapter (`inference.runtime.regions`); the engine itself only needs the geometry
 
 Trade-off vs. native iOS geofencing (deliberate): a location *stream* is coarser than
 CLRegion monitoring — entry time is approximate and a brief in-and-out can be missed —
-but for dwell-based Experience events (a gym visit) that's fine. The `max_accuracy_m`
+but for dwell-based Experience events (a home arrival, a store visit) that's fine. The `max_accuracy_m`
 gate drops points too imprecise to trust; there is no dwell/hysteresis yet (a known
 limitation — jitter right on the boundary can still flap).
 """
@@ -52,7 +52,7 @@ class GeofenceEngine:
         if self.direction not in ("enter", "leave"):
             raise ValueError(f"geofence direction must be enter|leave, got {self.direction!r}")
         # the region owner: geofences are per-user, so a point only tests against its
-        # owner's regions (two users' "Gym" regions are different places).
+        # owner's regions (two users' "Home" regions are different places).
         self.owner = config.get("owner")
         # points less accurate than this can't be trusted to flip containment; default
         # to the region radius (a fix vaguer than the region tells us nothing about it).

@@ -83,7 +83,7 @@ cross-definition state coupling.
 
 - **Positive:** the two lost 2026-07-13 trips now close on `car_door_closed` alone (gated path),
   independent of charger timing — re-verified against the recorded events. Generalises to any
-  start→end derivation (future coffee-shop / gym / parked sessions get more robust ends for free).
+  start→end derivation (future coffee-shop / parked sessions get more robust ends for free).
 - **Guardrail preserved:** `car_door_closed` stays necessary, so a stray mid-trip disconnect (or
   pair of them) can't split a trip.
 - **Negative / watch:** if a genuine mid-trip `car_door_closed` can occur (locking the car at a

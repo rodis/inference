@@ -21,7 +21,7 @@ from inference.runtime.definition import EventDefinition
 logger = logging.getLogger("inference.regions")
 
 # Slug rule must match the OwnTracks Vector lane (owntracks_to_canonical) so a region
-# named "Gym" yields entered_gym/left_gym either way: lowercase, non-alnum runs -> "_",
+# named "Home" yields entered_home/left_home either way: lowercase, non-alnum runs -> "_",
 # trim edge underscores.
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
