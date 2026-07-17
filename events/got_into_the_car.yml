@@ -3,22 +3,34 @@
 # CarPlay-connect (an AND gate), so a missing lock-change killed the whole chain — observed
 # 2026-07-16, when entry fired CarPlay + power but no lock-change, so no trip formed.
 #
-# Now it's a 2-of-3 over the raw signals: any two agreeing fire it, so no single (flaky)
-# signal is mandatory. car_lock_state_change is direction-ambiguous and CarPlay/charger can
-# each be absent, but two of them together unambiguously mean "got in". A single signal, or
-# an exit (which carries the *disconnect* variants — not counted here), can't reach threshold.
+# Charger-anchored weights (asymmetric, mirroring got_out's tuning — ADR 0005). The three
+# signals are NOT equally trustworthy as an entry cue: device_connected_to_power (the phone
+# going on the wireless charger) is the reliable "settled in to drive" signal, while CarPlay
+# and the direction-ambiguous lock each flap. So power is the anchor (6) and the other two are
+# corroborators (5 each), threshold 11:
+#   - power + CarPlay      = 11 → fires   (the 2026-07-16 case: entry with no lock-change)
+#   - power + lock         = 11 → fires   (entry with the charger, CarPlay absent/late)
+#   - CarPlay + lock (only)= 10 → NO fire (blocks the park-and-settle CarPlay flap)
+#   - all three            = 16 → fires
+# The CarPlay+lock guard is what fixed the 2026-07-17 phantom: while parking, CarPlay bounces
+# connect/disconnect several times with a stale entry-unlock still in the window; a 2-of-3 with
+# equal weights (the previous 5/5/5, threshold 10) fired got_into on that transient pair, minting
+# an ~8s phantom trip whose got_into then cooldown-swallowed the real trip's got_into. Requiring
+# the charger for entry defers got_into to the moment you actually settle in (charger connects),
+# not the first CarPlay flicker. A single signal, or an exit (which carries the *disconnect*
+# variants — not counted here), still can't reach threshold.
 name: got_into_the_car
 enabled: true
 
 engine: weighted_window
 engine_config:
-  threshold: 10
+  threshold: 11
   window_seconds: 600
   cooldown_seconds: 600   # 10 min — fires at most once per trip
   weights:
-    device_connected_to_carplay: 5
-    car_lock_state_change: 5
-    device_connected_to_power: 5
+    device_connected_to_power: 6    # anchor: the reliable "settled in to drive" signal
+    device_connected_to_carplay: 5  # corroborator (flaps while parking)
+    car_lock_state_change: 5        # corroborator (direction-ambiguous)
 
 source_topic: raw_sensors
 sink_topic: high_level_events

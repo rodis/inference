@@ -13,6 +13,21 @@ Date: 2026-07-14 (revised 2026-07-17)
 > `car_door_*` layer itself was the fragility, so this revision removes it and reworks the gate
 > from a required trigger to a *latched bonus weight*. The history is kept below for the reasoning.
 
+> **Revision 2026-07-17 (charger anchor).** `got_into_the_car` originally used equal weights
+> (5/5/5, threshold 10) — a plain 2-of-3. The park-and-settle **CarPlay flap** (CarPlay bounces
+> connect/disconnect several times while parking, with a stale entry-unlock still in the window)
+> fired it on the transient CarPlay+lock pair, minting an ~8s **phantom trip** whose `got_into`
+> then **cooldown-swallowed the real trip's `got_into`**, so the genuine arrival never formed a
+> `car_trip`. Fix: weight the wireless charger as the **anchor** (`device_connected_to_power` 6,
+> CarPlay/lock 5 each, threshold 11) so entry requires the charger — the reliable "settled in to
+> drive" signal — plus one corroborator; CarPlay+lock alone (10 < 11) no longer opens a trip.
+> Trade-off: `got_into` is no longer tolerant of a *missing charger* (a trip where the phone never
+> goes on the charger won't open) — acceptable because the charger is used on every observed trip,
+> and it's the whole disambiguator between settling in to drive and a CarPlay flicker. Verified
+> in-memory by replaying the 2026-07-17 raw stream: the phantom is gone and the real arrival trip
+> forms. `got_out` is unchanged — during the flap it may still emit a stray exit with no open
+> session (harmless: no `car_trip` forms, and its cooldown clears before the real arrival).
+
 ---
 
 ## Context
@@ -48,10 +63,13 @@ ignored.
 **Remove `car_door_opened` and `car_door_closed`.** Derive both `got_*` directly from the three
 raw signals, so no single flaky signal is mandatory:
 
-- **`got_into_the_car`** — `weighted_window`, **2-of-3** over `device_connected_to_carplay`,
-  `car_lock_state_change`, `device_connected_to_power` (weights 5/5/5, threshold 10). Any two
-  agreeing fire it; a single signal, or an exit (which carries the *disconnect* variants, not
-  counted here), can't reach threshold.
+- **`got_into_the_car`** — `weighted_window`, **charger-anchored** over the three raw entry
+  signals: `device_connected_to_power` (6, the anchor), `device_connected_to_carplay` (5),
+  `car_lock_state_change` (5); threshold 11. Any pair *including the charger* fires (power+CarPlay
+  — the 2026-07-16 no-lock case; power+lock); the two flap-prone signals alone (CarPlay+lock = 10)
+  do not (see the charger-anchor revision above). A single signal, or an exit (which carries the
+  *disconnect* variants, not counted here), can't reach threshold. (Originally 5/5/5 threshold 10;
+  retuned after the 2026-07-17 CarPlay-flap phantom trip.)
 
 - **`got_out_the_car`** — `session_gated_window`: a 2-of-3 over the raw *exit* signals **plus a
   latched open-trip gate**. `got_into_the_car` opens the gate; while open it adds `gate_weight` to
