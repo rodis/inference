@@ -1,0 +1,47 @@
+type: remap
+inputs:
+  - http_server_data_in
+# Parse the ingest URL — and ONLY the URL. Every producer POSTs to the unified
+# grammar /<domain>/<app>/...; this is the single place that grammar is decoded into
+# the two nested routing levels:
+#   .event_domain (1st segment) — FIRST level, the KIND of data. route_by_domain keys
+#                                 off it to pick the destination topic; every app in a
+#                                 domain shares it (sensors -> raw_sensors).
+#   .source_app   (2nd segment) — SECOND level, the PRODUCER within a domain. That
+#                                 domain's route_by_app keys off it to pick the body
+#                                 adapter (owntracks vs the standard payload).
+# The Kafka topic is NOT taken from the URL — each domain has its own static-topic sink,
+# so producers can't steer traffic to arbitrary topics (no dynamic topics).
+# Payload validation/shaping is a per-source concern and lives downstream, after
+# route_by_app has picked the adapter — so a source with a non-standard body (e.g.
+# OwnTracks' bare _type object) can be routed on its parsed .source_app instead of
+# a raw path-string match.
+source: |
+  # 1. Path parsing
+  path_str = to_string!(.path)
+  clean_path = strip_whitespace(path_str)
+
+  # Initialize path_parts as an empty array to satisfy the compiler
+  .path_parts = []
+
+  if length(clean_path) > 1 {
+      .path_parts = split(slice!(clean_path, 1), "/")
+  }
+
+  # 2. Strict domain & app validation
+  # We use ?? null to handle the "fallible" nature of the get function
+  domain = get(.path_parts, [0]) ?? null
+  app = get(.path_parts, [1]) ?? null
+
+  if domain == null || domain == "" {
+      log("Rejected: Missing event domain in URL path", level: "error")
+      abort
+  }
+
+  if app == null || app == "" {
+      log("Rejected: Missing source app in URL path", level: "error")
+      abort
+  }
+
+  .event_domain = domain
+  .source_app = app

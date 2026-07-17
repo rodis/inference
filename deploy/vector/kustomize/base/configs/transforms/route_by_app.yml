@@ -1,0 +1,16 @@
+type: route
+inputs:
+  - route_by_domain.sensors
+# SECOND-level routing, nested inside the sensors domain (consumes route_by_domain.sensors,
+# so it only ever sees sensors traffic). Keyed on the parsed .source_app (2nd URL segment)
+# to pick the body adapter — how to shape THIS producer's payload into canonical form:
+#   owntracks -> owntracks_to_canonical (bare _type body)
+#   standard  -> shape_sensor           ({"payload":...} + event_name contract)
+# `standard` = any sensors-domain app that isn't owntracks; it's safe to catch-all here
+# precisely because domain routing already fenced off non-sensors traffic upstream.
+#
+# A future domain gets its OWN second-level app router (e.g. calendar's apps), so each
+# domain's adapters only see their own traffic.
+route:
+  owntracks: .source_app == "owntracks"
+  standard: .source_app != "owntracks"

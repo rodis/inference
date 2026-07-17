@@ -1,0 +1,40 @@
+type: remap
+inputs:
+  - route_by_app.standard
+# Validate + shape the STANDARD sensor payload (the {"payload":{...}} + event_name
+# contract). Path parsing already happened upstream (parse_path); this transform only
+# touches the body. Runs post-routing, so it can freely abort on a non-standard shape
+# without affecting other sources — OwnTracks took the sibling route.
+source: |
+  # 1. Payload to message swap
+  if exists(.payload) {
+      .message = del(.payload)
+  }
+
+  # 2. Message standardization
+  if .message == null || .message == "" {
+      .message = {}
+  } else {
+      .message = parse_json(.message) ?? .message
+  }
+
+  # 3. Strict event name validation. Producers still POST `event_name`; we rename it
+  # to the internal field `name` here so every component + the Neon column uses `name`.
+  if !is_object(.message) || !exists(.message.event_name) {
+      log("Rejected: Missing event_name in payload from app: " + to_string(.source_app) ?? "unknown", level: "error")
+      abort
+  }
+  .message.name = del(.message.event_name)
+
+  # 4. Strict user_id validation — the inference runtime keys per-user state on
+  # message.user_id (ADR 0004). Reject events without it rather than guessing an
+  # entity: a missing user_id means the producer is misconfigured. (Note: the
+  # http_server source already returned 200 on receipt, so this rejection shows up
+  # as a Vector error log + a dropped event, not a 4xx to the caller.)
+  if !exists(.message.user_id) {
+      log("Rejected: Missing user_id in payload from app: " + (to_string(.source_app) ?? "unknown") + " event: " + (to_string(.message.name) ?? "unknown"), level: "error")
+      abort
+  }
+
+  # Mirror name to the root (top-level wrapper field + Neon `name` column)
+  .name = .message.name

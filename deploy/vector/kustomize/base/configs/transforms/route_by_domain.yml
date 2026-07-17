@@ -1,5 +1,15 @@
 type: route
 inputs:
-  - classify_domain
+  - parse_path
+# FIRST-level routing, keyed on the parsed .event_domain (1st URL segment). The domain
+# is the KIND of data and picks the destination TOPIC: every app inside a domain shares
+# that domain's topic (sensors -> raw_sensors; a future calendar -> raw_calendar). Each
+# domain route feeds its own second-level app router + adapters + sink subtree.
+#
+# Adding a domain is a deliberate, whitelisted act (no dynamic topics): add a route here
+# + its own subtree ending in a static-topic sink. `sensors` is the only domain today.
+#
+# Events whose domain matches no route fall to route_by_domain._unmatched and are
+# dropped (no sink) — a new domain publishes nothing until its subtree is wired.
 route:
-  sensor_traffic: .event_domain == "sensors"
+  sensors: .event_domain == "sensors"

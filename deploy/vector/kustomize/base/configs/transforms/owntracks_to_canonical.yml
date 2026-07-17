@@ -1,8 +1,10 @@
 type: remap
 inputs:
-  - route_ingest.owntracks
-# OwnTracks HTTP mode -> the canonical raw-event shape produced by classify_domain, so
-# it can join enrich_sensor (id minting) and reach the same raw_sensors Kafka sink.
+  - route_by_app.owntracks
+# OwnTracks HTTP mode -> the same canonical raw-event shape shape_sensor produces for
+# standard payloads, so it can join enrich_sensor (id minting) and reach the same
+# raw_sensors Kafka sink. This is the OwnTracks sibling of shape_sensor: both hang off
+# route_by_app, each owning its source's body quirks; neither touches the URL path.
 #
 # OwnTracks posts a BARE _type-tagged JSON object (owntracks.org/booklet/tech/http):
 # no {"payload":...} wrapper, no event_name, no user_id, and `tst` (unix SECONDS)
@@ -17,7 +19,7 @@ source: |
   otype = if raw_type == null { "" } else { to_string(raw_type) ?? "" }
 
   # Identity — from the X-Limit-U header (HTTP header case may vary; try both). Reject
-  # rather than guess, mirroring classify_domain's strict user_id policy.
+  # rather than guess, mirroring shape_sensor's strict user_id policy.
   uid = ."X-Limit-U"
   if uid == null { uid = ."x-limit-u" }
   if uid == null || uid == "" {
@@ -72,16 +74,16 @@ source: |
   msg.user_id = to_string!(uid)
   msg.timestamp = ts
 
-  # Rebuild the root as EXACTLY the canonical wrapper (classify_domain's output contract:
-  # {name, source_app, source_type, message} + the sink's kafka_topic). OwnTracks posts
-  # many extra top-level fields (alt, bs, cog, conn, inregions, p, topic, vac, ...);
-  # reconstructing — rather than del-ing a known list — drops them all and stays correct
-  # when OwnTracks adds fields. enrich_sensor then mints message.id; the aiven sink routes
-  # on kafka_topic (and strips it via except_fields).
+  # Rebuild the root as EXACTLY the canonical wrapper (shape_sensor's output contract:
+  # {name, source_app, source_type, message}). Domain routing already happened upstream
+  # (route_by_domain is first-level), so .event_domain no longer needs to survive here —
+  # dropping it in the rebuild is correct. OwnTracks posts many extra top-level fields
+  # (alt, bs, cog, conn, inregions, p, topic, vac, ...); reconstructing — rather than
+  # del-ing a known list — drops them all and stays correct when OwnTracks adds fields.
+  # enrich_sensor then mints message.id.
   . = {
       "name": ev_name,
       "source_app": "owntracks",
       "source_type": "http_server",
       "message": msg,
-      "kafka_topic": "raw_sensors",
   }

@@ -2,11 +2,13 @@ type: kafka
 inputs:
   - enrich_sensor
 bootstrap_servers: "kafka-13776261-aware.l.aivencloud.com:19583"
-topic: "{{ kafka_topic }}"
+# Fixed topic — the sensors-domain sink. Destination is chosen by the first-level
+# route_by_domain (not a URL segment), so producers can't steer traffic; a new domain
+# gets its own subtree ending in its own static-topic sink. enrich_sensor already
+# stripped the internal routing field, so the wrapper reaches Kafka clean.
+topic: raw_sensors
 encoding:
   codec: json
-  except_fields:
-    - kafka_topic
 # Flush the producer promptly even under low traffic. The default leaves the tail
 # message of a quiet period sitting; 100ms linger keeps delivery near-real-time.
 librdkafka_options:

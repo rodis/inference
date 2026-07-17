@@ -1,6 +1,6 @@
 type: remap
 inputs:
-  - route_by_domain.sensor_traffic
+  - shape_sensor                  # standard sensor payloads, validated + shaped
   - owntracks_to_canonical        # OwnTracks lane arrives pre-shaped; share id minting + kafka sink
 source: |
   # Normalize producer payload keys: some Shortcuts emit trailing/leading spaces
@@ -13,7 +13,10 @@ source: |
       .message = map_keys(object!(.message)) -> |key| { strip_whitespace(key) }
   }
 
-  # Cleanup
+  # Cleanup — drop the parse-only fields so only the canonical wrapper reaches the sink.
+  # .event_domain was internal routing state (route_by_domain already consumed it); note
+  # .source_app is NOT dropped — it's part of the {name, source_app, source_type, message}
+  # wrapper, even though route_by_app also routed on it.
   del(.path_parts)
   del(.path)
   del(.event_domain)
