@@ -1,9 +1,11 @@
 type: postgres
 inputs:
   - shape_for_neon
-# Neon (Postgres) connection string, injected from a K8s secret via envFrom.
-# Use the pooled endpoint with sslmode=require.
-endpoint: "${NEON_DATABASE_URL}"
+# Neon (Postgres) connection string, read via Vector's `directory` secret backend
+# (see the `secret.neon` block in vector.yaml + the volume mount in values.yml). Not
+# env interpolation: Vector 0.57 disabled ${VAR} by default. Use the pooled endpoint
+# with sslmode=require. The secret's NEON_DATABASE_URL file holds the full URL.
+endpoint: "SECRET[neon.NEON_DATABASE_URL]"
 table: events
 healthcheck:
   enabled: true

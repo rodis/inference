@@ -53,6 +53,9 @@ extraVolumes:
   - name: kafka-aiven-credentials
     secret:
       secretName: kafka-aiven-credentials-for-vector
+  - name: neon-credentials
+    secret:
+      secretName: neon-credentials-for-vector
 
 extraVolumeMounts:
   - name: vector-config
@@ -67,12 +70,17 @@ extraVolumeMounts:
   - name: kafka-aiven-credentials
     mountPath: "/etc/vector/certs"
     readOnly: true
+  # Neon creds as files for Vector's `directory` secret backend (vector.yaml secret.neon).
+  # Each key becomes a file, so .../neon/NEON_DATABASE_URL holds the connection string.
+  - name: neon-credentials
+    mountPath: "/etc/vector/secrets/neon"
+    readOnly: true
 
 envFrom:
   - secretRef:
       name: kafka-credentials-for-vector
-  - secretRef:
-      name: neon-credentials-for-vector   # must exist before deploy; provides NEON_DATABASE_URL
+  # neon-credentials-for-vector is no longer in envFrom: NEON_DATABASE_URL is read via
+  # the directory secret backend (mounted above), not ${VAR} interpolation (disabled in 0.57).
   
 args:
   - --config-dir

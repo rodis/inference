@@ -1,3 +1,15 @@
 api:
   enabled: true
   address: 0.0.0.0:8686
+
+# Secret backend (Vector 0.57+). Env-var interpolation (${VAR}) is disabled by default
+# since 0.57 for security, so the postgres sink reads NEON_DATABASE_URL via SECRET[...]
+# instead. The `directory` backend maps each secret name to a file in `path`: the K8s
+# secret neon-credentials-for-vector is mounted there (see values.yml), so the file
+# .../neon/NEON_DATABASE_URL holds the connection string. Referenced as
+# SECRET[neon.NEON_DATABASE_URL] in sensor_to_neon.yml.
+secret:
+  neon:
+    type: directory
+    path: /etc/vector/secrets/neon
+    remove_trailing_whitespace: true

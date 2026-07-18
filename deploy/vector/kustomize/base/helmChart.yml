@@ -5,5 +5,9 @@ metadata:
 name: vector
 releaseName: vector
 repo: https://helm.vector.dev
+# Pin the chart (appVersion 0.57.0). Unpinned, the generator pulled "latest" and
+# silently bumped Vector 0.56->0.57, whose disabled-by-default env-var interpolation
+# broke the ${NEON_DATABASE_URL} postgres endpoint. Version bumps are deliberate now.
+version: 0.57.0
 valuesFile: values.yml
 namespace: inference
