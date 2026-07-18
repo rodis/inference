@@ -97,9 +97,16 @@ export default function VTimeline({ events, scale, posOf, packedHeight, getL, ge
         const iv = isSpan(e) ? intervalOf(e) : null;    // a span (e.g. car_trip) → capsule + range
         const box = spans?.get(e.id);                   // a duration capsule, sized ∝ how long it lasted
         const timeLabel = iv ? fmtTime(new Date(iv.started_at * 1000)) : fmtTime(e.date);
-        let meta: string;
-        if (isDer) meta = `inferred · D${derivLevel(e)} · ${(e.message.derived_from || []).length} sources`;
-        else meta = `signal${e.message.car ? " · " + e.message.car : e.message.device ? " · " + e.message.device : ""}`;
+        // Line 1 carries the event's kind ("signal"/"inferred") next to the name, alongside
+        // the L/D chips; line 2 (ev-meta) carries the substantive detail only.
+        const kind = isDer ? "inferred" : "signal";
+        let detail: string;
+        if (isDer) {
+          const n = (e.message.derived_from || []).length;
+          detail = `${n} source${n === 1 ? "" : "s"}`;
+        } else {
+          detail = e.message.car || e.message.device || "";
+        }
         return (
           <div key={e.id} className="vt-card" style={{ top: y, opacity: r, pointerEvents: r < 0.1 ? "none" : undefined }}>
             <div className="vt-time">{timeLabel}</div>
@@ -112,18 +119,19 @@ export default function VTimeline({ events, scale, posOf, packedHeight, getL, ge
             </div>
             <button className="vt-body" onClick={() => onSelect(e)} tabIndex={r < 0.1 ? -1 : undefined}>
               {overlaps?.has(e.id) && <div className="ev-overlap">⇅ overlapping</div>}
-              <div className="ev-title">{labelOf(e)}</div>
-              <div className="ev-tags">
-                {iv ? (
-                  <span className="ev-meta"><span className="dur">{humanDur(iv.duration_seconds)}</span>{` · ${fmtTime(new Date(iv.started_at * 1000))}–${fmtTime(new Date(iv.ended_at * 1000))}`}</span>
-                ) : (
-                  <span className="ev-meta">{meta}</span>
-                )}
+              <div className="ev-head">
+                <span className="ev-title">{labelOf(e)}</span>
+                <span className="ev-kind">{kind}</span>
                 {hidden > 0 && <span className="rollup" title="detail collapsed beneath — descend or tap to expand">↓ {hidden} below</span>}
                 {ceil < home && <span className="liftflag">↑ L{ceil}</span>}
                 <LChip lv={home} />
                 <span className="dbadge">D{derivLevel(e)}</span>
               </div>
+              {iv ? (
+                <div className="ev-meta"><span className="dur">{humanDur(iv.duration_seconds)}</span>{` · ${fmtTime(new Date(iv.started_at * 1000))}–${fmtTime(new Date(iv.ended_at * 1000))}`}</div>
+              ) : detail ? (
+                <div className="ev-meta">{detail}</div>
+              ) : null}
             </button>
           </div>
         );
