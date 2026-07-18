@@ -112,13 +112,13 @@ export default function VTimeline({ events, scale, posOf, packedHeight, getL, ge
             </div>
             <button className="vt-body" onClick={() => onSelect(e)} tabIndex={r < 0.1 ? -1 : undefined}>
               {overlaps?.has(e.id) && <div className="ev-overlap">⇅ overlapping</div>}
-              {iv ? (
-                <div className="ev-meta"><span className="dur">{humanDur(iv.duration_seconds)}</span>{` · ${fmtTime(new Date(iv.started_at * 1000))}–${fmtTime(new Date(iv.ended_at * 1000))}`}</div>
-              ) : (
-                <div className="ev-meta">{meta}</div>
-              )}
               <div className="ev-title">{labelOf(e)}</div>
               <div className="ev-tags">
+                {iv ? (
+                  <span className="ev-meta"><span className="dur">{humanDur(iv.duration_seconds)}</span>{` · ${fmtTime(new Date(iv.started_at * 1000))}–${fmtTime(new Date(iv.ended_at * 1000))}`}</span>
+                ) : (
+                  <span className="ev-meta">{meta}</span>
+                )}
                 {hidden > 0 && <span className="rollup" title="detail collapsed beneath — descend or tap to expand">↓ {hidden} below</span>}
                 {ceil < home && <span className="liftflag">↑ L{ceil}</span>}
                 <LChip lv={home} />
