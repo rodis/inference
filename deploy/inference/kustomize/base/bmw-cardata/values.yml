@@ -37,6 +37,13 @@ deployment:
         configMapKeyRef:
           name: inference-worker-config
           key: VECTOR_BASE_URL
+    # Persist the rotating refresh token to Neon (restart-safety). Reuse the namespace's
+    # existing Neon secret (same one the runtime + vector use).
+    NEON_DATABASE_URL:
+      valueFrom:
+        secretKeyRef:
+          name: neon-credentials-for-vector
+          key: NEON_DATABASE_URL
     # TEMPORARY (drive-observation): log every raw stream message incl. unmapped
     # descriptors, to plan new derivations. Remove after the observation drive.
     BMW_DEBUG_LOG_ALL: "true"
