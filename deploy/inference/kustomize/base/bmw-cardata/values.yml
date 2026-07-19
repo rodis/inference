@@ -1,0 +1,41 @@
+deployment:
+  image:
+    repository: ghcr.io/rodis/inference-bmw-cardata
+    tag: "sha-bootstrap"   # placeholder; CI bumps this to sha-<short> on deploy-state
+    pullPolicy: IfNotPresent
+  env:
+    # BMW creds from the Doppler-synced secret (bmw-cardata-credentials).
+    BMW_CLIENT_ID:
+      valueFrom:
+        secretKeyRef:
+          name: bmw-cardata-credentials
+          key: BMW_CLIENT_ID
+    BMW_REFRESH_TOKEN:
+      valueFrom:
+        secretKeyRef:
+          name: bmw-cardata-credentials
+          key: BMW_REFRESH_TOKEN
+    BMW_VIN:
+      valueFrom:
+        secretKeyRef:
+          name: bmw-cardata-credentials
+          key: BMW_VIN
+    BMW_USER_ID:
+      valueFrom:
+        secretKeyRef:
+          name: bmw-cardata-credentials
+          key: BMW_USER_ID
+    # Same Vector public ingress the rest of the stack uses (POSTs to /sensors/bmw).
+    VECTOR_BASE_URL:
+      valueFrom:
+        configMapKeyRef:
+          name: inference-worker-config
+          key: VECTOR_BASE_URL
+  resources:
+    requests:
+      cpu: 25m
+      memory: 96Mi
+    limits:
+      # Tiny: one MQTT client + periodic HTTP POSTs. No state, no RocksDB.
+      cpu: 100m
+      memory: 192Mi

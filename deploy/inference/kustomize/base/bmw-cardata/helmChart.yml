@@ -1,0 +1,10 @@
+apiVersion: builtin
+kind: HelmChartInflationGenerator
+metadata:
+  name: bmw-cardata
+name: application
+releaseName: bmw-cardata
+version: 6.16.1
+repo: https://stakater.github.io/stakater-charts
+valuesFile: values.yml
+namespace: inference

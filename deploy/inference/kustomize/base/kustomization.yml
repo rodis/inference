@@ -2,4 +2,6 @@ resources:
   - namespace.yml
   - inference-worker-config.yml
   - kafka-ssl-credentials.yml
+  - bmw-cardata-credentials.yml
   - runtime
+  - bmw-cardata
