@@ -54,6 +54,11 @@ class Config:
     # MQTT password and lives ~3600s; refresh a few minutes early).
     refresh_margin_seconds: int
 
+    # Debug: log EVERY raw stream message (envelope + all descriptors + values + event
+    # timestamps), including descriptors the mapper doesn't map. For observing the full
+    # stream on a drive to plan new derivations. Off by default — noisy. Toggle via env.
+    debug_log_all: bool
+
     @classmethod
     def from_env(cls) -> "Config":
         return cls(
@@ -70,4 +75,5 @@ class Config:
             vector_base_url=_require("VECTOR_BASE_URL").rstrip("/"),
             ingest_path=_default("BMW_INGEST_PATH", "/sensors/bmw"),
             refresh_margin_seconds=int(_default("BMW_REFRESH_MARGIN_SECONDS", "300")),
+            debug_log_all=_default("BMW_DEBUG_LOG_ALL", "").lower() in ("1", "true", "yes"),
         )

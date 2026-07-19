@@ -90,5 +90,9 @@ class MqttSubscriber:
         except (ValueError, UnicodeDecodeError) as exc:
             log.error("undecodable mqtt payload on %s: %s", msg.topic, exc)
             return
+        if self._cfg.debug_log_all:
+            # Full-stream observation (env-gated): one line per message with the whole
+            # envelope + all descriptors/values/event-timestamps, incl. unmapped ones.
+            log.info("RAW-STREAM %s", raw)
         for event_name, ts, extra in self._mapper.process(raw):
             self._ingest.post(event_name, ts, extra)
