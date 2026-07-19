@@ -1,3 +1,9 @@
+# Distinct from the runtime release: the Stakater chart names all resources after
+# applicationName (default "application"), so without this both releases render a
+# Service/Deployment named "application" in this namespace and the kustomize build
+# collides ("already registered id: Service.v1/application.inference").
+applicationName: bmw-cardata
+
 deployment:
   image:
     repository: ghcr.io/rodis/inference-bmw-cardata
