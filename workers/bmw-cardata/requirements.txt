@@ -1,0 +1,5 @@
+# BMW CarData subscriber (ADR 0006). Deliberately standalone — this worker is pure
+# transport/auth and must NOT pull the inference package / quixstreams.
+paho-mqtt>=2,<3
+requests>=2.31
+python-dotenv>=1
