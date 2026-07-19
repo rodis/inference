@@ -37,6 +37,9 @@ deployment:
         configMapKeyRef:
           name: inference-worker-config
           key: VECTOR_BASE_URL
+    # TEMPORARY (drive-observation): log every raw stream message incl. unmapped
+    # descriptors, to plan new derivations. Remove after the observation drive.
+    BMW_DEBUG_LOG_ALL: "true"
   resources:
     requests:
       cpu: 25m
