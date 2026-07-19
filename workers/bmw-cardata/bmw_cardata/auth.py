@@ -25,14 +25,28 @@ class TokenError(RuntimeError):
 
 
 class TokenManager:
-    def __init__(self, client_id: str, refresh_token: str, token_url: str):
+    def __init__(self, client_id: str, refresh_token: str, token_url: str, store=None):
         self._client_id = client_id
-        self._refresh_token = refresh_token  # rotates on refresh — see refresh()
+        self._bootstrap_refresh_token = refresh_token  # from the Secret; may be stale
         self._token_url = token_url
+        self._store = store  # optional NeonTokenStore — survives restarts
+        self._refresh_token: str | None = None  # most-recent (in-memory), set on refresh
         self._id_token: str | None = None
         self._access_token: str | None = None
         self._gcid: str | None = None
         self._expires_at: float = 0.0
+
+    def _resolve_refresh_token(self) -> str:
+        """Most-recent in-memory token > persisted (store) > bootstrap (Secret)."""
+        if self._refresh_token:
+            return self._refresh_token
+        if self._store:
+            stored = self._store.load(self._client_id)
+            if stored:
+                log.info("using persisted refresh token from store")
+                return stored
+        log.info("using bootstrap refresh token (no persisted token yet)")
+        return self._bootstrap_refresh_token
 
     @property
     def id_token(self) -> str:
@@ -64,7 +78,7 @@ class TokenManager:
             data={
                 "client_id": self._client_id,
                 "grant_type": "refresh_token",
-                "refresh_token": self._refresh_token,
+                "refresh_token": self._resolve_refresh_token(),
             },
             timeout=30,
         )
@@ -89,7 +103,11 @@ class TokenManager:
         # rotated refresh token (write back to a Secret / mounted file). See README.
         new_refresh = body.get("refresh_token")
         if new_refresh and new_refresh != self._refresh_token:
-            log.warning("refresh_token rotated; using new value in-memory (NOT persisted — see README)")
             self._refresh_token = new_refresh
+            if self._store:
+                self._store.save(self._client_id, new_refresh, self._gcid)
+                log.info("refresh_token rotated; persisted to store")
+            else:
+                log.warning("refresh_token rotated; in-memory only (no store — restart will need re-auth)")
 
         log.info("token refreshed; gcid=%s id_token expires_in=%ss", self._gcid, expires_in)

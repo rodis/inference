@@ -3,3 +3,4 @@
 paho-mqtt>=2,<3
 requests>=2.31
 python-dotenv>=1
+psycopg[binary]>=3.1   # persist the rotating refresh token to Neon (restart-safety)

@@ -29,7 +29,11 @@ log = logging.getLogger("bmw_cardata")
 
 def run() -> None:
     cfg = Config.from_env()
-    token = TokenManager(cfg.client_id, cfg.refresh_token, cfg.token_url)
+    store = None
+    if cfg.neon_database_url:
+        from bmw_cardata.token_store import NeonTokenStore
+        store = NeonTokenStore(cfg.neon_database_url)
+    token = TokenManager(cfg.client_id, cfg.refresh_token, cfg.token_url, store=store)
     token.refresh()  # initial — fails fast if creds are bad / account pending activation
 
     ingest = Ingest(cfg.vector_base_url, cfg.ingest_path, cfg.user_id)

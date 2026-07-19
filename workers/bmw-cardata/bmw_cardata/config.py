@@ -50,6 +50,10 @@ class Config:
     vector_base_url: str
     ingest_path: str
 
+    # Optional Neon DSN for persisting the rotating refresh token across restarts
+    # (reuses the namespace's neon secret). None → in-memory only (restart needs re-auth).
+    neon_database_url: str | None
+
     # Seconds before id_token expiry to proactively refresh + reconnect (id_token is the
     # MQTT password and lives ~3600s; refresh a few minutes early).
     refresh_margin_seconds: int
@@ -76,4 +80,5 @@ class Config:
             ingest_path=_default("BMW_INGEST_PATH", "/sensors/bmw"),
             refresh_margin_seconds=int(_default("BMW_REFRESH_MARGIN_SECONDS", "300")),
             debug_log_all=_default("BMW_DEBUG_LOG_ALL", "").lower() in ("1", "true", "yes"),
+            neon_database_url=_default("NEON_DATABASE_URL", "") or None,
         )
