@@ -78,7 +78,16 @@ async def lifespan(app: FastAPI):
     # A small pooled connection set, opened once — cheaper than psycopg.connect() per
     # request now that several endpoints hit the DB. Sync pool is fine: endpoints run
     # in the threadpool.
-    app.state.pool = ConnectionPool(_db_url(), min_size=1, max_size=4, open=True)
+    #
+    # `check` validates (and transparently replaces) each connection on checkout. Neon
+    # scales the compute to zero when idle, which drops the server side of every pooled
+    # connection; without the check the pool would hand out a dead socket and the first
+    # request after any idle period would 500 (SSL connection closed unexpectedly) — the
+    # "reload is almost always 500" symptom. The check costs a tiny round-trip per request.
+    app.state.pool = ConnectionPool(
+        _db_url(), min_size=1, max_size=4, open=True,
+        check=ConnectionPool.check_connection,
+    )
     try:
         yield
     finally:
