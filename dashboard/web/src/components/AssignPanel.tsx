@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { ChevronRight } from "lucide-react";
 import type { AwareEvent } from "../types";
 import { catOf, GROUP_DEFS, groupKey, LCHIP, NLOG, typeLabel } from "../view";
 
@@ -54,21 +56,35 @@ export default function AssignPanel(props: Props) {
     (a, b) => derivLevel(sampleOf[b]) - derivLevel(sampleOf[a]) || a.localeCompare(b)
   );
 
+  // Per-group fold state so the panel stays bounded as more event types accrue: a group
+  // whose key is in the set is collapsed to its header. Default is expanded (nothing hidden
+  // by surprise); the user folds the categories they don't care about.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const toggle = (key: string) => setCollapsed((prev) => {
+    const next = new Set(prev);
+    next.has(key) ? next.delete(key) : next.add(key);
+    return next;
+  });
+
   return (
     <div className="assign-wrap">
       {GROUP_DEFS.map((g) => {
         const members = typeOrder.filter((n) => groupKey(n) === g.key);
         if (!members.length) return null;
+        const isCollapsed = collapsed.has(g.key);
         return (
-          <div className="agroup" key={g.key}>
-            <div className="agroup-head">
+          <div className={"agroup" + (isCollapsed ? " collapsed" : "")} key={g.key}>
+            <button type="button" className="agroup-head" aria-expanded={!isCollapsed} onClick={() => toggle(g.key)}>
+              <ChevronRight className="gchev" size={14} strokeWidth={2.5} />
               <span className="gi" style={{ background: g.color }}><g.Icon size={13} strokeWidth={2.25} /></span>
               <span className="gn">{g.label}</span>
               <span className="gc">{members.length}</span>
-            </div>
-            <div className="agroup-rows">
-              {members.map((n) => <ARow key={n} name={n} sampleOf={sampleOf} {...props} />)}
-            </div>
+            </button>
+            {!isCollapsed && (
+              <div className="agroup-rows">
+                {members.map((n) => <ARow key={n} name={n} sampleOf={sampleOf} {...props} />)}
+              </div>
+            )}
           </div>
         );
       })}
