@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useAware } from "../../app/useAware";
 import type { AwareEvent } from "../../types";
-import { absorbedIds, dayKey, dayScale } from "../../view";
+import { absorbedIds, dayKey, dayScale, humanDur } from "../../view";
 import VTimeline from "../../components/VTimeline";
 import WeekStrip from "../../components/WeekStrip";
 import AssignPanel from "../../components/AssignPanel";
@@ -16,7 +16,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
  *  while detail grows/collapses around it), plus a fixed +/- control for discoverability. */
 export default function TimelineDashboard() {
   const { prepared, getL, getCeil, onHome, onLift, status, eventsCount, userId, selectedDay } = useAware();
-  const { all, byId, raw, derived, derivLevel } = prepared;
+  const { all, byId, derivLevel } = prepared;
 
   const [altitude, setAltitude] = useState<number>(1); // 1 = headlines (high) … 4 = signals (ground)
   const [modalEvent, setModalEvent] = useState<AwareEvent | null>(null);
@@ -141,15 +141,13 @@ export default function TimelineDashboard() {
 
   const zoomStep = (d: number) => applyAltitude(Math.round(altitudeRef.current) + d, window.innerHeight / 2);
 
-  const summary = useMemo(() => {
-    if (!all.length) return null;
-    const epochs = all.map((e) => e.epoch);
-    const t0 = Math.min(...epochs), t1 = Math.max(...epochs);
-    const h = (t1 - t0) / 3600;
-    const span = h >= 1 ? `${h.toFixed(1)} h` : `${Math.round((t1 - t0) / 60)} min`;
-    const deepest = Math.max(...all.map((e) => derivLevel(e)));
-    return { signals: raw.length, inferences: derived.length, deepest, span };
-  }, [all, raw, derived, derivLevel]);
+  // High-level daily indicators for the selected day (not debug counts). Time in the car is
+  // the sum of the day's car_trip durations; spend is the sum of the day's card payments.
+  const daily = useMemo(() => {
+    const driveSec = dayAll.reduce((s, e) => (e.name === "car_trip" ? s + (e.message.interval?.duration_seconds ?? 0) : s), 0);
+    const spent = dayAll.reduce((s, e) => (e.name === "credit_card_payment" ? s + (Number(e.message.amount) || 0) : s), 0);
+    return { driveSec, spent };
+  }, [dayAll]);
 
   if (status) return <div className="statusline">{status}</div>;
 
@@ -167,14 +165,10 @@ export default function TimelineDashboard() {
 
       <WeekStrip />
 
-      {summary && (
-        <div className="summary">
-          <Pill v={summary.signals} k="signals" />
-          <Pill v={summary.inferences} k="inferences" accent />
-          <Pill v={"D" + summary.deepest} k="deepest" accent />
-          <Pill v={summary.span} k="span" />
-        </div>
-      )}
+      <div className="summary">
+        <Pill v={daily.driveSec ? humanDur(daily.driveSec) : "—"} k="in the car" accent />
+        <Pill v={daily.spent ? `CHF ${daily.spent.toFixed(2)}` : "—"} k="spent" accent />
+      </div>
 
       <div className="cols">
         <div className="col-main">
