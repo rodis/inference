@@ -57,9 +57,9 @@ export default function AssignPanel(props: Props) {
   );
 
   // Per-group fold state so the panel stays bounded as more event types accrue: a group
-  // whose key is in the set is collapsed to its header. Default is expanded (nothing hidden
-  // by surprise); the user folds the categories they don't care about.
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // whose key is in the set is collapsed to its header. Default is collapsed (all groups
+  // folded), so the panel opens compact and the user expands the categories they care about.
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(GROUP_DEFS.map((g) => g.key)));
   const toggle = (key: string) => setCollapsed((prev) => {
     const next = new Set(prev);
     next.has(key) ? next.delete(key) : next.add(key);
