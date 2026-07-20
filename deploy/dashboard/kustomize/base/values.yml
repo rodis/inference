@@ -2,12 +2,11 @@
 # A stateless web pod: serves the page + a read-only Neon API. No ingress yet (DNS
 # is added manually); reach it via the Service / port-forward for now.
 applicationName: aware-dashboard
-
 deployment:
   replicas: 1
   image:
     repository: ghcr.io/rodis/inference-dashboard
-    tag: "sha-bootstrap"   # placeholder; publish-images.yml bumps this to sha-<short> on deploy-state
+    tag: "sha-396047d" # placeholder; publish-images.yml bumps this to sha-<short> on deploy-state
     pullPolicy: IfNotPresent
   env:
     # Map Doppler's NEON_DATABASE_URL (dashboard-specific secret) to the DATABASE_URL
@@ -48,14 +47,12 @@ deployment:
     limits:
       cpu: 150m
       memory: 256Mi
-
 service:
   ports:
     - name: http
       port: 80
       targetPort: 8000
       protocol: TCP
-
 # Traefik runs as the `nginx` ingress controller in this cluster. cert-manager issues
 # the TLS cert (letsencrypt-prod) into aware-dashboard-tls once DNS for the host points
 # at the cluster (HTTP-01 challenge). Path backend defaults to this app's service on its

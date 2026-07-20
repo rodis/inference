@@ -1,7 +1,7 @@
 deployment:
   image:
     repository: ghcr.io/rodis/inference-runtime
-    tag: "sha-bootstrap"   # placeholder; CI bumps this to sha-<short> on deploy-state
+    tag: "sha-396047d" # placeholder; CI bumps this to sha-<short> on deploy-state
     pullPolicy: IfNotPresent
   env:
     # The Quix runtime needs only the Kafka bootstrap here; mTLS comes from the

@@ -3,11 +3,10 @@
 # Service/Deployment named "application" in this namespace and the kustomize build
 # collides ("already registered id: Service.v1/application.inference").
 applicationName: bmw-cardata
-
 deployment:
   image:
     repository: ghcr.io/rodis/inference-bmw-cardata
-    tag: "sha-bootstrap"   # placeholder; CI bumps this to sha-<short> on deploy-state
+    tag: "sha-396047d" # placeholder; CI bumps this to sha-<short> on deploy-state
     pullPolicy: IfNotPresent
   env:
     # BMW creds from the Doppler-synced secret (bmw-cardata-credentials).
