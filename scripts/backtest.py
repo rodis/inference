@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 """Backtest engine definitions against real signal history — see what a change does before deploying.
 
 Replays raw signals recorded in Neon through the *actual* transport-agnostic core
@@ -29,18 +28,15 @@ from __future__ import annotations
 
 import argparse
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import psycopg
 import yaml
 from dotenv import find_dotenv, load_dotenv
 
-if _p := find_dotenv(usecwd=True, raise_error_if_not_found=False):
-    load_dotenv(_p)
-
-from inference.runtime.core import RoutingPlan, Router  # noqa: E402
-from inference.runtime.definition import load_definitions  # noqa: E402
+from inference.runtime.core import Router, RoutingPlan
+from inference.runtime.definition import load_definitions
 
 
 class DictState:
@@ -112,7 +108,7 @@ def replay(defs, signals: list[dict]) -> list[tuple[str, int]]:
 
 
 def _fmt(ts: int) -> str:
-    return datetime.fromtimestamp(ts, timezone.utc).strftime("%m-%d %H:%M")
+    return datetime.fromtimestamp(ts, UTC).strftime("%m-%d %H:%M")
 
 
 def summarize(label: str, derived: list[tuple[str, int]], focus: str | None):
@@ -154,6 +150,8 @@ def diff(a: list[tuple[str, int]], b: list[tuple[str, int]], focus: str | None, 
 
 
 def main():
+    if _p := find_dotenv(usecwd=True, raise_error_if_not_found=False):
+        load_dotenv(_p)  # NEON_DATABASE_URL locally (workers/.env); env-provided in CI/K8s
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--days", type=int, default=14)
     ap.add_argument("--user", default="rods")
