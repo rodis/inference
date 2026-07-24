@@ -31,6 +31,11 @@ engine_config:
     device_connected_to_power: 6    # anchor: the reliable "settled in to drive" signal
     device_connected_to_carplay: 5  # corroborator (flaps while parking)
     car_lock_state_change: 5        # corroborator (direction-ambiguous)
+    # BMW car-native, phone-INDEPENDENT corroborator (ADR 0006). ~94% per-trip coverage once
+    # the CarData stream settled (33%→~94%, confirmed 2026-07-24 over ~30 trips). Motion/ignition
+    # never stream on this X1, so the door is the one true second source. Guards preserved:
+    # power+door=11 fires; door+carplay=10 and door+lock=10 stay < 11 (no new flap-fire path).
+    car_driver_door_opened: 5
 
 source_topic: raw_sensors
 sink_topic: high_level_events

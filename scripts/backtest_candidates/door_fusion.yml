@@ -1,0 +1,7 @@
+# Candidate: add car_driver_door_opened (BMW, independent, ~80% per-trip) as a corroborator.
+# ADR-0005 guards preserved: into carplay+lock=10<11 still no-fire (power+door=11 adds a path);
+# out door+gate=9<10 (no lone-fire), door+any-exit-signal >=10 fires.
+got_into_the_car:
+  weights: {device_connected_to_power: 6, device_connected_to_carplay: 5, car_lock_state_change: 5, car_driver_door_opened: 5}
+got_out_the_car:
+  weights: {device_disconnected_from_carplay: 6, car_lock_state_change: 5, device_disconnected_from_power: 5, car_driver_door_opened: 5}

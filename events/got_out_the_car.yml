@@ -28,6 +28,9 @@ engine_config:
     device_disconnected_from_carplay: 6
     car_lock_state_change: 5
     device_disconnected_from_power: 5
+    # BMW car-native, phone-INDEPENDENT corroborator (ADR 0006, ~94% per-trip). door+gate(4)=9 < 10
+    # so it can't false-close a just-opened session on its own; door + any real exit signal >= 10 fires.
+    car_driver_door_opened: 5
 
 source_topic: raw_sensors
 sink_topic: high_level_events

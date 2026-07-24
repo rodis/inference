@@ -1,7 +1,25 @@
 # ADR 0006 — Car-native trip signals (BMW CarData), fused via an HA-independent subscriber
 
-Status: **Proposed** — subscriber **scaffolded** ([`workers/bmw-cardata/`](../../workers/bmw-cardata/)); gated on BMW CarData account **activation** (device-flow blocked — see [[project-bmw-cardata-onboarding]]) + confirming the MQTT broker details (Integration Guide 3.3.2) and raw descriptor ids. Engine-side fusion (weight-map edits) not yet applied.
-Date: 2026-07-18 (scaffold 2026-07-19)
+Status: **Accepted — implemented, but scaled down by vehicle reality.** Subscriber deployed 24/7
+([`workers/bmw-cardata/`](../../workers/bmw-cardata/)); `car_driver_door_opened` fused into
+`got_into`/`got_out` as an independent corroborator. See the **Outcome** banner.
+Date: 2026-07-18 (scaffold 2026-07-19, deployed + tuned 2026-07-24)
+
+> **Outcome (2026-07-24), after live deployment on the target BMW X1 sDrive20i:**
+> The original plan — a car-native **`isMoving`/ignition anchor** — is **not achievable on this
+> vehicle**: over 6 days / ~30 trips with streaming enabled, `vehicle.isMoving` and the engine
+> descriptors **never streamed** (nor populated REST). This X1 emits *discrete state-change
+> batches* (doors, windows, lock, alarm, GPS snapshot, odometer) around wake/park — not continuous
+> motion telemetry. The end-anchor design below (motion-off + door, ignition-off) is therefore
+> moot. **What survived:** `car_driver_door_opened` — the one reliable, phone-**independent**
+> signal. Its coverage improved as the stream settled (33% → **~94%** per-trip, 07-21→24), so it's
+> added to both weight maps as a **corroborator** (weight 5, sub-threshold alone; ADR-0005 guards
+> preserved). Because it's non-directional (fires on entry *and* exit) it can't fire a trip alone —
+> it's insurance for a phone-signal miss, validated safe/neutral by a **backtest** over 21 days of
+> real history (`scripts/backtest.py`; car_trip 66→68, re-times a few multi-leg days, no regression).
+> The MQTT envelope, broker params (MQTT v3.1.1 / TLS 1.3 / `{gcid}/+`), the portal
+> **"Configure Stream"** per-descriptor gotcha, and the refresh-token-rotation → Neon-persistence
+> fix are all captured in [[project-bmw-cardata-onboarding]].
 
 > Builds on [`0005-session-gated-derivation.md`](0005-session-gated-derivation.md): the same
 > `got_into_the_car` (`weighted_window`) / `got_out_the_car` (`session_gated_window`) →
@@ -139,6 +157,24 @@ All subject to the 10-container-per-account cap.
 - **Single-brand / EU-only / subscription-dependent:** non-BMW cars and lapsed ConnectedDrive/SIM
   fall back to the phone signals — which is why fusion, not replacement.
 - **HA loses its BMW entities** (accepted 2026-07-18).
+
+## Scope: read-only telemetry (no actuation)
+
+BMW CarData is a **data-sharing** product — read-only. Its entire API surface is `GET`
+telemetry (`telematicData`, `basicData`, `chargingHistory`, `image`, `vehicles/mappings`, …)
+plus `POST`/`DELETE /customers/containers` to configure *which data you receive*. There are
+**no command endpoints** — no lock/unlock, no climate/preconditioning start, no remote engine
+start, no flash/honk, no door open. (The `lock`/`precondition`/`start` tokens in the spec are
+descriptor *names*, i.e. readable state, not actions.) Verified against
+`swagger-customer-api-v1.json` 2026-07-19.
+
+Remote **actions** live in a different, **unofficial** BMW API — ConnectedDrive / My BMW
+"Remote Services" (what `bimmer_connected` wraps), which is reverse-engineered and currently
+deprecated/unreliable. So car actuation is **out of scope** for this system: our pipeline
+consumes CarData as a sensor (read), and the actuation loop stays on the phone
+([[project-outbound-action-pushcut]]) — building car control on the fragile ConnectedDrive
+path (and the HA-in-the-loop dependency it reintroduces) is explicitly not pursued unless BMW
+ships an official remote-services API.
 
 ## Alternatives considered
 
