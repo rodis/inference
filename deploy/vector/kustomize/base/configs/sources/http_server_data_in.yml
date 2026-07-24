@@ -1,5 +1,15 @@
 type: http_server
 address: 0.0.0.0:80
+# ONE request body = ONE event, whatever whitespace it contains. Without this, `codec: json`
+# defaults to NEWLINE framing: a pretty-printed (multi-line) JSON body is split at each
+# newline, every fragment fails to parse, and the whole POST is rejected with **HTTP 400** —
+# verified locally against vector 0.57.0 (identical body: multi-line 400, single-line 200).
+# That default is a trap for any producer we don't control: Overland retries every non-2xx
+# forever, so a pretty-printing client would build an ever-growing queue that can never
+# drain. No producer sends newline-delimited multi-event bodies (Overland batches inside a
+# JSON *array*, which overland_to_canonical fans out), so bytes framing is strictly safer.
+framing:
+  method: bytes
 decoding:
   codec: json
 path: ""
