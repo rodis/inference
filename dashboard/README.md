@@ -18,10 +18,19 @@ each event's derivation lineage.
 
 ## Endpoints
 
-- `GET /` — the dashboard
-- `GET /api/events` — every `events` row, shaped for the page
-- `GET /api/levels` — contents of `logical_levels.json`
-- `GET /healthz` — liveness
+- `GET /` — the dashboard (SPA shell; unknown paths fall back to it for deep links)
+- `GET /api/users` — distinct `user_id`s in the `events` table (the selector)
+- `GET /api/events?user_id=…&days=N` — that user's events over the last `N` whole days
+  (UTC, default 7, max 90), oldest first, shaped for the page
+- `GET /api/preferences?user_id=…` / `PUT` — the logical-level/lift config (seed + overrides)
+- `GET /api/stream?user_id=…` — SSE seam for the deferred live view (heartbeat only)
+- `GET /healthz` — liveness (the one path exempt from auth)
+
+The `days` window is deliberate: the dashboards render **one day at a time** with a short day
+picker, so older history can't be displayed — serving it would mean a payload that grows with
+every event ever recorded (steeply, once a high-rate source like the movement tracker's location
+pings is in the mix). The window is the client's working set; `DAY_WINDOW` in `web/src/api.ts`
+is what the SPA asks for, and it sizes the day picker.
 
 **Read-only**: the dashboard only reads Neon; the inference runtime is the sole writer.
 

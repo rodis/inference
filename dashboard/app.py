@@ -3,7 +3,7 @@
 Serves the built single-page app (``web/dist``) and a handful of JSON endpoints:
 
   GET  /api/users               — distinct user_ids in the events table (the selector)
-  GET  /api/events?user_id=…    — every event for one user, shaped for the page
+  GET  /api/events?user_id=…&days=N — one user's events over a trailing N-day window
   GET  /api/preferences?user_id=… — that user's logical-level/lift config (seed + overrides)
   PUT  /api/preferences?user_id=… — persist that user's config (the one write path)
   GET  /api/stream?user_id=…    — SSE seam for the (deferred) live view; stubbed for now
@@ -39,7 +39,19 @@ SEED_PATH = HERE / "logical_levels.json"
 
 # one row per event, same shape the page expects (id, name, event_class, source_app,
 # occurred_epoch, message) — aggregated server-side into a single JSON array, scoped
-# to one user (the entity key the whole pipeline partitions on).
+# to one user (the entity key the whole pipeline partitions on) **and** to a trailing
+# window of whole days.
+#
+# The window is the point: the UI is day-based (it renders one day and offers a short
+# day picker), so history older than the window can't be displayed at all — fetching it
+# was pure waste that grew with every event ever recorded, and a high-rate source like
+# the movement tracker's location pings makes that growth steep. Bounding it here (not
+# by filtering in the browser) keeps the payload flat as history accrues.
+#
+# Whole *days*, not a rolling 24h*N, so the window lines up with the day the UI draws;
+# UTC, matching the client's day bucketing (`dayKey`). days=1 is today only. Rows with a
+# NULL occurred_at drop out — they have no place on a timeline anyway (they used to land
+# on 1970-01-01).
 EVENTS_SQL = """
 SELECT coalesce(json_agg(json_build_object(
     'id', id, 'name', name, 'event_class', event_class, 'source_app', source_app,
@@ -47,7 +59,14 @@ SELECT coalesce(json_agg(json_build_object(
   ) ORDER BY occurred_at), '[]'::json)
 FROM events
 WHERE user_id = %s
+  AND occurred_at >= (
+        date_trunc('day', now() AT TIME ZONE 'UTC') - make_interval(days => %s::int - 1)
+      ) AT TIME ZONE 'UTC'
 """
+
+# Fallback window when the client doesn't ask for one; the SPA passes its own (DAY_WINDOW
+# in web/src/api.ts) so the day picker and the fetch can't disagree.
+DEFAULT_DAYS = 7
 
 USERS_SQL = "SELECT user_id FROM events GROUP BY user_id ORDER BY user_id"
 
@@ -153,9 +172,14 @@ def users():
 
 
 @app.get("/api/events")
-def events(user_id: str = Query(...)):
+def events(user_id: str = Query(...), days: int = Query(DEFAULT_DAYS, ge=1, le=90)):
+    """One user's events over the last `days` whole days (UTC), oldest first.
+
+    `days` is what the client's day picker spans; the ceiling is a guard so a
+    hand-crafted URL can't ask for the whole table.
+    """
     with app.state.pool.connection() as conn, conn.cursor() as cur:
-        cur.execute(EVENTS_SQL, (user_id,))
+        cur.execute(EVENTS_SQL, (user_id, days))
         return JSONResponse(cur.fetchone()[0])
 
 

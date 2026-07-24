@@ -229,7 +229,8 @@ export function prepare(events: AwareEvent[]): Prepared {
     return memo[e.id];
   };
 
-  // Cap the day selector to the most recent week so it never grows unbounded.
-  const days = [...new Set(all.map((e) => dayKey(e.date)))].sort().slice(-7);
+  // Every day present in the loaded set. No cap needed here: the API already serves a
+  // trailing window (DAY_WINDOW in api.ts), so this list is bounded at the source.
+  const days = [...new Set(all.map((e) => dayKey(e.date)))].sort();
   return { all, byId, raw, derived, days, derivLevel };
 }

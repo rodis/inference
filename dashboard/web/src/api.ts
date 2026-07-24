@@ -11,8 +11,16 @@ export function fetchUsers(): Promise<string[]> {
   return getJSON<string[]>("/api/users");
 }
 
-export function fetchEvents(userId: string): Promise<AwareEvent[]> {
-  return getJSON<AwareEvent[]>(`/api/events?user_id=${encodeURIComponent(userId)}`);
+/** How many trailing days of history the app loads — and therefore how many days the
+ *  picker offers. The dashboards render one day at a time, so this is the whole working
+ *  set; the server does the windowing (`/api/events?days=`) so the payload stays flat as
+ *  history accrues instead of growing with every event ever recorded. */
+export const DAY_WINDOW = 7;
+
+export function fetchEvents(userId: string, days = DAY_WINDOW): Promise<AwareEvent[]> {
+  return getJSON<AwareEvent[]>(
+    `/api/events?user_id=${encodeURIComponent(userId)}&days=${days}`,
+  );
 }
 
 export function fetchPreferences(userId: string): Promise<Preferences> {

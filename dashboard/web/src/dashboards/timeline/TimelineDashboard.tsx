@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useAware } from "../../app/useAware";
+import { DAY_WINDOW } from "../../api";
 import type { AwareEvent } from "../../types";
 import { absorbedIds, dayKey, dayScale, humanDur } from "../../view";
 import VTimeline from "../../components/VTimeline";
@@ -196,7 +197,7 @@ export default function TimelineDashboard() {
       </div>
 
       <footer>
-        <b>Aware</b> — from the <b>events</b> table in Neon (Postgres): {eventsCount} events for <b>{userId}</b>.
+        <b>Aware</b> — from the <b>events</b> table in Neon (Postgres): {eventsCount} events for <b>{userId}</b> over the last {DAY_WINDOW} days.
         Raw signals come from iPhone Shortcuts via Vector → Kafka; inferences from the runtime, each with a <b>derivation lineage</b>.
         Zoom anchors on what you're looking at — headline inferences up high, raw signals down low. <b>Car trip</b> is synthesized when no real trip exists.
         Logical levels &amp; lifts are saved per user. Tap any event to trace how it was built.
