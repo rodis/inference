@@ -1,0 +1,118 @@
+type: remap
+inputs:
+  - route_by_app.overland
+# Overland (github.com/aaronpk/Overland-iOS) -> the same canonical raw-event shape the other
+# adapters produce, so it joins enrich_sensor (id minting) and reaches raw_sensors. Third
+# sibling under route_by_app, alongside owntracks_to_canonical and shape_sensor.
+#
+# WHY a second location app: OwnTracks is a REGION sensor — it reports on iOS CLRegion
+# crossings (~2 samples per crossing, ~100 pings/13d observed), which is far too sparse to
+# feed the server-side `geofence` engine or any dwell logic, and it mints place *semantics*
+# on the phone (the waypoint label becomes the event name). Overland is a MOVEMENT tracker:
+# a continuous batched point stream, so the phone stays a dumb lat/lon sensor and every
+# place decision moves server-side (regions-as-data in Neon). See doc/vector-pipeline.md.
+#
+# BATCH FAN-OUT: Overland POSTs {"locations": [GeoJSON Feature, ...]} (default 200 points,
+# configurable 50-1000) plus optional "current"/"trip" objects we ignore. `remap` emits one
+# event per element when the program assigns an ARRAY to the root `.` — so this transform
+# turns one POST into N canonical events, no lua transform needed.
+#
+# THE RESPONSE CONTRACT (phone-side setting, not ours): Overland requires the server to
+# reply exactly {"result":"ok"} or it keeps the batch and retries forever. Vector's
+# http_server returns a bare 200, so the app's **"Consider HTTP 2XX Successful"** setting
+# MUST be enabled — otherwise nothing is ever acked and the phone re-sends the queue.
+#
+# IDENTITY: Overland has no X-Limit-U equivalent; each point carries the in-app
+# `properties.device_id`. That IS our entity key, so set the app's Device ID to the user_id
+# (e.g. "rods"), mirroring the header convention. Reject rather than guess (as the other
+# adapters do), and reject per-POINT: one bad point can't drop a 200-point batch.
+source: |
+  locations = array(.locations) ?? []
+  if length(locations) == 0 {
+      log("Dropping Overland POST with no locations array", level: "warn")
+      abort
+  }
+
+  # One canonical wrapper per GeoJSON Feature; invalid points map to null and are filtered.
+  # Everything here uses `??` fallbacks rather than `!`: inside a closure an unhandled
+  # fallible call aborts the whole BATCH, and one bad point must not take the rest with it.
+  wrapped = map_values(locations) -> |loc| {
+      props = object(get(loc, ["properties"]) ?? {}) ?? {}
+      coords = array(get(loc, ["geometry", "coordinates"]) ?? []) ?? []
+
+      uid = to_string(get(props, ["device_id"]) ?? "") ?? ""
+      # GeoJSON order is [lon, lat] — NOT lat/lon.
+      lon = to_float(get(coords, [0]) ?? null) ?? null
+      lat = to_float(get(coords, [1]) ?? null) ?? null
+
+      # ISO-8601 with a numeric offset ("2015-10-01T08:00:00-0700"); %+ covers RFC-3339
+      # (Z, fractional seconds). message.timestamp is epoch SECONDS, as everywhere else.
+      raw_ts = to_string(get(props, ["timestamp"]) ?? "") ?? ""
+      parsed = parse_timestamp(raw_ts, "%Y-%m-%dT%H:%M:%S%z") ??
+               parse_timestamp(raw_ts, "%+") ?? null
+      ts = if parsed == null { 0 } else { to_unix_timestamp(parsed) ?? 0 }
+
+      # iOS reports -1 for an unavailable fix/speed; a negative accuracy is not a location.
+      # Every numeric here is coerced through `to_float(...) ?? <float>` so its type is
+      # float, never float|null — VRL rejects `<` on a nullable value (E100), and a branch
+      # that assigns a nullable keeps the union even after an `!= null` guard. `has_*`
+      # carries "the producer sent this field" so an absent one is omitted, not defaulted.
+      acc_raw = get(props, ["horizontal_accuracy"]) ?? null
+      has_acc = acc_raw != null
+      acc = 0.0
+      if has_acc { acc = to_float(acc_raw) ?? -1.0 }
+
+      speed_raw = get(props, ["speed"]) ?? null
+      speed = -1.0
+      if speed_raw != null { speed = to_float(speed_raw) ?? -1.0 }
+
+      if uid == "" || lat == null || lon == null || ts == 0 || acc < 0 {
+          null
+      } else {
+          msg = {
+              "name": "location_ping",
+              "user_id": uid,
+              "timestamp": ts,
+              "lat": lat,
+              "lon": lon,
+          }
+          if has_acc { msg.acc = acc }
+          # vel is km/h in the OwnTracks lane; iOS speed is m/s — convert so one field name
+          # keeps one meaning across producers. Negative = unavailable, so omit it.
+          if speed >= 0 {
+              msg.vel = round(speed * 3.6)
+          }
+          # battery_level is a 0..1 fraction here, 0..100 percent in the OwnTracks lane.
+          batt_raw = get(props, ["battery_level"]) ?? null
+          batt = -1.0
+          if batt_raw != null { batt = to_float(batt_raw) ?? -1.0 }
+          if batt >= 0 {
+              msg.batt = round(batt * 100)
+          }
+          # Overland-only extras, both genuinely useful downstream and cheap to carry:
+          #   motion — ["driving","walking","running","cycling","stationary"], the phone-native
+          #            movement signal this app was adopted for (a candidate trip anchor).
+          #   wifi   — connected SSID; a sharper presence signal than any radius.
+          motion = array(get(props, ["motion"]) ?? []) ?? []
+          if length(motion) > 0 { msg.motion = motion }
+          ssid = to_string(get(props, ["wifi"]) ?? "") ?? ""
+          if ssid != "" { msg.wifi = ssid }
+
+          {
+              "name": "location_ping",
+              "source_app": "overland",
+              "source_type": "http_server",
+              "message": msg,
+          }
+      }
+  }
+
+  kept = filter(wrapped) -> |_i, v| { v != null }
+  if length(kept) == 0 {
+      log("Dropping Overland batch: no usable points (missing device_id/coords/timestamp)", level: "warn")
+      abort
+  }
+
+  # Assigning an array to the root fans the batch out into one event per point; each then
+  # gets its own message.id from enrich_sensor.
+  . = kept

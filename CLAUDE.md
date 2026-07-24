@@ -99,6 +99,10 @@ uv run pytest                # tests/ exercise the import-clean core in-memory (
 NEON_DATABASE_URL=... uv run python scripts/backtest.py --days 25 --candidate <cand.yml> --focus car_trip
 NEON_DATABASE_URL=... uv run python scripts/trip_eval.py --days 25 [-v] [<cand.yml> ...]
 
+# Validate Vector config/VRL locally BEFORE deploying (vector 0.57.0 = the pinned chart version)
+vector vrl -i sample.json -p program.vrl                 # run one transform's `source:` program
+(cd deploy/vector/kustomize/base/configs && vector validate --no-environment --config-dir .)
+
 # Regenerate the shared contract after changing inference.event (CI checks it's current)
 uv run python scripts/emit_event_schema.py            # -> contracts/inferred_event.schema.json
 (cd dashboard/web && npm run gen:types)               # -> src/generated/events.ts

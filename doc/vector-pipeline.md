@@ -23,9 +23,11 @@ flowchart TD
 
     RBD -->|"sensors"| RBA{{"route_by_app<br/><i>route · 2nd level</i><br/>keys off source_app<br/>(sensors-scoped)"}}
     RBA -->|"owntracks"| OT["owntracks_to_canonical<br/><i>remap</i><br/>_type→name · tst→timestamp<br/>X-Limit-U→user_id"]:::xf
+    RBA -->|"overland"| OL["overland_to_canonical<br/><i>remap · fan-out</i><br/>GeoJSON batch → N location_ping<br/>device_id→user_id"]:::xf
     RBA -->|"standard"| SS["shape_sensor<br/><i>remap</i><br/>payload→message · validate<br/>event_name→name · user_id"]:::xf
 
     SS --> ENR
+    OL --> ENR
     OT --> ENR["enrich_sensor<br/><i>remap</i><br/>trim keys · mint message.id<br/>drop internal event_domain"]:::xf
 
     ENR --> KAFKA["📤 sensor_to_kafka_aiven<br/><i>kafka sink</i><br/>fixed topic ⟶ raw_sensors"]:::sink
@@ -34,6 +36,7 @@ flowchart TD
     subgraph SENSORS ["sensors domain subtree"]
       RBA
       OT
+      OL
       SS
       ENR
       KAFKA
@@ -60,10 +63,44 @@ HTTP in → `parse_path` decodes the `/<domain>/<app>/…` URL **once** into two
 routing levels. **First level**, `route_by_domain` keys off `event_domain` to pick the
 destination — `sensors` opens the sensors-domain subtree (unknown domains drop).
 **Second level**, that domain's `route_by_app` keys off `source_app` to pick the body
-adapter: OwnTracks (a bare `_type` body) → `owntracks_to_canonical`, everything else →
-`shape_sensor` (the standard `payload` + `event_name` contract). Both rejoin at
-`enrich_sensor` (`message.id` minting) → Aiven Kafka `raw_sensors`. `console` taps
-`enrich_sensor` for debug.
+adapter: OwnTracks (a bare `_type` body) → `owntracks_to_canonical`, Overland (a batched
+GeoJSON body) → `overland_to_canonical`, everything else → `shape_sensor` (the standard
+`payload` + `event_name` contract). All three rejoin at `enrich_sensor` (`message.id`
+minting) → Aiven Kafka `raw_sensors`. `console` taps `enrich_sensor` for debug.
+
+### The two location apps have different jobs
+
+Both post to the `sensors` domain and both end up as `location_ping`, but they are not
+redundant — they sit at opposite ends of the sample-density trade-off:
+
+| | **OwnTracks** (`/sensors/owntracks`) | **Overland** (`/sensors/overland`) |
+|---|---|---|
+| role | **region sensor** — iOS `CLRegion` crossings | **movement tracker** — continuous point stream |
+| body | bare `_type` object, one event | `{"locations": [GeoJSON Feature, …]}`, up to 1000 |
+| identity | `X-Limit-U` header | `properties.device_id` (set it to the `user_id`) |
+| density | ~2 samples per crossing (~100 pings / 13 d observed) | batched stream, `motion` + `speed` per point |
+| decides places | **on the phone** (waypoint label → event name) | **nowhere** — server-side `geofence` decides |
+
+The Overland lane exists because the OwnTracks stream is far too sparse to feed the
+[`geofence`](../src/inference/engines/geofence.py) engine or any dwell logic, and because a
+waypoint label minted on the phone is a *semantic* decision made by a dumb sensor: it names a
+~100 m iOS-floor ring after a shop, it can't be renamed or re-radiused without the phone, and
+it mints an unbounded `entered_<anything>` namespace on `raw_sensors`. Overland keeps the
+phone at lat/lon and moves every place decision to regions-as-data in Neon.
+
+Two integration facts worth keeping visible:
+
+- **Fan-out is native to `remap`.** Assigning an **array to the root `.`** emits one event
+  per element, so a 200-point batch becomes 200 canonical events in one transform — no `lua`.
+  Each element must be a complete wrapper; `enrich_sensor` then mints a `message.id` per point.
+- **Overland needs `{"result":"ok"}` or it re-sends forever.** Vector's `http_server` replies
+  with a bare 200, so the app's **"Consider HTTP 2XX Successful"** setting must be enabled.
+  This is a phone-side setting; there is nothing to fix in the pipeline.
+
+Unit alignment is the adapter's job, so one field name keeps one meaning across producers:
+Overland's `speed` (m/s) becomes `vel` in km/h, and `battery_level` (0–1) becomes `batt` in
+percent. Points iOS marks unusable (`horizontal_accuracy` or `speed` of `-1`) are dropped
+**per point**, so one bad fix can't take a whole batch with it.
 
 ### URL grammar & two-level routing
 
@@ -115,9 +152,16 @@ growing buffer means that sink is the bottleneck.
 - **The two lanes meet only through Kafka** — Vector writes `raw_sensors`, then reads it
   back on the persist lane. The `high_level_events` feedback enters Vector *only* on the
   persist side; the inference runtime produces it, Vector never emits it.
-- **`user_id` is required on ingest** — `shape_sensor` (standard) and
-  `owntracks_to_canonical` (OwnTracks, from the `X-Limit-U` header) both reject events
-  without it, mirroring the runtime's per-user keying ([ADR 0004](adr/0004-scaling-model.md)).
+- **`user_id` is required on ingest** — `shape_sensor` (standard), `owntracks_to_canonical`
+  (from the `X-Limit-U` header) and `overland_to_canonical` (from each point's `device_id`)
+  all reject events without it, mirroring the runtime's per-user keying
+  ([ADR 0004](adr/0004-scaling-model.md)). The batch lane rejects **per point**, not per POST.
+- **VRL is validated locally before deploy** — `vector` 0.57.0 is on the dev box, matching the
+  pinned chart version, so there is no excuse for a crash-looping program:
+  `vector vrl -i <sample.json> -p <program.vrl>` runs one transform's source, and
+  `vector validate --no-environment --config-dir .` checks the whole topology (expect only the
+  two `_unmatched` "no consumers" warnings). Extract a program from its YAML with
+  `yaml.safe_load(...)["source"]`.
 - The graph reflects the components actually enabled in
   [`kustomization.yml`](../deploy/vector/kustomize/base/kustomization.yml) — the in-cluster
   `sensor_to_kafka.yml` variant is not mounted; the Aiven sink is.
