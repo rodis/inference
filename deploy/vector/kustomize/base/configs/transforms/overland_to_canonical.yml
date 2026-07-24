@@ -93,8 +93,24 @@ source: |
           #   motion — ["driving","walking","running","cycling","stationary"], the phone-native
           #            movement signal this app was adopted for (a candidate trip anchor).
           #   wifi   — connected SSID; a sharper presence signal than any radius.
-          motion = array(get(props, ["motion"]) ?? []) ?? []
-          if length(motion) > 0 { msg.motion = motion }
+          #
+          # TYPE-TOLERANT on purpose. The documented shape is an array of strings, but a bare
+          # string would silently collapse to [] under `array(...) ?? []` and we would never
+          # know the field had arrived — and this is the one field we cannot backfill later.
+          # So: keep an array as-is, wrap a lone string, and stash anything else under
+          # motion_raw for inspection rather than dropping it.
+          motion_raw = get(props, ["motion"]) ?? null
+          if is_array(motion_raw) {
+              if length(array!(motion_raw)) > 0 { msg.motion = motion_raw }
+          } else if is_string(motion_raw) {
+              if to_string!(motion_raw) != "" { msg.motion = [motion_raw] }
+          } else if motion_raw != null {
+              msg.motion_raw = motion_raw
+          }
+          # CoreMotion's other label, present only with the app's "Include Tracking Stats"
+          # setting; harmless when absent and useful for corroborating `motion`.
+          activity = to_string(get(props, ["activity"]) ?? "") ?? ""
+          if activity != "" { msg.activity = activity }
           ssid = to_string(get(props, ["wifi"]) ?? "") ?? ""
           if ssid != "" { msg.wifi = ssid }
 
