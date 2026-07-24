@@ -12,8 +12,16 @@ interface Props {
   onLift: (name: string, level: number) => void;
 }
 
-function ARow({ name, derivLevel, getL, getCeil, onHome, onLift, sampleOf }: Props & { name: string; sampleOf: Record<string, AwareEvent> }) {
+function ARow({ name, derivLevel, getL, getCeil, onHome, onLift, sampleOf, depthsOf }: Props & { name: string; sampleOf: Record<string, AwareEvent>; depthsOf: Record<string, Set<number>> }) {
   const home = getL(name), ceil = getCeil(name), cat = catOf(name);
+  const depth = derivLevel(sampleOf[name]);
+  const seen = depthsOf[name];
+  // A type's depth is a property of its *instances*, and it changes when a definition
+  // changes shape, so the loaded window can hold more than one. The badge reports the
+  // current shape (newest instance); the tooltip owns up to the older ones.
+  const depthTitle = seen && seen.size > 1
+    ? `derivation depth D${depth} as of the latest event — older ones in view: ${[...seen].sort().map((d) => "D" + d).join(", ")}`
+    : `derivation depth D${depth}`;
   const homeBtns = [];
   for (let L = 1; L <= NLOG; L++) {
     const on = home === L, c = LCHIP[L];
@@ -39,7 +47,7 @@ function ARow({ name, derivLevel, getL, getCeil, onHome, onLift, sampleOf }: Pro
     <div className="arow">
       <span className="ai" style={{ background: cat.c }}><cat.Icon size={14} strokeWidth={2.25} /></span>
       <span className="an">{typeLabel(name)}</span>
-      <span className="ad">D{derivLevel(sampleOf[name])}</span>
+      <span className="ad" title={depthTitle}>D{depth}</span>
       <span className="btns">{homeBtns}</span>
       {lift}
     </div>
@@ -50,8 +58,19 @@ function ARow({ name, derivLevel, getL, getCeil, onHome, onLift, sampleOf }: Pro
  *  flow up via onHome/onLift, which persist to Neon (debounced). Mirrors renderAssign. */
 export default function AssignPanel(props: Props) {
   const { all, derivLevel } = props;
+
+  // One representative event per type — it's what the D badge and the depth sort read.
+  // `all` is ascending, so last-write-wins picks the **newest** instance. Taking the oldest
+  // (what this did before) pinned each badge to the most obsolete lineage in the window:
+  // car_trip used to be built on the intermediate car_door_opened/closed derivations (D4),
+  // and reads directly off got_into/got_out since ADR 0005 (D3) — so the panel said D4
+  // while every trip on the timeline was D3. Depth follows the definitions, which change.
   const sampleOf: Record<string, AwareEvent> = {};
-  all.forEach((e) => { if (!sampleOf[e.name]) sampleOf[e.name] = e; });
+  const depthsOf: Record<string, Set<number>> = {};
+  all.forEach((e) => {
+    sampleOf[e.name] = e;
+    (depthsOf[e.name] ??= new Set<number>()).add(derivLevel(e));
+  });
   const typeOrder = Object.keys(sampleOf).sort(
     (a, b) => derivLevel(sampleOf[b]) - derivLevel(sampleOf[a]) || a.localeCompare(b)
   );
@@ -82,7 +101,7 @@ export default function AssignPanel(props: Props) {
             </button>
             {!isCollapsed && (
               <div className="agroup-rows">
-                {members.map((n) => <ARow key={n} name={n} sampleOf={sampleOf} {...props} />)}
+                {members.map((n) => <ARow key={n} name={n} sampleOf={sampleOf} depthsOf={depthsOf} {...props} />)}
               </div>
             )}
           </div>
