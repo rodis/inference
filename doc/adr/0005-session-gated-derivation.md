@@ -28,6 +28,41 @@ Date: 2026-07-14 (revised 2026-07-17)
 > forms. `got_out` is unchanged — during the flap it may still emit a stray exit with no open
 > session (harmless: no `car_trip` forms, and its cooldown clears before the real arrival).
 
+> **Revision 2026-07-24 (ambiguous-signal demotion — and the stray exit was NOT harmless).**
+> The charger-anchor revision above fixed the *CarPlay* route into the phantom class but left the
+> *charger* route open, and the stray `got_out` it called harmless is what phantoms pair with.
+> Measured over 25 days of real signals with [`scripts/trip_eval.py`](../../scripts/trip_eval.py):
+> **24 of 78 `car_trip`s were under 2 minutes** (many exactly 0s) — and in the BMW-door era it was
+> **7 junk vs 8 real**. Mechanism: the wireless charger does *not* connect once per trip. It drops
+> and re-seats every few minutes while driving, and again while loading the car (verified in the raw
+> stream: `device_connected_to_power` / `device_disconnected_from_power` pairs minutes apart, mid-drive
+> and while parked). So a *fresh* charger event sits in the window at **arrival** too, where both
+> non-directional signals also fire — the lock-change and (since ADR 0006) the BMW driver door. At
+> weight 5 either one completed the threshold with the charger alone (`power+lock` = `power+door` =
+> 11), minting an **entry at the exit**, which then paired with the stray exit into a junk trip. The
+> lineage signatures make it unmistakable: of 33 `got_into` fires nowhere near a drive start, 21 were
+> `lock + power` and 9 were `door + power`.
+>
+> Fix: **demote both direction-ambiguous signals to 4** (`lock` 5→4, `car_driver_door_opened` 5→4;
+> anchor and CarPlay unchanged). An ambiguous signal now *corroborates* a directional one and never
+> completes an entry with a charger event alone: `power+CarPlay` = 11 fires, `power+lock+door` = 14
+> fires, `power+lock` = `power+door` = 10 do not. Result over the same 25 days: **junk 24 → 12, real
+> trips 54 → 64, drives missed 2 → 2** (CarPlay-session proxy — CarPlay is not in the phantom path,
+> so it is the independent check that precision wasn't bought by dropping real trips); over the
+> BMW-door era alone, **7 junk → 0, 8 real → 15**. Demoting only one of the two leaves 17–19 junk:
+> the lock and the door are the *same* failure mode (non-directional) and have to move together.
+>
+> Also measured, and deliberately **not** changed: `got_out`'s gate. Over the same 25 days it was
+> arithmetically load-bearing on **2 of 121** fires (both a lone CarPlay-disconnect at exactly
+> `6 + gate 4 = 10`), and removing it entirely (`gate_weight: 0`) still fires both — 26s and 3s
+> later, with **zero** trips gained or lost. Raising the ungated bar to 11 with `gate_weight` 5 was
+> tried as a phantom fix and made things slightly *worse* (junk 24 → 26), because suppressing a
+> real exit re-shuffles subsequent pairings. The gate stays as ADR 0005 tuned it: near-idle in the
+> recorded history, but it is the only mechanism that closes a phone-only trip on a single reliable
+> signal, and it fails independently of the BMW stream (ADR 0006's door has ~6% per-trip miss plus
+> broker/token outages). The phantoms were an *entry*-side problem; the entry side is where they
+> were fixed.
+
 ---
 
 ## Context

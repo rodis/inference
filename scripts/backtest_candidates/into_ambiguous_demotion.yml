@@ -1,0 +1,8 @@
+# Candidate (APPLIED 2026-07-24, ADR 0005 rev): demote got_into's two DIRECTION-AMBIGUOUS
+# signals (lock-change, BMW driver door) 5 -> 4, so neither completes an entry with a lone
+# charger event. The charger re-seats mid-drive and while loading the car, so power+lock /
+# power+door = 11 was minting an entry at the *exit* -> a 0-110s junk car_trip.
+# Scored with scripts/trip_eval.py over 25d: junk 24 -> 12, real 54 -> 64, drives_missed 2 -> 2.
+# Keep this file to re-run the comparison against the PRE-change weights below.
+got_into_the_car:
+  weights: {device_connected_to_power: 6, device_connected_to_carplay: 5, car_lock_state_change: 5, car_driver_door_opened: 5}

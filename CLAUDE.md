@@ -93,6 +93,12 @@ docker build -f workers/runtime/Dockerfile -t inference-runtime .
 uv run ruff check .
 uv run pytest                # tests/ exercise the import-clean core in-memory (no Kafka/Quix)
 
+# Before changing a weight map / threshold: replay real signal history from Neon through the
+# actual core (no Kafka). backtest.py says WHAT changed; trip_eval.py says whether it got BETTER
+# (junk_trips = sub-2-minute phantom trips, drives_missed = real drives lost).
+NEON_DATABASE_URL=... uv run python scripts/backtest.py --days 25 --candidate <cand.yml> --focus car_trip
+NEON_DATABASE_URL=... uv run python scripts/trip_eval.py --days 25 [-v] [<cand.yml> ...]
+
 # Regenerate the shared contract after changing inference.event (CI checks it's current)
 uv run python scripts/emit_event_schema.py            # -> contracts/inferred_event.schema.json
 (cd dashboard/web && npm run gen:types)               # -> src/generated/events.ts

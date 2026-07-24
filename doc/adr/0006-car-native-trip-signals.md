@@ -17,6 +17,15 @@ Date: 2026-07-18 (scaffold 2026-07-19, deployed + tuned 2026-07-24)
 > preserved). Because it's non-directional (fires on entry *and* exit) it can't fire a trip alone —
 > it's insurance for a phone-signal miss, validated safe/neutral by a **backtest** over 21 days of
 > real history (`scripts/backtest.py`; car_trip 66→68, re-times a few multi-leg days, no regression).
+>
+> **Correction (same day):** that validation was *count*-based and therefore missed a real
+> regression. At weight 5 the door opened a new phantom path on the entry side — `power + door` = 11
+> — because the door is non-directional and the wireless charger re-seats mid-drive, so the pair
+> fires at the *exit*. "car_trip 66→68" hid it: the added trips were partly junk (0–110s spans). The
+> door's weight in `got_into_the_car` is now **4** (ADR 0005 rev 2026-07-24); in `got_out_the_car` it
+> stays 5. The lesson is in the tooling: a count delta can't adjudicate quality, so
+> [`scripts/trip_eval.py`](../../scripts/trip_eval.py) now scores junk-trips / real-trips /
+> drives-missed, and is the check to run before changing these weight maps.
 > The MQTT envelope, broker params (MQTT v3.1.1 / TLS 1.3 / `{gcid}/+`), the portal
 > **"Configure Stream"** per-descriptor gotcha, and the refresh-token-rotation → Neon-persistence
 > fix are all captured in [[project-bmw-cardata-onboarding]].
