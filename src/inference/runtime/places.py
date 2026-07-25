@@ -21,7 +21,14 @@ logger = logging.getLogger("inference.places")
 
 
 def load_places(dsn: str | None) -> list[dict]:
-    """Read enabled POI rows as `{name, lat, lon, radius_m}`. No DSN -> no labels (empty).
+    """Read enabled POI rows as `{name, lat, lon, radius_m, everyday}`. No DSN -> no labels.
+
+    `everyday` marks a place that is not *news* — the one you live in. A stay there is a real
+    fact worth deriving and keeping, but it has no natural boundaries in the data: you are
+    home for fourteen hours, iOS stops sampling, and `max_gap_seconds` chops the cluster
+    wherever the outage fell, so the "visit" is an artifact of sampling rather than of
+    behaviour. Carrying the flag on the event lets a consumer skip those without the runtime
+    having an opinion about what to draw.
 
     psycopg is imported lazily so the derivation core and its in-memory tests never need a
     database driver present — the same rule `regions.py` follows.
@@ -33,7 +40,7 @@ def load_places(dsn: str | None) -> list[dict]:
 
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT name, lat, lon, radius_m FROM regions "
+            "SELECT name, lat, lon, radius_m, everyday FROM regions "
             "WHERE enabled = true AND kind = 'poi'"
         )
         cols = [c.name for c in cur.description]

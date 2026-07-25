@@ -104,6 +104,14 @@ class Place(BaseModel):
     spread_m: float
     label: str | None = None
     distance_m: float | None = None
+    # Reference data too, alongside `label`: is this a place worth reporting, or the one you
+    # live in? A stay at home is a real fact — derived, persisted, queryable — but it has no
+    # natural boundaries (you are there for fourteen hours; `max_gap_seconds` chops the cluster
+    # wherever iOS stopped sampling), so the "visit" is a sampling artifact and not news. The
+    # flag says what KIND of place it is; whether to draw it is the consumer's call, which is
+    # what lets the dashboard offer a "show everyday places" toggle without re-deriving.
+    # None when nothing matched — an unlabelled stay makes no claim either way.
+    everyday: bool | None = None
 
 
 class InferredEvent(BaseModel):

@@ -123,6 +123,26 @@ detects transit through a known place; the other detects presence at any place.
   POI *coordinates themselves* are better taken from stay centroids than typed in: home's
   centroid held within **7m across six visits** spanning 14 days, while the OwnTracks
   enter-point originally seeded for the shop sat **78m** from its true centroid.
+- **A stay at the place you LIVE is not a visit** (2026-07-25, same day). The clustering model
+  assumes a place has natural boundaries: you arrive, you leave, and the cluster's edges *are*
+  the visit. Home has none. You are there for fourteen hours, iOS stops sampling while you
+  sleep, and `max_gap_seconds` closes the cluster wherever the outage fell — so what surfaces is
+  one arbitrary fragment per sampling gap, not an episode. Of the first five real stays, three
+  were home or home-adjacent (453s and 8686s for what was really "home all morning" and "home
+  all afternoon", plus a 513s fragment 190m away, outside the 80m POI radius and therefore
+  unlabelled). No parameter choice fixes this: the fragments are artifacts of *sampling*, and
+  the engine cannot tell them from a real short visit.
+
+  Resolved as **reference data, not detection and not a hardcoded label**: POI rows carry an
+  `everyday` boolean, the `place` deriver stamps it onto the event, and the day timeline drops
+  flagged stays (`isEverydayPlace`). The stay is still derived, persisted and queryable — "am I
+  home" remains a fact the system knows — it is simply not *news*. Three properties this buys:
+  the flag says what **kind** of place it is while whether-to-draw stays a consumer decision (so
+  a "show everyday places" toggle needs no re-derive); switching a place is one `regions` row
+  rather than a dashboard code change; and a later habit tracker gets "time at home vs places
+  visited" from the same field. Deliberately NOT done: suppressing the stay in the engine (loses
+  the fact), and widening home's radius to swallow the 190m fragment (would mislabel a real
+  destination near home as Home — accepted as visible residue instead).
 - **State cost is one write per fix** (the open cluster), which is inherent to clustering. The
   same change made `geofence` write `inside` only on change — it was writing a Kafka changelog
   record per fix per region for a value that almost never changed.

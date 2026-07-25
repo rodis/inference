@@ -83,12 +83,15 @@ def place_book() -> list[dict]:
     return list(_PLACE_BOOK)
 
 
-def _match_place(lat: float, lon: float) -> tuple[str, float] | None:
-    """Nearest known place containing this point, as (name, distance_m).
+def _match_place(lat: float, lon: float) -> tuple[dict, float] | None:
+    """Nearest known place containing this point, as (place_row, distance_m).
 
     Containment uses each place's own `radius_m`, so a big region and a small shop can
     coexist in one book, and the NEAREST match wins when radii overlap (a shop inside a
     declared district labels the shop, not the district).
+
+    Returns the whole row rather than just its name so every reference-data field the row
+    carries (`everyday` today) reaches the fragment without a second lookup.
     """
     hits = []
     for p in _PLACE_BOOK:
@@ -97,7 +100,7 @@ def _match_place(lat: float, lon: float) -> tuple[str, float] | None:
         except (KeyError, TypeError, ValueError):
             continue                                   # a malformed row must not break shaping
         if dist <= float(p.get("radius_m", 0)):
-            hits.append((str(p.get("name", "")), dist))
+            hits.append((p, dist))
     return min(hits, key=lambda h: h[1]) if hits else None
 
 
@@ -129,6 +132,7 @@ def _place(sources: list[dict]) -> dict:
     match = _match_place(clat, clon)
     return {"place": Place(
         lat=clat, lon=clon, spread_m=round(spread, 1),
-        label=match[0] if match else None,
+        label=str(match[0].get("name", "")) if match else None,
         distance_m=round(match[1], 1) if match else None,
+        everyday=bool(match[0].get("everyday", False)) if match else None,
     )}

@@ -49,6 +49,31 @@ def test_place_labels_a_stay_inside_a_known_place():
     assert pl.label == "Home" and pl.distance_m < 20
 
 
+def test_place_carries_the_everyday_flag_from_the_matched_place():
+    """`everyday` marks the place you LIVE in, whose stays have no natural boundaries — the
+    runtime still derives them, and the flag lets a consumer skip them without the engine
+    having an opinion about what to draw."""
+    capabilities.set_place_book([
+        {"name": "Home", "lat": 47.206985, "lon": 8.574798, "radius_m": 80, "everyday": True},
+        {"name": "Shop", "lat": 47.194887, "lon": 8.523353, "radius_m": 80, "everyday": False},
+    ])
+    assert derive_capability(Capability.PLACE, [_fix(*_H1)])["place"].everyday is True
+    assert derive_capability(Capability.PLACE, [_fix(*_SHOP)])["place"].everyday is False
+
+
+def test_place_everyday_defaults_to_false_for_a_row_that_omits_it():
+    """The column is new; a book assembled without it must not make every place everyday."""
+    capabilities.set_place_book([{"name": "Home", "lat": 47.206985, "lon": 8.574798, "radius_m": 80}])
+    assert derive_capability(Capability.PLACE, [_fix(*_H1)])["place"].everyday is False
+
+
+def test_place_everyday_is_none_when_nothing_matched():
+    """An unlabelled stay makes no claim either way — it isn't 'not everyday', it's unknown."""
+    capabilities.set_place_book([{"name": "Home", "lat": 47.206985, "lon": 8.574798,
+                                 "radius_m": 80, "everyday": True}])
+    assert derive_capability(Capability.PLACE, [_fix(*_SHOP)])["place"].everyday is None
+
+
 def test_place_leaves_an_unknown_place_unlabelled_but_located():
     capabilities.set_place_book([{"name": "Home", "lat": 47.206985, "lon": 8.574798, "radius_m": 80}])
     pl = derive_capability(Capability.PLACE, [_fix(*_SHOP)])["place"]

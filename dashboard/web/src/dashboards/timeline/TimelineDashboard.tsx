@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useAware } from "../../app/useAware";
 import { DAY_WINDOW } from "../../api";
 import type { AwareEvent } from "../../types";
-import { absorbedIds, catOf, dayKey, dayLayout, humanDur, laneNames } from "../../view";
+import { absorbedIds, catOf, dayKey, dayLayout, humanDur, isEverydayPlace, laneNames } from "../../view";
 import DayTimeline from "../../components/DayTimeline";
 import WeekStrip from "../../components/WeekStrip";
 import EventModal from "../../components/EventModal";
@@ -35,8 +35,10 @@ export default function TimelineDashboard() {
   // A type parked on the levels board is dropped here, not merely faded: leaving it in with
   // reveal 0 would keep an invisible card in the layout (and in the tab order) at every
   // altitude, which is not what "off the timeline" means.
+  // `isEverydayPlace` drops stays at the place you live in for the same reason and by the same
+  // mechanism — off the timeline, still derived and still in Neon. Flip this to keep them.
   const dayAll = useMemo(
-    () => all.filter((e) => dayKey(e.date) === selectedDay && !isHidden(e.name)),
+    () => all.filter((e) => dayKey(e.date) === selectedDay && !isHidden(e.name) && !isEverydayPlace(e)),
     [all, selectedDay, isHidden]
   );
   const absorbed = useMemo(() => absorbedIds(dayAll, revealOf), [dayAll, revealOf]);

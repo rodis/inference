@@ -150,6 +150,23 @@ export const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 export const SPAN_EVENTS = new Set<string>(["car_trip", "phone_is_charging", "stay"]);
 export const intervalOf = (e: AwareEvent) => e.message.interval ?? null;
 
+/** An event at an **everyday** place — the one you live in (reference data, the `everyday`
+ *  column on a `regions` POI row; see `inference.capabilities`).
+ *
+ *  Kept off the day timeline entirely, and the reason is not "it's boring". A stay somewhere
+ *  you *visit* has natural boundaries: you arrive, you leave, and the cluster's edges are the
+ *  visit. Home has none — you're there for fourteen hours, iOS stops sampling while you sleep,
+ *  and `max_gap_seconds` chops the cluster wherever the outage fell, so what surfaces is one
+ *  arbitrary fragment per sampling gap (2026-07-25: 453s and 8686s for what was really "home
+ *  all morning" and "home all afternoon"). No engine parameter turns that into episodes, so
+ *  the honest move is to keep deriving the fact and not draw it.
+ *
+ *  A *hard drop*, like a type parked on the levels board — not a low reveal, which would leave
+ *  an invisible card in the layout and the tab order at every altitude. The flag rides on the
+ *  event rather than being a hardcoded label here, so switching it is one `regions` row and
+ *  a "show everyday places" toggle is one boolean away (`filter` below), no re-derive. */
+export const isEverydayPlace = (e: AwareEvent) => e.message.place?.everyday === true;
+
 /** Whether to draw this event as a duration capsule — and therefore which *lane* of the day
  *  timeline it belongs to.
  *

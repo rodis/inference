@@ -24,7 +24,7 @@ import DayTimeline from "../src/components/DayTimeline";
 import EventModal from "../src/components/EventModal";
 import LevelsDashboard from "../src/dashboards/levels/LevelsDashboard";
 import TimelineDashboard from "../src/dashboards/timeline/TimelineDashboard";
-import { UNNAMED_STYLE, catOf, dayLayout, defaultLevelOf, hostOf, inkOn, isSpan, labelOf, laneCount, laneNames, placeUnknown, prepare } from "../src/view";
+import { UNNAMED_STYLE, catOf, dayLayout, defaultLevelOf, hostOf, inkOn, isEverydayPlace, isSpan, labelOf, laneCount, laneNames, placeUnknown, prepare } from "../src/view";
 import type { AwareEvent } from "../src/types";
 
 // Both dashboards use useLayoutEffect (scroll anchoring, focus-after-move) — correct on the
@@ -45,7 +45,7 @@ let n = 0;
 const ev = (
   name: string, cls: "raw" | "derived", when: string,
   opts: { parents?: string[]; span?: [string, string]; amount?: number;
-          place?: { label: string | null } } = {},
+          place?: { label: string | null; everyday?: boolean } } = {},
 ) => {
   const id = `e${++n}`;
   const iv = opts.span
@@ -86,6 +86,11 @@ const rows = [
   ev("stay", "derived", "13:20", { parents: ["e13"], span: ["11:43", "13:20"],
                                    place: { label: "Café Frisch" } }),           // e16 97min
   ev("car_trip", "derived", "13:33", { parents: ["e4", "e7"], span: ["13:19", "13:33"] }), // e17 14min
+  // An `everyday` place — the one you live in. Derived and persisted like any other stay, but
+  // kept off the day (isEverydayPlace): home dwell has no natural boundaries, so what surfaces
+  // is one arbitrary fragment per sampling gap rather than a visit.
+  ev("stay", "derived", "22:40", { parents: ["e13"], span: ["20:10", "22:40"],
+                                   place: { label: "Home", everyday: true } }),   // e18 150min
 ];
 const prepared = prepare(rows as unknown as AwareEvent[]);
 // Always go through prepare() — it decorates each row with `epoch` and `date`, which every
@@ -244,17 +249,21 @@ const dt = strip(renderToString(
   <AwareContext.Provider value={ctx}>
     <DayTimeline events={all} layout={L} onSelect={() => {}} revealOf={() => 1} />
   </AwareContext.Provider>));
-check("seven activity capsules drawn", (dt.match(/class="capsule"/g) || []).length === 7,
+// Eight, INCLUDING the everyday-place stay: DayTimeline draws whatever it is handed, and
+// deciding what to hand it is the dashboard's job (see the TimelineDashboard checks below,
+// where the same event is dropped). Keeping the component dumb here is the point — one filter
+// site, not a rule duplicated in every consumer.
+check("eight activity capsules drawn", (dt.match(/class="capsule"/g) || []).length === 8,
   `${(dt.match(/class="capsule"/g) || []).length}`);
 // A stay at a place nothing matched is drawn weaker than a named one (placeUnknown): the shared
 // `unnamed` class carries the muted title, `unnamed-<UNNAMED_STYLE>` the capsule treatment.
 // Counted rather than merely found, so a treatment that leaks onto the named stays — or onto
 // every capsule in the lane — fails here instead of being noticed on a screenshot.
 const weakRows = (dt.match(/class="dt-act unnamed /g) || []).length;
-check("exactly the unnamed stay is drawn weaker", weakRows === 1, `${weakRows} of 7 rows`);
+check("exactly the unnamed stay is drawn weaker", weakRows === 1, `${weakRows} of 8 rows`);
 check("…and it names the active variant", dt.includes(`unnamed unnamed-${UNNAMED_STYLE}`));
-check("the other six activities draw at full strength",
-  (dt.match(/class="dt-act"/g) || []).length === 6, `${(dt.match(/class="dt-act"/g) || []).length}`);
+check("the other seven activities draw at full strength",
+  (dt.match(/class="dt-act"/g) || []).length === 7, `${(dt.match(/class="dt-act"/g) || []).length}`);
 // The category colour reaches CSS as a custom property, which is what lets a variant restate the
 // fill as a border + icon colour. Hard-coding `background` inline again would silently break the
 // outline treatment while leaving the fade one working.
@@ -319,6 +328,15 @@ check("the two-lane timeline renders", tl.includes("dt-rail"));
 check("the zoom control names the current lane", tl.includes("headlines"));
 check("the trip capsule is visible at L1", tl.includes("class=\"capsule\""));
 check("the day's spend is summed", tl.includes("68.60"));
+// A stay at an everyday place is off the day entirely — a hard drop, not a faded card, so it
+// isn't in the layout or the tab order at any altitude. The event itself still exists (it is
+// in `all`, and in Neon); only the timeline declines to draw it.
+check("a stay at an everyday place is dropped from the day", !tl.includes(">Home<"),
+  "Home stay rendered");
+check("...while a stay at a real destination still draws", tl.includes("Café Frisch"));
+check("the everyday stay is still in the loaded event set", all.some((e) => e.id === "e18"));
+check("isEverydayPlace keys on the flag, not the label",
+  isEverydayPlace(E("e18")) && !isEverydayPlace(E("e16")) && !isEverydayPlace(E("e15")));
 
 if (fails.length) throw new Error(`${fails.length} check(s) failed: ${fails.join("; ")}`);
 console.log("\nall checks passed\n");

@@ -231,6 +231,17 @@ Stored per user in `dashboard_prefs`, debounced, as **overrides only**:
 no row yet — a default, *not* an overlay. Merging it would make "reset this override"
 impossible, because the seed would immediately put the override back.
 
+**One thing kept OUT of these prefs: everyday places.** `hidden` is keyed on event *type*, and
+every stay shares the type `stay` — so it cannot express "hide the ones at home". That filter is
+`isEverydayPlace`, reading a flag the backend stamps into `message.place` from the `everyday`
+column on a `regions` POI row (ADR 0007). Deliberately not a `hidden_places` list here and not a
+hardcoded `"Home"` in the dashboard: whether a place is the one you *live in* is a property of
+the place, not of one board's layout, so it lives with the place and every consumer sees it. A
+stay at an everyday place is still derived and still in Neon — the timeline just declines to
+draw it, because home dwell has no natural boundaries (see the scale note above) and surfaces as
+one arbitrary fragment per sampling gap. The flag rides on the event rather than being applied
+at derive time, so a "show everyday places" toggle is a boolean here, not a re-derive.
+
 > **Superseded:** this replaced an `Assign & lift` sidebar backed by a `levels` + `lift`
 > column pair, which stored a *home lane* and a *ceiling* per type. Only the ceiling ever
 > affected what rendered (`getCeil` drove every visibility decision; `getL` painted a chip),

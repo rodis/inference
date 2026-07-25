@@ -18,6 +18,7 @@ export type Lon = number;
 export type SpreadM = number;
 export type Label = string | null;
 export type DistanceM = number | null;
+export type Everyday = boolean | null;
 
 /**
  * A derived event's `message` payload — the unit shared across Python and TS.
@@ -86,4 +87,5 @@ export interface Place {
   spread_m: SpreadM;
   label?: Label;
   distance_m?: DistanceM;
+  everyday?: Everyday;
 }

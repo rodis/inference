@@ -90,6 +90,18 @@
           ],
           "default": null,
           "title": "Distance M"
+        },
+        "everyday": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Everyday"
         }
       },
       "required": [
