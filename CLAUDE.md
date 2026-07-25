@@ -77,7 +77,7 @@ Quix `State` is local RocksDB at `/tmp/quix-state` (set in the Dockerfile). The 
 ## What is intentionally not here yet
 
 - **No liveness/readiness probes.** (Tests + CI now exist — see below — but the runtime has no health probes yet.)
-- **Enricher chain** — the capability seam (`src/inference/capabilities.py`) is the enricher chain re-established (ADR 0001); geo enrichment is still unimplemented.
+- **Enricher chain** — the capability seam (`src/inference/capabilities.py`) is the enricher chain re-established (ADR 0001). Two capabilities exist: `interval` (span, from the lineage's extent) and `place` (ADR 0007 — centroid + spread from the contributing fixes, plus the label of the known place containing it). Known places are **data**: `regions` rows with `kind='poi'`, loaded by `inference.runtime.places` and injected into the seam by `build_runtime`, so the core still never reads Neon. `kind='zone'` rows remain the geofence expansion — one place registry, two consumers, no name collisions. A label is frozen at derive time (re-derive to relabel history).
 - **Single source partition** (`raw_sensors` = 1 partition) — correct and keyed, but no horizontal parallelism until partitions are added (by design — see ADR 0004).
 
 ## Commands

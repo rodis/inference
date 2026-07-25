@@ -28,8 +28,10 @@ import logging
 from quixstreams import Application
 
 from inference.runtime import config
+from inference.capabilities import set_place_book
 from inference.runtime.core import RoutingPlan, Router, Shaper
 from inference.runtime.definition import load_definitions
+from inference.runtime.places import load_places
 from inference.runtime.regions import load_region_definitions
 
 logger = logging.getLogger("inference.quix")
@@ -67,6 +69,15 @@ def build_runtime() -> Application:
         definitions += load_region_definitions(config.neon_dsn())
     except Exception:
         logger.exception("Failed to load geofence regions from Neon; continuing without them")
+
+    # Known places are reference data for the `place` capability's label lookup — injected
+    # into the capability seam here (the composition root), so the core never reads Neon
+    # itself. Best-effort for the same reason as regions: no labels is a degraded mode
+    # (stays still carry their centroid), a crash is not.
+    try:
+        set_place_book(load_places(config.neon_dsn()))
+    except Exception:
+        logger.exception("Failed to load places from Neon; stays will carry centroids but no labels")
 
     plan = RoutingPlan.from_definitions(definitions)
     router, shaper = Router(plan), Shaper(plan)

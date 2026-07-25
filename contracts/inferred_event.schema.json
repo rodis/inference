@@ -50,6 +50,55 @@
       ],
       "title": "Interval",
       "type": "object"
+    },
+    "Place": {
+      "additionalProperties": false,
+      "description": "The *place capability*: an event that happened **somewhere**.\n\nTwo facts of different kinds, deliberately in one capability:\n\n- `lat`/`lon`/`spread_m` are derived from the event's own evidence \u2014 the centroid of the\n  contributing fixes and how far the furthest one sits from it. Pure, always available,\n  and independent of any configuration: an event at an unlisted place still knows where\n  it was. `spread_m` is the evidence's *self-reported* precision (not a GPS accuracy\n  claim), so a tight cluster reads as a confident point and a loose one doesn't pretend.\n- `label`/`distance_m` are the match against known places (reference data, see\n  `inference.runtime.places`). `label` is None when nothing matched, which is a real and\n  useful answer \u2014 \"40 minutes somewhere at 47.195,8.524\" is the raw material for naming\n  that place later, not a failure.\n\nThe label is resolved at derive time and therefore *frozen* into the event. Renaming or\nadding a place does not retroactively relabel history \u2014 re-deriving from the retained raw\nfixes does (see scripts/backtest.py). That is the deliberate trade: events stay immutable\nfacts about what was known when they were minted.",
+      "properties": {
+        "lat": {
+          "title": "Lat",
+          "type": "number"
+        },
+        "lon": {
+          "title": "Lon",
+          "type": "number"
+        },
+        "spread_m": {
+          "title": "Spread M",
+          "type": "number"
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Label"
+        },
+        "distance_m": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Distance M"
+        }
+      },
+      "required": [
+        "lat",
+        "lon",
+        "spread_m"
+      ],
+      "title": "Place",
+      "type": "object"
     }
   },
   "additionalProperties": false,
@@ -90,6 +139,17 @@
       "anyOf": [
         {
           "$ref": "#/$defs/Interval"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "place": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Place"
         },
         {
           "type": "null"

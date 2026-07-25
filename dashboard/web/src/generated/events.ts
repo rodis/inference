@@ -13,6 +13,11 @@ export type DerivedFrom = Contributor[];
 export type StartedAt = number;
 export type EndedAt = number;
 export type DurationSeconds = number;
+export type Lat = number;
+export type Lon = number;
+export type SpreadM = number;
+export type Label = string | null;
+export type DistanceM = number | null;
 
 /**
  * A derived event's `message` payload — the unit shared across Python and TS.
@@ -30,6 +35,7 @@ export interface InferredEvent {
   confidence_score: ConfidenceScore;
   derived_from: DerivedFrom;
   interval?: Interval | null;
+  place?: Place | null;
 }
 /**
  * One source event in the lineage graph (an entry in `derived_from`).
@@ -53,4 +59,31 @@ export interface Interval {
   started_at: StartedAt;
   ended_at: EndedAt;
   duration_seconds: DurationSeconds;
+}
+/**
+ * The *place capability*: an event that happened **somewhere**.
+ *
+ * Two facts of different kinds, deliberately in one capability:
+ *
+ * - `lat`/`lon`/`spread_m` are derived from the event's own evidence — the centroid of the
+ *   contributing fixes and how far the furthest one sits from it. Pure, always available,
+ *   and independent of any configuration: an event at an unlisted place still knows where
+ *   it was. `spread_m` is the evidence's *self-reported* precision (not a GPS accuracy
+ *   claim), so a tight cluster reads as a confident point and a loose one doesn't pretend.
+ * - `label`/`distance_m` are the match against known places (reference data, see
+ *   `inference.runtime.places`). `label` is None when nothing matched, which is a real and
+ *   useful answer — "40 minutes somewhere at 47.195,8.524" is the raw material for naming
+ *   that place later, not a failure.
+ *
+ * The label is resolved at derive time and therefore *frozen* into the event. Renaming or
+ * adding a place does not retroactively relabel history — re-deriving from the retained raw
+ * fixes does (see scripts/backtest.py). That is the deliberate trade: events stay immutable
+ * facts about what was known when they were minted.
+ */
+export interface Place {
+  lat: Lat;
+  lon: Lon;
+  spread_m: SpreadM;
+  label?: Label;
+  distance_m?: DistanceM;
 }

@@ -56,9 +56,9 @@ Consequences of that shape, in order of importance:
   every place, and matching a centroid to a POI is a lookup downstream. Adding a place stops
   being a routing change.
 - **Better POI coordinates than you can type.** A centroid over repeat visits beats both a
-  hand-entered coordinate and a phone waypoint: the home stay's centroid landed 10m from truth
-  from 16 fixes, while the OwnTracks enter-point that seeded the "konditorei" POI was itself
-  78m off.
+  hand-entered coordinate and a phone waypoint: home's centroid held within 7m across six
+  visits over 14 days, while the OwnTracks enter-point that seeded the shop's POI sat 78m from
+  the centroid 28 fixes actually agreed on.
 - It emits at **departure**, so a stay is knowable only once left. `occurred_at` is the last
   fix inside (the true end), not the fix that broke the cluster.
 
@@ -98,10 +98,31 @@ detects transit through a known place; the other detects presence at any place.
 
 - **Positive:** dwell becomes detectable at all; new places need no configuration; POI
   coordinates improve with use; one definition covers every place.
-- **The label is missing by design.** `stay` carries a centroid, not a name. Turning stays into
-  `visit_<place>` (or a `place_visit` carrying a label) needs a matching step that does not exist
-  yet — the obvious next change, and the point at which the `regions` table becomes useful again
-  as POI *data* rather than as routing config.
+- **Labelling landed as a capability, not an engine** (2026-07-25, same day). `stay` declares
+  `capabilities: [interval, place]`, and the `place` deriver splits cleanly in two: the centroid +
+  spread are a *pure* function of the stay's own fixes, while the label is a lookup against known
+  places — `regions` rows with the new `kind='poi'`, loaded by `inference.runtime.places` and
+  injected into the capability seam by `build_runtime`. So a `stay` is self-describing with no
+  configuration at all, and gains a name when one is known. This closes the "geo enrichment"
+  half of the enricher seam that ADR 0001 left open, and it keeps naming out of detection: no
+  `visit_<place>` event names, no definition per place.
+  Measured on the same history — **every home stay labelled within 0.6–4.2m** of the POI centre
+  across 14 days, while two genuinely new places stayed unlabelled-but-located, which is the
+  discovery loop working:
+
+  ```
+  07-25 09:43Z → 11:20Z   96.8 min  label=Konditorei von Rotz   d=0.1m
+  07-25 11:33Z → 13:58Z  144.8 min  label=Home                  d=3.8m
+  07-25 14:18Z → 14:51Z   33.8 min  label=-  47.160299,8.441476  (unknown — name it and re-derive)
+  ```
+
+  A label is **frozen at derive time**: renaming a place does not relabel history, re-deriving
+  from the retained raw fixes does. Two consequences worth stating — the `regions` table now
+  serves both roles (`kind='zone'` expands into geofences, `kind='poi'` only labels, so a POI
+  cannot collide with the `entered_<slug>` names the OwnTracks lane already emits), and the
+  POI *coordinates themselves* are better taken from stay centroids than typed in: home's
+  centroid held within **7m across six visits** spanning 14 days, while the OwnTracks
+  enter-point originally seeded for the shop sat **78m** from its true centroid.
 - **State cost is one write per fix** (the open cluster), which is inherent to clustering. The
   same change made `geofence` write `inside` only on change — it was writing a Kafka changelog
   record per fix per region for a value that almost never changed.

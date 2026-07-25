@@ -17,7 +17,8 @@ built-ins, the same side-effect pattern as `inference.engines`.
 
 from collections.abc import Callable
 
-from inference.event import Capability, Interval
+from inference.event import Capability, Interval, Place
+from inference.geo import haversine_m
 
 # capability → deriver(sources) -> fragment of InferredEvent fields
 _DERIVERS: dict[Capability, Callable[[list[dict]], dict]] = {}
@@ -57,3 +58,77 @@ def _interval(sources: list[dict]) -> dict:
     misconfiguration)."""
     timestamps = _source_timestamps(sources)
     return {"interval": Interval(started_at=min(timestamps), ended_at=max(timestamps))}
+
+
+# --- place: reference data ------------------------------------------------------
+#
+# Known places are DATA, loaded from Neon at startup and injected here by the adapter
+# (`inference.runtime.places`), exactly as geofence regions are. It lives at module level
+# because a capability deriver's signature is `(sources) -> fragment`: the deriver stays a
+# pure function of (evidence, reference data), and the reference data is set once, explicitly,
+# by the composition root — never fetched from inside the core.
+_PLACE_BOOK: list[dict] = []
+
+
+def set_place_book(places: list[dict]) -> None:
+    """Install the known-place list: dicts of `name`, `lat`, `lon`, `radius_m`. Replaces any
+    previous book (so a restart picks up edits); an empty book simply means no stay gets a
+    label, which is a degraded mode rather than an error."""
+    global _PLACE_BOOK
+    _PLACE_BOOK = list(places)
+
+
+def place_book() -> list[dict]:
+    """The installed known-place list (read-only view for diagnostics/tests)."""
+    return list(_PLACE_BOOK)
+
+
+def _match_place(lat: float, lon: float) -> tuple[str, float] | None:
+    """Nearest known place containing this point, as (name, distance_m).
+
+    Containment uses each place's own `radius_m`, so a big region and a small shop can
+    coexist in one book, and the NEAREST match wins when radii overlap (a shop inside a
+    declared district labels the shop, not the district).
+    """
+    hits = []
+    for p in _PLACE_BOOK:
+        try:
+            dist = haversine_m(lat, lon, float(p["lat"]), float(p["lon"]))
+        except (KeyError, TypeError, ValueError):
+            continue                                   # a malformed row must not break shaping
+        if dist <= float(p.get("radius_m", 0)):
+            hits.append((str(p.get("name", "")), dist))
+    return min(hits, key=lambda h: h[1]) if hits else None
+
+
+@register_capability(Capability.PLACE)
+def _place(sources: list[dict]) -> dict:
+    """Where the event happened: the centroid of its contributing fixes, plus the known place
+    that contains it (if any).
+
+    Sources without coordinates are skipped, and an event whose evidence carries none at all
+    yields NO place fragment rather than a fabricated point — declaring the capability on a
+    definition whose sources aren't geo is then visibly a no-op instead of a lie.
+    """
+    fixes = []
+    for s in sources:
+        msg = s.get("message") or {}
+        lat, lon = msg.get("lat"), msg.get("lon")
+        if lat is None or lon is None:
+            continue
+        try:
+            fixes.append((float(lat), float(lon)))
+        except (TypeError, ValueError):
+            continue
+    if not fixes:
+        return {}
+
+    clat = sum(f[0] for f in fixes) / len(fixes)
+    clon = sum(f[1] for f in fixes) / len(fixes)
+    spread = max((haversine_m(clat, clon, la, lo) for la, lo in fixes), default=0.0)
+    match = _match_place(clat, clon)
+    return {"place": Place(
+        lat=clat, lon=clon, spread_m=round(spread, 1),
+        label=match[0] if match else None,
+        distance_m=round(match[1], 1) if match else None,
+    )}

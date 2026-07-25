@@ -73,7 +73,12 @@ def load_region_definitions(dsn: str | None) -> list[EventDefinition]:
 
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT user_id, name, lat, lon, radius_m FROM regions WHERE enabled = true"
+            # kind='zone' ONLY: a POI row (kind='poi') is a label for stay centroids
+            # (see places.py), and expanding it here would mint entered_/left_ events that
+            # collide with the OwnTracks lane's names and fire edges below the sampling
+            # resolution (ADR 0007).
+            "SELECT user_id, name, lat, lon, radius_m FROM regions "
+            "WHERE enabled = true AND kind = 'zone'"
         )
         cols = [c.name for c in cur.description]
         rows = [dict(zip(cols, values)) for values in cur.fetchall()]

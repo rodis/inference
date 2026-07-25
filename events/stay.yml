@@ -29,4 +29,7 @@ sink_topic: high_level_events
 
 # Fires at departure with the last fix INSIDE as its event-time, so start/end bound the
 # actual dwell (the interval capability projects them from the lineage).
-capabilities: [interval]
+# place: the centroid of the contributing fixes (+ spread) and the known place it
+# matched, if any. An unmatched stay still carries WHERE it was — that is the raw
+# material for naming the place later, not a failure (ADR 0007).
+capabilities: [interval, place]
