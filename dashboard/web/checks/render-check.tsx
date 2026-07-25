@@ -11,7 +11,7 @@
  *
  * The fixture mirrors shapes that actually occur in the feed, including the awkward ones: a
  * 6-hour charge spanning a 15-minute trip (concurrent activities), a payment inside both (the
- * innermost must win), and a 32-second "charging session" that must NOT draw as a duration.
+ * innermost must win), and a 60-second charge whose capsule has to be floored to stay legible.
  *
  * Adding a case is one `check(...)` line. Throws at the end if anything failed, which is what
  * makes `npm run check` exit non-zero for CI.
@@ -121,7 +121,10 @@ check("types are deepest-first", prepared.types[0] === "car_trip", prepared.type
 console.log("\n— lanes: what draws as a duration —");
 check("a 19-minute trip is a span", isSpan(E("e8")));
 check("a 6-hour charge is a span", isSpan(E("e10")));
-check("a 60-second charge is NOT a span", !isSpan(E("e11")));
+// Lane is about KIND, not data quality: a 60-second charge is still a charge, and a 32-second
+// car_trip is still a trip. Filing short intervals as moments put car_trip in both lanes on the
+// same day, which read as a broken categorisation rather than the bad inference it is.
+check("a 60-second charge is still a span", isSpan(E("e11")));
 check("a payment is never a span", !isSpan(E("e5")));
 
 console.log("\n— containment —");
@@ -149,7 +152,9 @@ check("the payment's band is its innermost host", L.hosts.get("e5") === "e8", L.
 check("a band per hosting activity", L.bands.length === 2, `${L.bands.length} bands`);
 check("bands are ordered longest host first", L.bands[0].hostId === "e10" && L.bands[1].hostId === "e8",
   L.bands.map((b) => b.hostId).join(","));
-check("the junk charge is placed as a moment, not a span", !L.spans.has("e11"));
+check("a brief span still gets a capsule box", L.spans.has("e11"));
+check("a brief span's capsule is floored for legibility", L.spans.get("e11")!.height === 44,
+  `${L.spans.get("e11")!.height}px`);
 check("a quiet stretch collapsed to a divider", L.gaps.length > 0, `${L.gaps.length} gaps`);
 check("time order is preserved down the page", L.pos.get("e5")! < L.pos.get("e12")!);
 
@@ -159,13 +164,15 @@ const dt = strip(renderToString(
     <DayTimeline events={all} layout={L} levelOf={levelOf} defaultOf={defaultOf}
       derivLevel={prepared.derivLevel} onSelect={() => {}} revealOf={() => 1} byId={byId} />
   </AwareContext.Provider>));
-check("two activity capsules drawn", (dt.match(/class="capsule"/g) || []).length === 2,
+check("three activity capsules drawn", (dt.match(/class="capsule"/g) || []).length === 3,
   `${(dt.match(/class="capsule"/g) || []).length}`);
 check("moments drawn on the right rail", (dt.match(/class="dt-mom"/g) || []).length >= 5,
   `${(dt.match(/class="dt-mom"/g) || []).length}`);
 check("a containment band is drawn", dt.includes("dt-band"));
 check("the moments rail is drawn", dt.includes("dt-rail"));
 check("the lane divider is drawn", dt.includes("dt-rule"));
+check("both lanes are named in a header", dt.includes(">Activities<") && dt.includes(">Moments<"));
+check("the header shares the lanes' boundary variable", dt.includes("--capcols"));
 check("the trip shows its duration", dt.includes("19 min"));
 check("a payment shows its amount", dt.includes("CHF 6.20"));
 // "no host" appears exactly on the moments the layout found no container for — here the

@@ -15,7 +15,8 @@ Tap any event for a recursive dig-down into its derivation lineage.
 
 ## The day timeline: two lanes
 
-A day has two kinds of thing in it, and one column made them look alike:
+A day has two kinds of thing in it, and one column made them look alike. Each lane is labelled
+with its own header:
 
 - **Activities** (left) — events with a duration, as capsules whose length is how long they
   lasted. Concurrent activities sit in **sub-columns**, because on a true time scale a 6-hour
@@ -23,6 +24,14 @@ A day has two kinds of thing in it, and one column made them look alike:
 - **Moments** (right) — points in time, as smaller hollow discs on their own dotted rail.
   Half the visual weight is deliberate: the left lane is the shape of the day, the right lane
   is texture within it.
+
+The lane is decided by **kind alone** (`isSpan`) — does this type read as a duration, and does
+it carry an interval. Not by whether the interval looks *plausible*: a 32-second `car_trip` is
+a phantom trip, but it is still a trip, and filing it right because it was short put `car_trip`
+in both lanes on the same day, which reads as a broken categorisation rather than as the bad
+inference it actually is. Short spans stay left and get a floor on their capsule height
+(`CAP_MIN`) so they stay legible. If a noisy type crowds the lane, demote it on the levels
+board — that's the knob for "I care less about this", and it's per-user.
 
 **One shared scale is what makes it work.** `dayLayout` builds a single piecewise-linear
 time→y map for the day and places both lanes on it, so a span's height is just
@@ -42,11 +51,11 @@ labels have room, capped so a lull doesn't run off-screen, and a genuinely quiet
 collapses to a labelled divider. Two consequences: a span crowded with moments grows taller
 than its duration alone implies, and a busy hour therefore gets more room than a dead one.
 
-**`MIN_SPAN_SECONDS` (2 min)** decides the lane, not just the look. Below it an interval has no
-meaningful extent and renders as a moment. This is the same line `scripts/trip_eval.py` uses to
-count junk trips, applied to presentation — the feed is full of sub-minute intervals (9s, 18s,
-32s "charging sessions" from a flaky car USB; 18s and 32s phantom "trips") and drawing each as
-a duration capsule fills the lane with slivers claiming a shape they don't have.
+**A note on the feed's noise.** `phone_is_charging` fires ~20×/day with durations like 5s, 9s,
+18s, 32s — a flaky car USB toggling power, not twenty charging sessions — and `car_trip` has
+phantom entries of the same order. They all draw as (floored) capsules in the activity lane,
+which is honest but busy. The fix is upstream in the event definitions, or a demotion on the
+levels board; it is deliberately *not* a presentation filter (see above).
 
 ## Layout
 

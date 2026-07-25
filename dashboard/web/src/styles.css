@@ -256,19 +256,27 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 /* Geometry lives here so the component only has to know the sub-column width (CAP_W).
    --capcols is set per day by the layout: how many concurrent activities need side-by-side
    capsules. The activity lane widens with it; the moments lane starts where it ends. */
-.dt {
-  position: relative; min-height: 40px;
+.dt-wrap {
   --gutter: 44px;                 /* right-aligned clock column */
   --capw: 46px;                   /* one capsule sub-column — must match CAP_W in DayTimeline */
-  --capcols: 1;
+  --capcols: 1;                   /* set per day by the layout: concurrent activities */
   --actlabel: 176px;              /* room for an activity's name + chips */
   --laneA: calc(var(--gutter) + var(--capcols) * var(--capw) + var(--actlabel));
   --dotx: calc(var(--laneA) + 42px);   /* centre of the moments rail */
   --band-a: 0.075;
 }
-@media (prefers-color-scheme: dark) { .dt { --band-a: 0.15; } }
-:root[data-theme="dark"] .dt { --band-a: 0.15; }
-:root[data-theme="light"] .dt { --band-a: 0.075; }
+@media (prefers-color-scheme: dark) { .dt-wrap { --band-a: 0.15; } }
+:root[data-theme="dark"] .dt-wrap { --band-a: 0.15; }
+:root[data-theme="light"] .dt-wrap { --band-a: 0.075; }
+.dt-lanes { position: relative; min-height: 40px; }
+
+/* lane headers — they name the two kinds of thing a day holds, and land on the same
+   boundary as the lanes because both derive it from --laneA */
+.dt-head { display: grid; grid-template-columns: var(--laneA) 1fr; border-bottom: 1px solid var(--hair); padding-bottom: 9px; margin-bottom: 6px; }
+.dt-head > div { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.dt-head > div + div { padding-left: 18px; border-left: 1px dashed var(--hair-2); }
+.dt-head .lh-title { font-family: var(--rounded); font-size: 14px; font-weight: 750; letter-spacing: -0.01em; }
+.dt-head .lh-sub { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: 0.02em; }
 
 .dt-rule { position: absolute; top: 0; bottom: 0; left: var(--laneA); border-left: 1px dashed var(--hair-2); }
 /* the moments lane gets its own track, so it reads as a timeline and not loose annotation */
@@ -309,8 +317,9 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 @media (max-width: 760px) {
   /* below this two full lanes don't fit: keep the capsules, strip the activity label, and let
      the moments lane carry the names */
-  .dt { --actlabel: 8px; --dotx: calc(var(--laneA) + 34px); }
+  .dt-wrap { --actlabel: 8px; --dotx: calc(var(--laneA) + 34px); }
   .dt-act .dt-body { display: none; }
+  .dt-head .lh-sub { display: none; }
 }
 
 /* ── the L / D / override chip family (shared: timeline, modal, levels board) ──── */

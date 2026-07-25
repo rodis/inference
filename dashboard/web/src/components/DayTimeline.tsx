@@ -35,7 +35,7 @@ export default function DayTimeline({
 }: Props) {
   const { pos, spans, cols, bands, hosts, gaps, h } = layout;
 
-  if (!events.length) return <div className="dt"><div className="vt-empty">— nothing here —</div></div>;
+  if (!events.length) return <div className="dt-wrap"><div className="vt-empty">— nothing here —</div></div>;
 
   // how many of an event's direct contributors are currently collapsed below the altitude
   const hiddenBeneath = (e: AwareEvent) =>
@@ -48,7 +48,21 @@ export default function DayTimeline({
   const moments = events.filter((e) => !isSpan(e)).sort((a, b) => a.epoch - b.epoch);
 
   return (
-    <div className="dt" style={{ height: h, ["--capcols" as string]: cols }}>
+    /* --capcols lives on the wrapper so the lane headers and the lanes derive the same
+       boundary from it — the activity lane widens when a day needs side-by-side capsules. */
+    <div className="dt-wrap" style={{ ["--capcols" as string]: cols }}>
+      <div className="dt-head">
+        <div>
+          <span className="lh-title">Activities</span>
+          <span className="lh-sub">intervals · capsule ∝ duration</span>
+        </div>
+        <div>
+          <span className="lh-title">Moments</span>
+          <span className="lh-sub">points in time · placed inside their host</span>
+        </div>
+      </div>
+
+      <div className="dt-lanes" style={{ height: h }}>
       <div className="dt-rule" />
       <div className="dt-rail" />
 
@@ -111,6 +125,7 @@ export default function DayTimeline({
           </div>
         );
       })}
+      </div>
     </div>
   );
 }

@@ -93,22 +93,16 @@ export const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 export const SPAN_EVENTS = new Set<string>(["car_trip", "phone_is_charging"]);
 export const intervalOf = (e: AwareEvent) => e.message.interval ?? null;
 
-/** Below this, an interval has no *meaningful* extent and reads as a moment instead.
+/** Whether to draw this event as a duration capsule — and therefore which *lane* of the day
+ *  timeline it belongs to.
  *
- *  Not cosmetic — it's the same 2-minute line `scripts/trip_eval.py` uses to count junk
- *  trips, applied to presentation. The real feed is full of sub-minute intervals (9s, 18s,
- *  32s "charging sessions" from a flaky car USB; 18s and 32s phantom "trips"), and drawing
- *  each as a duration capsule fills the activity lane with slivers that claim a shape they
- *  don't have. A 9-second charge is a thing that *happened*, not a thing that *lasted*. */
-export const MIN_SPAN_SECONDS = 120;
-
-/** Whether to draw this event as a duration capsule: the type reads as a duration, it
- *  carries an interval, and that interval is long enough to mean anything. This is what
- *  decides the *lane* on the day timeline. */
-export const isSpan = (e: AwareEvent) => {
-  const iv = e.message.interval;
-  return SPAN_EVENTS.has(e.name) && !!iv && iv.duration_seconds >= MIN_SPAN_SECONDS;
-};
+ *  Deliberately only about **kind**, not about data quality. A 32-second `car_trip` is a
+ *  phantom trip, but it is still a *trip*: filing it as a moment because it's short put
+ *  `car_trip` in both lanes on the same day, which reads as a broken categorisation rather
+ *  than as the bad inference it actually is. Short spans stay in the activity lane and get a
+ *  floor on their capsule height (CAP_MIN) so they remain legible; if a noisy type crowds the
+ *  lane, the fix is to demote it on the levels board, not to re-file it here. */
+export const isSpan = (e: AwareEvent) => SPAN_EVENTS.has(e.name) && !!e.message.interval;
 /** Which of the day timeline's two lanes an event belongs to: intervals on the left as
  *  capsules, points in time on the right as small discs on their own track. */
 export const laneOf = (e: AwareEvent): "activity" | "moment" => (isSpan(e) ? "activity" : "moment");
