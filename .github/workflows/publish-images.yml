@@ -93,8 +93,33 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Receipt that THIS component's image actually reached the registry. bump-manifests bumps
+      # only components with a receipt, which is what decouples the matrix legs: a sibling that
+      # fails (a Docker Hub timeout pulling the buildx builder once took out bmw-cardata) can no
+      # longer hold back a healthy component's deploy. Only reached on success — a failed build
+      # short-circuits the job before this step.
+      - name: Record that this component pushed
+        run: |
+          mkdir -p pushed
+          printf '%s' '${{ matrix.component.values }}' > "pushed/${{ matrix.component.name }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pushed-${{ matrix.component.name }}
+          path: pushed/${{ matrix.component.name }}
+          retention-days: 1
+
   bump-manifests:
-    needs: [discover, build-push]
+    needs: [checks, discover, build-push]
+    # Deliberately NOT gated on build-push succeeding. A matrix job reports failure if ANY leg
+    # fails, so one component's transient registry error used to skip the bump for every
+    # component — a Docker Hub timeout on bmw-cardata blocked a dashboard-only change from ever
+    # reaching deploy-state. What actually shipped is read from the `pushed-*` receipts instead,
+    # so a broken component is left alone rather than taking the others down with it.
+    #
+    # Still gated on `checks`, so red code never deploys; and the run as a whole still shows
+    # red when a component fails, so a partial deploy is never silent.
+    if: ${{ !cancelled() && needs.checks.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -104,23 +129,66 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           ref: main
 
-      - name: Bump image tags in deploy/
+      - uses: actions/download-artifact@v4
+        # No receipts at all (every build failed) makes this step fail; the next step turns that
+        # into an explicit "nothing shipped" error rather than a confusing artifact message.
+        continue-on-error: true
+        with:
+          pattern: pushed-*
+          merge-multiple: true
+          path: pushed
+
+      - name: Set image tags in deploy/
         env:
           COMPONENTS: ${{ needs.discover.outputs.components }}
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           short="${SHA:0:7}"
-          echo "$COMPONENTS" | jq -c '.[]' | while read -r c; do
-            name=$(echo "$c" | jq -r '.name')
-            values=$(echo "$c" | jq -r '.values')
+
+          # main carries a `sha-bootstrap` placeholder in every values.yml — the real tag lives
+          # ONLY on deploy-state. So a component we did NOT just build has to have its deployed
+          # tag carried forward: force-pushing main's tree otherwise rolls it back to a tag that
+          # was never published, and the pod lands in ImagePullBackOff.
+          git fetch origin deploy-state >/dev/null 2>&1 && has_ds=1 || has_ds=0
+
+          : > /tmp/bumped
+          : > /tmp/carried
+          while read -r c; do
+            name=$(jq -r '.name' <<<"$c")
+            values=$(jq -r '.values' <<<"$c")
             if [ ! -f "$values" ]; then
-              echo "::warning::No manifest for $name at $values, skipping"
+              echo "::warning::No manifest for $name at $values — skipping"
               continue
             fi
-            yq -i ".deployment.image.tag = \"sha-${short}\"" "$values"
-            echo "Bumped $values -> sha-${short}"
-          done
+
+            if [ -f "pushed/$name" ]; then
+              yq -i ".deployment.image.tag = \"sha-${short}\"" "$values"
+              echo "  built   $name -> sha-${short}"
+              echo "$name" >> /tmp/bumped
+              continue
+            fi
+
+            if [ "$has_ds" = 1 ] && git show "origin/deploy-state:${values}" > /tmp/ds.yml 2>/dev/null; then
+              ds_tag=$(yq '.deployment.image.tag' /tmp/ds.yml)
+              if [ -n "$ds_tag" ] && [ "$ds_tag" != "null" ]; then
+                yq -i ".deployment.image.tag = \"${ds_tag}\"" "$values"
+                echo "::warning::$name did not ship this run — carried its deployed tag ${ds_tag} forward"
+                echo "$name" >> /tmp/carried
+                continue
+              fi
+            fi
+            echo "::warning::$name did not ship and has no deployed tag to carry forward — leaving $(yq '.deployment.image.tag' "$values")"
+          done < <(jq -c '.[]' <<<"$COMPONENTS")
+
+          if [ ! -s /tmp/bumped ]; then
+            echo "::error::No component image reached the registry this run — refusing to touch deploy-state."
+            exit 1
+          fi
+          {
+            echo "BUMPED=$(paste -sd, /tmp/bumped)"
+            echo "CARRIED=$(paste -sd, /tmp/carried)"
+          } >> "$GITHUB_ENV"
 
       - name: Commit bump and force-push to deploy-state
         run: |
@@ -128,12 +196,14 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if git diff --quiet -- deploy/; then
-            # No image actually changed (e.g. re-run on same SHA) — still mirror main to deploy-state
+            # No tag actually changed (e.g. a re-run on the same SHA) — still mirror main.
             git push --force origin HEAD:deploy-state
             exit 0
           fi
+          msg="deploy: ${BUMPED} @ sha-${GITHUB_SHA:0:7}"
+          if [ -n "${CARRIED:-}" ]; then
+            msg="${msg} (not rebuilt, tag carried: ${CARRIED})"
+          fi
           git add deploy/
-          git commit \
-            -m "deploy: image tags @ sha-${GITHUB_SHA:0:7}" \
-            --trailer "Code-Commit:${GITHUB_SHA}"
+          git commit -m "$msg" --trailer "Code-Commit:${GITHUB_SHA}"
           git push --force origin HEAD:deploy-state

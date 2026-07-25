@@ -35,9 +35,18 @@ jobs:
             echo "deploy-state does not exist yet — mirroring main as-is"
             exit 0
           fi
-          # For each worker manifest, copy the tag from deploy-state onto main's
+          # For each CI-built component's manifest, copy the tag from deploy-state onto main's
           # tree so the mirror keeps the deployed image instead of the placeholder.
-          find deploy/inference/kustomize/base -mindepth 2 -maxdepth 2 -name values.yml | while read -r values; do
+          #
+          # The dashboard is listed explicitly because it lives outside workers/ — it used to be
+          # missed here, so a deploy-only push reset it to main's `sha-bootstrap`. Vector is
+          # deliberately absent: it runs an upstream image pinned in its helmChart.yml and has no
+          # `deployment.image.tag`, so a blanket `find deploy -name values.yml` would invent one.
+          {
+            find deploy/inference/kustomize/base -mindepth 2 -maxdepth 2 -name values.yml
+            echo deploy/dashboard/kustomize/base/values.yml
+          } | while read -r values; do
+            [ -f "$values" ] || continue
             git show "origin/deploy-state:${values}" > /tmp/ds_values.yml 2>/dev/null || continue
             ds_tag="$(yq '.deployment.image.tag' /tmp/ds_values.yml)"
             if [ -n "$ds_tag" ] && [ "$ds_tag" != "null" ]; then
