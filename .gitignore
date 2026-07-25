@@ -9,3 +9,6 @@ dist/
 *.egg-info/
 helm/inference-worker/charts/
 helm/inference-worker/*.tgz
+
+# SSR output of dashboard/web `npm run check` (build artefact of the render checks)
+dashboard/web/.ssrout/

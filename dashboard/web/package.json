@@ -6,8 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "gen:types": "json2ts -i ../../contracts/inferred_event.schema.json -o src/generated/events.ts --bannerComment \"/* AUTO-GENERATED from contracts/inferred_event.schema.json — do not edit. Regenerate: uv run python scripts/emit_event_schema.py && npm run gen:types */\"",
-    "preview": "vite preview"
+    "gen:types": "json2ts -i ../../contracts/inferred_event.schema.json -o src/generated/events.ts --bannerComment \"/* AUTO-GENERATED from contracts/inferred_event.schema.json \u2014 do not edit. Regenerate: uv run python scripts/emit_event_schema.py && npm run gen:types */\"",
+    "preview": "vite preview",
+    "check": "vite build --ssr checks/render-check.tsx --outDir .ssrout --logLevel error && node .ssrout/render-check.js"
   },
   "dependencies": {
     "lucide-react": "^1.22.0",

@@ -63,6 +63,12 @@ jobs:
       - name: Typecheck (tsc)
         run: npx tsc -b
 
+      - name: Render + model checks (levels ladder)
+        # An SSR pass over the dashboards that depend on the level ladder. The lane a type
+        # lands in is derived from the shape of the lineage graph, so a change to derivLevel /
+        # laneCount / defaultLevelOf silently re-points every default — this catches that.
+        run: npm run check
+
       - name: Generated types are up to date
         # The committed TS must match the committed schema — regenerate and fail on drift.
         run: |
