@@ -103,6 +103,18 @@ NEON_DATABASE_URL=... uv run python scripts/trip_eval.py --days 25 [-v] [<cand.y
 vector vrl -i sample.json -p program.vrl                 # run one transform's `source:` program
 (cd deploy/vector/kustomize/base/configs && vector validate --no-environment --config-dir .)
 
+# Render manifests locally BEFORE pushing deploy/** — this is the same build Argo runs, and an
+# unrenderable kustomization leaves the app stuck in ComparisonError (revision empty, hard
+# refresh won't clear it; only a new commit will). `--enable-helm` is required: every base
+# inflates a Helm chart via HelmChartInflationGenerator.
+kustomize build deploy/inference/kustomize/base --enable-helm            # runtime + bmw-cardata
+kustomize build deploy/vector/kustomize/overlays/production --enable-helm
+kustomize build deploy/dashboard/kustomize/base --enable-helm
+# Inspect a patched field rather than trusting the patch — e.g. the Stakater chart renders
+# `strategy: {type: RollingUpdate}` with NO `rollingUpdate` child, so a JSON6902 `add` into
+# /spec/strategy/rollingUpdate/... fails the BUILD, and replacing the whole object is required:
+kustomize build deploy/inference/kustomize/base --enable-helm | grep -A 4 'strategy:'
+
 # Regenerate the shared contract after changing inference.event (CI checks it's current)
 uv run python scripts/emit_event_schema.py            # -> contracts/inferred_event.schema.json
 (cd dashboard/web && npm run gen:types)               # -> src/generated/events.ts
