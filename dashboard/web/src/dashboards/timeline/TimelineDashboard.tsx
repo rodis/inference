@@ -2,8 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useAware } from "../../app/useAware";
 import { DAY_WINDOW } from "../../api";
 import type { AwareEvent } from "../../types";
-import { absorbedIds, dayKey, dayScale, humanDur, laneNames } from "../../view";
-import VTimeline from "../../components/VTimeline";
+import { absorbedIds, catOf, dayKey, dayLayout, humanDur, laneNames } from "../../view";
+import DayTimeline from "../../components/DayTimeline";
 import WeekStrip from "../../components/WeekStrip";
 import EventModal from "../../components/EventModal";
 
@@ -27,9 +27,9 @@ export default function TimelineDashboard() {
     return Math.max(0, Math.min(1, altitude - levelOf(e.name) + 1));
   }, [altitude, levelOf, isHidden]);
 
-  // All of the day's events stay in the layout; dayScale positions each by *time of day*
-  // (proportional, quiet gaps collapsed) and grows/reveals detail with altitude, so lower-
-  // layer events fade in/out at their true time instead of popping the layout. A visible
+  // All of the day's events stay in the layout; dayLayout places each by *time of day* on one
+  // shared scale (proportional, quiet gaps collapsed) and reveals detail with altitude, so
+  // lower-layer events fade in/out at their true time instead of popping the layout. A visible
   // span's get-in/get-out contributors fold into its capsule (revealDay), so the day reads as
   // a flat list of activities rather than a capsule plus its redundant boundary rows.
   // A type parked on the levels board is dropped here, not merely faded: leaving it in with
@@ -41,7 +41,7 @@ export default function TimelineDashboard() {
   );
   const absorbed = useMemo(() => absorbedIds(dayAll, revealOf), [dayAll, revealOf]);
   const revealDay = useCallback((e: AwareEvent) => (absorbed.has(e.id) ? 0 : revealOf(e)), [absorbed, revealOf]);
-  const packed = useMemo(() => dayScale(dayAll, revealDay), [dayAll, revealDay]);
+  const packed = useMemo(() => dayLayout(dayAll, revealDay, (n) => catOf(n).c), [dayAll, revealDay]);
   const shownCount = useMemo(() => dayAll.reduce((n, e) => (revealDay(e) > 0.5 ? n + 1 : n), 0), [dayAll, revealDay]);
 
   // --- anchored zoom plumbing -------------------------------------------------
@@ -187,7 +187,7 @@ export default function TimelineDashboard() {
           <span className="zoom-hint">pinch or ⌘-scroll on the timeline to zoom · {shownCount} shown</span>
         </div>
         <div className="vtwrap" ref={wrapRef}>
-          <VTimeline events={dayAll} posOf={(e) => packed.pos.get(e.id) ?? 0} packedHeight={packed.h} spans={packed.spans} gaps={packed.gaps} overlaps={packed.overlaps} levelOf={levelOf} defaultOf={defaultOf} derivLevel={derivLevel} onSelect={setModalEvent} revealOf={revealDay} byId={byId} />
+          <DayTimeline events={dayAll} layout={packed} levelOf={levelOf} defaultOf={defaultOf} derivLevel={derivLevel} onSelect={setModalEvent} revealOf={revealDay} byId={byId} />
         </div>
       </div>
 

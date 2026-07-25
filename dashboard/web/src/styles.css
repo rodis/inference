@@ -18,6 +18,7 @@
   --hover: rgba(0,0,0,0.04);
   --scrim: rgba(28,32,46,0.4);
   --lane-fill: #f8f9fc; --lane-edge: #e4e7ee; --tray-fill: #f1f2f6;
+  --rail: #d7dbe4;
   --l1-bg: #e7eeff; --l1-fg: #2f58d8;
   --l2-bg: #e6f7ef; --l2-fg: #178a55;
   --l3-bg: #efeaff; --l3-fg: #6a4cd0;
@@ -48,6 +49,7 @@
     --hover: rgba(255,255,255,0.06);
     --scrim: rgba(6,8,12,0.62);
     --lane-fill: #191c23; --lane-edge: #2a2f3a; --tray-fill: #171a20;
+    --rail: #363c4a;
     --l1-bg: #1e2740; --l1-fg: #9ab4ff;
     --l2-bg: #172f24; --l2-fg: #6ed6a0;
     --l3-bg: #251f3a; --l3-fg: #b79cf5;
@@ -71,6 +73,7 @@
   --hover: rgba(255,255,255,0.06);
   --scrim: rgba(6,8,12,0.62);
   --lane-fill: #191c23; --lane-edge: #2a2f3a; --tray-fill: #171a20;
+  --rail: #363c4a;
   --l1-bg: #1e2740; --l1-fg: #9ab4ff;
   --l2-bg: #172f24; --l2-fg: #6ed6a0;
   --l3-bg: #251f3a; --l3-fg: #b79cf5;
@@ -93,6 +96,7 @@
   --hover: rgba(0,0,0,0.04);
   --scrim: rgba(28,32,46,0.4);
   --lane-fill: #f8f9fc; --lane-edge: #e4e7ee; --tray-fill: #f1f2f6;
+  --rail: #d7dbe4;
   --l1-bg: #e7eeff; --l1-fg: #2f58d8;
   --l2-bg: #e6f7ef; --l2-fg: #178a55;
   --l3-bg: #efeaff; --l3-fg: #6a4cd0;
@@ -224,13 +228,7 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 /* ── the vertical timeline ─────────────────────────────────────────────────────── */
 .vt { position: relative; min-height: 40px; }
 .vt-line { position: absolute; left: 62px; transform: translateX(-50%); width: 3px; border-radius: 2px; z-index: 0; transition: top 0.6s cubic-bezier(.22,1,.36,1), height 0.6s cubic-bezier(.22,1,.36,1), opacity 0.55s ease; }
-/* duration events → a rounded capsule whose length ∝ how long they lasted; icon rides the top */
-.vt-capsule { width: 40px; border-radius: 20px; margin: 1px auto 0; display: flex; align-items: flex-start; justify-content: center; padding-top: 11px; color: #fff; box-shadow: 0 3px 8px rgba(24,28,40,0.18); position: relative; z-index: 1; transition: height 0.6s cubic-bezier(.22,1,.36,1); }
-/* collapsed quiet stretch → a small pill interrupting the rail */
-.vt-gap { position: absolute; left: 62px; transform: translate(-50%, -50%); z-index: 1; font-family: var(--mono); font-size: 9px; color: var(--muted); background: var(--card); border: 1px dashed var(--hair-2); border-radius: 999px; padding: 2px 9px; white-space: nowrap; letter-spacing: 0.03em; transition: top 0.6s cubic-bezier(.22,1,.36,1); }
 .vt-card { position: absolute; left: 0; right: 0; display: grid; grid-template-columns: 40px 44px 1fr; align-items: start; transition: top 0.6s cubic-bezier(.22,1,.36,1), opacity 0.55s ease; }
-/* during an active pinch/scroll gesture, positions track the fingers 1:1 (no glide) */
-.vtwrap.zooming .vt-card, .vtwrap.zooming .vt-line, .vtwrap.zooming .vt-circle, .vtwrap.zooming .vt-capsule { transition: none; }
 .vt-time { text-align: right; font-family: var(--mono); font-size: 11px; color: var(--muted); padding-top: 12px; font-variant-numeric: tabular-nums; }
 .vt-circle { width: 38px; height: 38px; border-radius: 50%; margin: 1px auto 0; display: flex; align-items: center; justify-content: center; font-size: 18px; color: #fff; box-shadow: 0 3px 8px rgba(24,28,40,0.18); position: relative; z-index: 1; transition: transform 0.55s cubic-bezier(.22,1,.36,1); }
 .vt-body { text-align: left; background: none; border: 0; color: inherit; cursor: pointer; padding: 6px 4px 12px 6px; border-radius: 12px; transition: background 0.12s; }
@@ -239,7 +237,6 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 .vt-empty { font-family: var(--mono); font-size: 12px; color: var(--muted); padding: 16px 6px; }
 .ev-meta { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-top: 3px; }
 .ev-meta .dur { color: var(--accent); font-weight: 600; }
-.ev-overlap { font-family: var(--mono); font-size: 10.5px; font-weight: 700; color: var(--good); letter-spacing: 0.02em; margin-bottom: 2px; }
 /* line 1: name + its classification (kind word, L/D chips) all on one row */
 .ev-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .ev-title { font-family: var(--rounded); font-weight: 650; font-size: 15px; letter-spacing: -0.01em; }
@@ -254,6 +251,67 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 .zoomctl button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .zoomctl .zlevel { text-align: center; font-family: var(--mono); font-size: 9px; color: var(--muted); line-height: 1.25; padding: 1px 0; }
 .zoomctl .zlevel b { display: block; font-family: var(--rounded); font-size: 13px; color: var(--accent); }
+
+/* ── the day timeline: two lanes on one shared time scale ─────────────────────── */
+/* Geometry lives here so the component only has to know the sub-column width (CAP_W).
+   --capcols is set per day by the layout: how many concurrent activities need side-by-side
+   capsules. The activity lane widens with it; the moments lane starts where it ends. */
+.dt {
+  position: relative; min-height: 40px;
+  --gutter: 44px;                 /* right-aligned clock column */
+  --capw: 46px;                   /* one capsule sub-column — must match CAP_W in DayTimeline */
+  --capcols: 1;
+  --actlabel: 176px;              /* room for an activity's name + chips */
+  --laneA: calc(var(--gutter) + var(--capcols) * var(--capw) + var(--actlabel));
+  --dotx: calc(var(--laneA) + 42px);   /* centre of the moments rail */
+  --band-a: 0.075;
+}
+@media (prefers-color-scheme: dark) { .dt { --band-a: 0.15; } }
+:root[data-theme="dark"] .dt { --band-a: 0.15; }
+:root[data-theme="light"] .dt { --band-a: 0.075; }
+
+.dt-rule { position: absolute; top: 0; bottom: 0; left: var(--laneA); border-left: 1px dashed var(--hair-2); }
+/* the moments lane gets its own track, so it reads as a timeline and not loose annotation */
+.dt-rail { position: absolute; top: 6px; bottom: 10px; left: var(--dotx); border-left: 2px dotted var(--rail); }
+
+/* containment: the host activity's stripe across the moments lane */
+.dt-band { position: absolute; left: var(--laneA); right: 0; border-radius: 0 14px 14px 0; pointer-events: none; transition: top 0.6s cubic-bezier(.22,1,.36,1), height 0.6s cubic-bezier(.22,1,.36,1); }
+.dt-band::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: currentColor; opacity: 0.45; }
+
+.dt-gap { position: absolute; left: calc(var(--gutter) + var(--capw) / 2); transform: translate(-50%, -50%); z-index: 2; font-family: var(--mono); font-size: 9px; color: var(--muted); background: var(--card); border: 1px dashed var(--hair-2); border-radius: 999px; padding: 2px 9px; white-space: nowrap; letter-spacing: 0.03em; transition: top 0.6s cubic-bezier(.22,1,.36,1); }
+
+/* an activity: capsule ∝ duration, in its sub-column */
+.dt-act { position: absolute; left: 0; width: var(--laneA); display: grid; grid-template-columns: var(--gutter) auto 1fr; align-items: start; z-index: 1; transition: top 0.6s cubic-bezier(.22,1,.36,1), opacity 0.55s ease; }
+.dt-act > .t { text-align: right; font-family: var(--mono); font-size: 11px; color: var(--muted); padding-top: 11px; font-variant-numeric: tabular-nums; }
+.dt-act .caps { position: relative; }
+.dt-act .capsule { width: 38px; border-radius: 19px; margin-top: 1px; display: flex; align-items: flex-start; justify-content: center; padding-top: 10px; color: #fff; box-shadow: 0 3px 8px rgba(24,28,40,0.2); transition: height 0.6s cubic-bezier(.22,1,.36,1), margin-left 0.4s ease; }
+
+/* a moment: deliberately half the weight — hollow, smaller, on the rail */
+.dt-mom { position: absolute; left: var(--laneA); right: 0; display: grid; grid-template-columns: calc(var(--dotx) - var(--laneA) - 13px) 26px 1fr; align-items: start; z-index: 1; transition: top 0.6s cubic-bezier(.22,1,.36,1), opacity 0.55s ease; }
+.dt-mom > .t { text-align: right; font-family: var(--mono); font-size: 11px; color: var(--muted); padding-top: 4px; padding-right: 10px; font-variant-numeric: tabular-nums; }
+.dt-mom .disc { width: 26px; height: 26px; border-radius: 50%; background: var(--card); border: 2px solid currentColor; display: flex; align-items: center; justify-content: center; box-shadow: var(--shadow-sm); }
+.dt-mom .dt-body { padding: 2px 8px 8px 12px; }
+.dt-mom .ev-title { font-size: 13.5px; font-weight: 600; }
+.dt-mom .ev-meta { font-size: 11px; margin-top: 1px; }
+
+.dt-body { text-align: left; background: none; border: 0; color: inherit; cursor: pointer; padding: 6px 6px 12px 8px; border-radius: 12px; transition: background 0.12s; }
+.dt-body:hover { background: var(--card-2); }
+.dt-body:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+
+/* during an active pinch/scroll gesture, positions track the fingers 1:1 (no glide) */
+.vtwrap.zooming .dt-act, .vtwrap.zooming .dt-mom, .vtwrap.zooming .dt-band,
+.vtwrap.zooming .dt-gap, .vtwrap.zooming .capsule { transition: none; }
+
+.ev-amount { font-family: var(--rounded); font-weight: 700; font-size: 13.5px; font-variant-numeric: tabular-nums; color: var(--accent); }
+.ev-host { color: var(--muted-2); }
+.orphan { font-family: var(--mono); font-size: 10px; color: var(--muted-2); border: 1px dashed var(--hair-2); border-radius: 6px; padding: 1px 6px; white-space: nowrap; }
+
+@media (max-width: 760px) {
+  /* below this two full lanes don't fit: keep the capsules, strip the activity label, and let
+     the moments lane carry the names */
+  .dt { --actlabel: 8px; --dotx: calc(var(--laneA) + 34px); }
+  .dt-act .dt-body { display: none; }
+}
 
 /* ── the L / D / override chip family (shared: timeline, modal, levels board) ──── */
 .lchip { font-family: var(--mono); font-size: 10px; font-weight: 700; border-radius: 6px; padding: 2px 7px; background: var(--l4-bg); color: var(--l4-fg); }

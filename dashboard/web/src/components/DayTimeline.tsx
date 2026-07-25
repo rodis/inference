@@ -1,0 +1,116 @@
+import type { AwareEvent } from "../types";
+import type { DayLayout } from "../view";
+import { catOf, fmtTime, hostOf, humanDur, intervalOf, isSpan, labelOf, startOf } from "../view";
+import EventBody from "./EventBody";
+
+interface Props {
+  events: AwareEvent[];
+  layout: DayLayout;
+  levelOf: (name: string) => number;
+  defaultOf: (name: string) => number | null;
+  derivLevel: (e: AwareEvent) => number;
+  onSelect: (e: AwareEvent) => void;
+  /** 0..1 — how revealed an event is at the current altitude (1 = full detail). */
+  revealOf: (e: AwareEvent) => number;
+  byId: Record<string, AwareEvent>;
+}
+
+const CAP_W = 46;      // one capsule sub-column, must match --capw in styles.css
+const HIT_EPS = 0.1;   // below this an event is decorative — no pointer, no tab stop
+
+/** The day as two parallel timelines on one shared time scale.
+ *
+ *  Left lane — **activities**: events with a meaningful duration, as capsules whose length is
+ *  `Y(end) − Y(start)` on the shared scale. Concurrent activities sit in sub-columns.
+ *
+ *  Right lane — **moments**: points in time, as smaller hollow discs on their own dotted rail.
+ *  A moment that fell inside an activity renders within that activity's vertical range, and the
+ *  activity casts a tinted **band** across the lane to say so — figure/ground rather than a
+ *  tether line per dot, so five payments inside one visit stay legible.
+ *
+ *  Half the visual weight on the right is deliberate: the left lane is the shape of the day,
+ *  the right lane is texture within it. See `dayLayout` for the scale and the lane rules. */
+export default function DayTimeline({
+  events, layout, levelOf, defaultOf, derivLevel, onSelect, revealOf, byId,
+}: Props) {
+  const { pos, spans, cols, bands, hosts, gaps, h } = layout;
+
+  if (!events.length) return <div className="dt"><div className="vt-empty">— nothing here —</div></div>;
+
+  // how many of an event's direct contributors are currently collapsed below the altitude
+  const hiddenBeneath = (e: AwareEvent) =>
+    (e.message.derived_from || []).reduce((n, p) => {
+      const child = byId[p.id];
+      return child && revealOf(child) < 0.5 ? n + 1 : n;
+    }, 0);
+
+  const activities = events.filter(isSpan).sort((a, b) => startOf(a) - startOf(b));
+  const moments = events.filter((e) => !isSpan(e)).sort((a, b) => a.epoch - b.epoch);
+
+  return (
+    <div className="dt" style={{ height: h, ["--capcols" as string]: cols }}>
+      <div className="dt-rule" />
+      <div className="dt-rail" />
+
+      {/* containment: a host's stripe across the moments lane, longest host first */}
+      {bands.map((b) => (
+        <div key={"band-" + b.hostId} className="dt-band"
+          style={{
+            top: b.top, height: b.height, color: b.color,
+            background: `color-mix(in srgb, ${b.color} calc(var(--band-a) * 100%), transparent)`,
+          }} />
+      ))}
+
+      {/* a genuinely quiet stretch, collapsed to a labelled divider */}
+      {gaps.map((g, i) => (
+        <div key={"gap-" + i} className="dt-gap" style={{ top: g.y }}>
+          <span>{humanDur(g.seconds)} quiet</span>
+        </div>
+      ))}
+
+      {activities.map((e) => {
+        const box = spans.get(e.id);
+        const top = box?.top ?? pos.get(e.id) ?? 0;
+        const cat = catOf(e.name), r = revealOf(e), iv = intervalOf(e);
+        return (
+          <div key={e.id} className="dt-act" style={{ top, opacity: r, pointerEvents: r < HIT_EPS ? "none" : undefined }}>
+            <div className="t">{fmtTime(new Date((iv?.started_at ?? e.epoch) * 1000))}</div>
+            <div className="caps" style={{ width: cols * CAP_W }}>
+              <div className="capsule"
+                style={{ background: cat.c, height: box?.height ?? 44, marginLeft: (box?.col ?? 0) * CAP_W }}>
+                <cat.Icon size={18} strokeWidth={2.25} />
+              </div>
+            </div>
+            <button className="dt-body" onClick={() => onSelect(e)} tabIndex={r < HIT_EPS ? -1 : undefined}>
+              <EventBody event={e} level={levelOf(e.name)} def={defaultOf(e.name)}
+                depth={derivLevel(e)} hiddenBeneath={hiddenBeneath(e)} />
+            </button>
+          </div>
+        );
+      })}
+
+      {moments.map((e) => {
+        const y = pos.get(e.id) ?? 0;
+        const cat = catOf(e.name), r = revealOf(e);
+        // Three honest states, and the band already covers the first:
+        //   band on screen        → say nothing, figure/ground has it
+        //   host exists but is above the altitude → name it in text, since nothing draws it
+        //   no containing span at all            → flag it; it may be an activity we can't infer yet
+        const banded = hosts.has(e.id);
+        const anyHost = banded ? null : hostOf(e, activities);
+        return (
+          <div key={e.id} className="dt-mom" style={{ top: y, opacity: r, pointerEvents: r < HIT_EPS ? "none" : undefined }}>
+            <div className="t">{fmtTime(e.date)}</div>
+            <div className="disc" style={{ color: cat.c }}><cat.Icon size={13} strokeWidth={2.4} /></div>
+            <button className="dt-body" onClick={() => onSelect(e)} tabIndex={r < HIT_EPS ? -1 : undefined}>
+              <EventBody event={e} level={levelOf(e.name)} def={defaultOf(e.name)}
+                depth={derivLevel(e)} compact
+                orphan={!banded && !anyHost}
+                hostLabel={anyHost ? labelOf(anyHost) : undefined} />
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}

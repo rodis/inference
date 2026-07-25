@@ -1,10 +1,11 @@
-import { Car, LogIn, LogOut, DoorOpen, DoorClosed, KeyRound, Smartphone, Plug, BatteryCharging, CreditCard, Circle } from "lucide-react";
+import { Car, LogIn, LogOut, DoorOpen, DoorClosed, KeyRound, Smartphone, Plug, BatteryCharging, CreditCard, House, MapPin, Circle } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { AwareEvent } from "./types";
 
 export const VERBS: Record<string, string> = {
   car_trip: "Car trip", got_into_the_car: "Got into the car", got_out_the_car: "Got out of the car",
   car_door_opened: "Car door opened", car_door_closed: "Car door closed", phone_is_charging: "Phone charging",
+  arrived_home_by_car: "Arrived home by car", left_home_by_car: "Left home by car",
 };
 export const RAW_LABEL: Record<string, string> = {
   device_connected_to_power: "Power connected", device_disconnected_from_power: "Power disconnected",
@@ -12,6 +13,7 @@ export const RAW_LABEL: Record<string, string> = {
   car_lock_state_change: "Car lock changed",
   credit_card_payment: "Card payment",
   location_ping: "Location ping",
+  car_driver_door_opened: "Driver door opened",
 };
 export const CAT: Record<string, { c: string; Icon: LucideIcon }> = {
   car_trip: { c: "#3d6cf7", Icon: Car }, got_into_the_car: { c: "#18b26b", Icon: LogIn }, got_out_the_car: { c: "#12a89b", Icon: LogOut },
@@ -20,6 +22,8 @@ export const CAT: Record<string, { c: string; Icon: LucideIcon }> = {
   device_connected_to_power: { c: "#f5a524", Icon: Plug }, device_disconnected_from_power: { c: "#e0892a", Icon: Plug },
   phone_is_charging: { c: "#27ae60", Icon: BatteryCharging },
   credit_card_payment: { c: "#14b8a6", Icon: CreditCard },
+  car_driver_door_opened: { c: "#7a5bff", Icon: DoorOpen },
+  arrived_home_by_car: { c: "#c2557f", Icon: House }, left_home_by_car: { c: "#d1719b", Icon: House },
 };
 
 // --- the level ladder -----------------------------------------------------------
@@ -62,11 +66,19 @@ export const LANE_BLURB: Record<string, string> = {
   Signals: "raw wire readings",
 };
 
-export const catOf = (name: string) => CAT[name] || { c: "#9298a6", Icon: Circle };
+/** Category colour + icon for an event type. Geofence transitions are named per region at
+ *  runtime (`entered_<slug>` / `left_<slug>`, expanded from the Neon `regions` table), so they
+ *  can't be listed in CAT — match the prefix rather than dropping them to an anonymous dot. */
+export const catOf = (name: string): { c: string; Icon: LucideIcon } => {
+  if (CAT[name]) return CAT[name];
+  if (name.startsWith("entered_")) return { c: "#2f9e8f", Icon: MapPin };
+  if (name.startsWith("left_")) return { c: "#59b0a4", Icon: MapPin };
+  return { c: "#9298a6", Icon: Circle };
+};
 const pad = (n: number) => String(n).padStart(2, "0");
 export const fmtTime = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 export const fmtTimeSec = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-const titleize = (s: string) => s.replace(/_/g, " ");
+const titleize = (s: string) => { const t = s.replace(/_/g, " "); return t.charAt(0).toUpperCase() + t.slice(1); };
 export const labelOf = (e: AwareEvent) =>
   e.event_class === "derived" ? VERBS[e.name] || titleize(e.name) : RAW_LABEL[e.name] || titleize(e.name);
 export const typeLabel = (n: string) => VERBS[n] || RAW_LABEL[n] || titleize(n);
@@ -80,10 +92,48 @@ export const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 // capsules whose length is proportional to how long they lasted.
 export const SPAN_EVENTS = new Set<string>(["car_trip", "phone_is_charging"]);
 export const intervalOf = (e: AwareEvent) => e.message.interval ?? null;
-export const isSpan = (e: AwareEvent) => SPAN_EVENTS.has(e.name) && !!e.message.interval;
+
+/** Below this, an interval has no *meaningful* extent and reads as a moment instead.
+ *
+ *  Not cosmetic — it's the same 2-minute line `scripts/trip_eval.py` uses to count junk
+ *  trips, applied to presentation. The real feed is full of sub-minute intervals (9s, 18s,
+ *  32s "charging sessions" from a flaky car USB; 18s and 32s phantom "trips"), and drawing
+ *  each as a duration capsule fills the activity lane with slivers that claim a shape they
+ *  don't have. A 9-second charge is a thing that *happened*, not a thing that *lasted*. */
+export const MIN_SPAN_SECONDS = 120;
+
+/** Whether to draw this event as a duration capsule: the type reads as a duration, it
+ *  carries an interval, and that interval is long enough to mean anything. This is what
+ *  decides the *lane* on the day timeline. */
+export const isSpan = (e: AwareEvent) => {
+  const iv = e.message.interval;
+  return SPAN_EVENTS.has(e.name) && !!iv && iv.duration_seconds >= MIN_SPAN_SECONDS;
+};
+/** Which of the day timeline's two lanes an event belongs to: intervals on the left as
+ *  capsules, points in time on the right as small discs on their own track. */
+export const laneOf = (e: AwareEvent): "activity" | "moment" => (isSpan(e) ? "activity" : "moment");
+
 /** A span's start on the clock (its capsule top); a point event has no extent, so its
  *  timestamp is both. Used to order and place events by *when they began*. */
 export const startOf = (e: AwareEvent) => (isSpan(e) ? intervalOf(e)!.started_at : e.epoch);
+/** When an event ends on the clock: a span's end; a point event's instant. */
+export const endOf = (e: AwareEvent) => (isSpan(e) ? intervalOf(e)!.ended_at : e.epoch);
+
+/** The innermost span whose interval covers this moment — its *host*.
+ *
+ *  Time containment, not lineage: a card payment is not `derived_from` the trip it happened
+ *  during, it merely happened during it. That distinction is the whole point of the second
+ *  lane, and it's why this can't be read off `derived_from`. Innermost (shortest) wins so a
+ *  6-hour charge doesn't claim a payment that fell inside a 15-minute trip. */
+export function hostOf(moment: AwareEvent, spans: AwareEvent[]): AwareEvent | null {
+  let best: AwareEvent | null = null;
+  for (const s of spans) {
+    const iv = intervalOf(s);
+    if (!iv || moment.epoch < iv.started_at || moment.epoch > iv.ended_at) continue;
+    if (!best || iv.duration_seconds < intervalOf(best)!.duration_seconds) best = s;
+  }
+  return best;
+}
 
 export function humanDur(sec: number): string {
   sec = Math.round(sec);
@@ -108,107 +158,147 @@ export function buildScale(epochs: number[]): Scale {
 }
 export { ROW };
 
-/** Time-proportional day layout with duration capsules, collapsed quiet gaps, and
- *  semantic-zoom reveal.
+/** Two-lane day layout on one shared time scale.
  *
- *  Vertical position maps to *time of day* — the fix for the old equal-spacing spine that
- *  didn't read as "a day". Events are ordered and placed by when they *began* (a span's
- *  start; a point event's timestamp). A duration event (a trip, a charge) renders as a
- *  capsule whose height is proportional to how long it lasted, on a shared px-per-minute
- *  scale — so a long activity is visibly longer than a short one, and its length reads
- *  against the day. Each event reserves vertical room (its capsule height, or a card row for
- *  a point event) so nothing overlaps; the step to the next event adds proportional extra for
- *  the elapsed time, and a genuinely quiet stretch (gap over QUIET_GAP_MIN) collapses to a
- *  short labeled divider instead of a big blank (the "broken scale" pattern). When an event
- *  starts while an earlier one is still running, the two *interlock* — the later capsule tucks
- *  into the tail of the earlier and is flagged "overlapping" (the Structured convention),
- *  rather than being pushed below it after a false gap. Idle time is measured from the latest
- *  end still open, so an ongoing span is never mislabeled "quiet". Hidden events (faded by
- *  altitude) are interpolated onto the same scale. Positions are keyed per event id. */
+ *  **The scale is the whole trick.** Instead of packing events into a single column and
+ *  deriving each capsule's height from its duration independently, this builds one
+ *  piecewise-linear time→y map for the day and places *everything* on it. A span's height is
+ *  then simply `Y(end) − Y(start)` — a capsule is proportional to its duration *because* it
+ *  sits on the same scale as the discs beside it, which is what lets a moment render inside
+ *  the activity that contains it without any extra alignment maths.
+ *
+ *  The map is deliberately "broken": a step between two consecutive instants is proportional
+ *  to the elapsed minutes (PPM), but floored at MIN_STEP so labels have room, capped at
+ *  MAX_STEP so a lull doesn't run off-screen, and a genuinely quiet stretch (over QUIET_MIN)
+ *  collapses to a short labelled divider. Two consequences worth knowing: a span crowded with
+ *  moments grows taller than its duration alone implies (each interior instant costs at least
+ *  MIN_STEP), and a busy hour therefore gets more room than a dead one — which reads correctly
+ *  even though it isn't linear.
+ *
+ *  **Lanes.** `laneOf` puts intervals left and points right. Concurrent spans are packed into
+ *  sub-columns (greedy, by start) rather than interlocked with a notch: on a true time scale a
+ *  6-hour charge genuinely *does* span a 15-minute trip, and the real feed has exactly that,
+ *  so they need to sit side by side instead of colliding in one 40px column.
+ *
+ *  **Containment.** A moment inside a span gets a `band` — a tinted stripe across the moments
+ *  lane covering the host's vertical range. Figure/ground rather than a tether line per dot,
+ *  which stays quiet when a host contains five moments. Bands are emitted longest-first so the
+ *  innermost (shortest) host paints on top.
+ *
+ *  Hidden events (faded out by altitude) are interpolated onto the same scale so they sit at
+ *  their true time and grow into place when you descend. Positions are keyed per event id. */
 const VIS_EPS = 0.06;
-const PPM = 2.5;             // px per minute — shared by capsule heights and gap proportionality
-const CAP_MIN = 50;         // shortest a duration capsule can be (its icon must fit)
-const CAP_MAX = 420;        // …and tallest, so a multi-hour span doesn't dominate the column
-const SLOPE = 1.4;          // px per minute of *extra* spacing between two events…
-const EXTRA_MAX = 64;       // …capped, so a busy afternoon doesn't run off-screen
-const QUIET_GAP_MIN = 50;   // a gap wider than this collapses to a divider instead of stretching
-const GAP_H = 52;           // height of a collapsed-gap divider
-const NOTCH = 18;           // px two overlapping capsules interlock by
-/** Height of a span's capsule: proportional to its duration, clamped for legibility. */
-export const spanHeight = (e: AwareEvent): number => {
-  const iv = intervalOf(e); if (!iv) return CAP_MIN;
-  return Math.max(CAP_MIN, Math.min(CAP_MAX, (iv.duration_seconds / 60) * PPM));
-};
-/** When an event ends on the clock: a span's end; a point event's instant. */
-const endOf = (e: AwareEvent) => (isSpan(e) ? intervalOf(e)!.ended_at : e.epoch);
+const PPM = 3.2;            // px per minute between consecutive instants
+const MIN_STEP = 34;        // …floored, so two close events still have label room
+const MAX_STEP = 210;       // …and capped, so one long stretch doesn't dominate
+const QUIET_MIN = 50;       // a gap wider than this (minutes) collapses to a divider
+const GAP_H = 56;           // height of a collapsed-gap divider
+const CAP_MIN = 44;         // shortest a duration capsule can be (its icon must fit)
+const ROW_MIN = 34;         // smallest vertical room a moment row needs
+const MAX_COLS = 3;         // concurrent-span sub-columns before we stop fanning out
+const PAD_BOTTOM = 56;
+
+export interface SpanBox { top: number; height: number; col: number }
+export interface Band { hostId: string; top: number; height: number; color: string }
 export interface DayLayout {
-  pos: Map<string, number>;                                // event id → top y (capsule/card top)
-  spans: Map<string, { top: number; height: number }>;     // span id → proportional capsule box
-  gaps: { y: number; seconds: number }[];                  // collapsed quiet gaps (for dividers)
-  overlaps: Set<string>;                                   // ids that start while an earlier event runs
+  pos: Map<string, number>;          // event id → top y (capsule top, or a moment's disc centre line)
+  spans: Map<string, SpanBox>;       // span id → capsule box + which sub-column it sits in
+  cols: number;                      // how many sub-columns the activity lane needs
+  bands: Band[];                     // containment stripes, longest host first
+  hosts: Map<string, string>;        // moment id → the span id containing it
+  gaps: { y: number; seconds: number }[];
   h: number;
 }
-export function dayScale(events: AwareEvent[], reveal: (e: AwareEvent) => number): DayLayout {
-  const sorted = [...events].sort((a, b) => startOf(a) - startOf(b));
+
+export function dayLayout(
+  events: AwareEvent[],
+  reveal: (e: AwareEvent) => number,
+  colorOf: (name: string) => string,
+): DayLayout {
   const pos = new Map<string, number>();
-  const spans = new Map<string, { top: number; height: number }>();
+  const spans = new Map<string, SpanBox>();
+  const bands: Band[] = [];
+  const hosts = new Map<string, string>();
   const gaps: { y: number; seconds: number }[] = [];
-  const overlaps = new Set<string>();
-  if (!sorted.length) return { pos, spans, gaps, overlaps, h: 40 };
+  const empty = { pos, spans, cols: 1, bands, hosts, gaps, h: 40 };
+  if (!events.length) return empty;
 
-  const vis = (e: AwareEvent) => reveal(e) > VIS_EPS;
-  const foot = (e: AwareEvent) => (isSpan(e) ? spanHeight(e) : ROW);   // vertical room an event needs
-  const anchors = sorted.filter(vis);
-  if (!anchors.length) {                                    // nothing visible — hold places as slivers
-    let y = 0; for (const e of sorted) { pos.set(e.id, y); y += 16; }
-    return { pos, spans, gaps, overlaps, h: y + ROW };
+  const vis = events.filter((e) => reveal(e) > VIS_EPS);
+  if (!vis.length) {                                  // nothing visible — hold places as slivers
+    let y = 0;
+    for (const e of events) { pos.set(e.id, y); y += 16; }
+    return { ...empty, h: y + ROW_MIN };
   }
 
-  // Walk the visible events in start order. Each reserves its footprint; the step to the next
-  // is: interlock (overlap) if it starts before everything so far has ended; otherwise the
-  // idle time since the last end, collapsed to a divider when quiet.
-  const yAt = new Map<number, number>();                    // anchor start-time → y (for interpolation)
-  const place = (e: AwareEvent, y: number) => {
-    pos.set(e.id, y);
-    yAt.set(startOf(e), y);
-    if (isSpan(e)) spans.set(e.id, { top: y, height: spanHeight(e) });
-  };
-  let y = 0;
-  place(anchors[0], 0);
-  let openEnd = endOf(anchors[0]);                          // latest end among everything placed so far
-  for (let i = 1; i < anchors.length; i++) {
-    const prev = anchors[i - 1], cur = anchors[i];
-    if (startOf(cur) < openEnd - 30) {                      // still-open event → interlock, flag overlap
-      y += Math.max(NOTCH, foot(prev) - NOTCH);
-      overlaps.add(cur.id);
-    } else {
-      const idleMin = Math.max(0, (startOf(cur) - openEnd) / 60);
-      if (idleMin > QUIET_GAP_MIN) {
-        gaps.push({ y: y + foot(prev) + GAP_H / 2, seconds: startOf(cur) - openEnd });
-        y += foot(prev) + GAP_H;
-      } else {
-        y += foot(prev) + Math.min(EXTRA_MAX, idleMin * SLOPE);
-      }
+  // 1. the shared scale: every instant any visible event begins or ends at
+  const instants = [...new Set(vis.flatMap((e) => [startOf(e), endOf(e)]))].sort((a, b) => a - b);
+  const Yat = new Map<number, number>();
+  let cur = 0;
+  instants.forEach((t, i) => {
+    if (i) {
+      const dm = (t - instants[i - 1]) / 60;
+      if (dm > QUIET_MIN) { gaps.push({ y: cur + GAP_H / 2, seconds: t - instants[i - 1] }); cur += GAP_H; }
+      else cur += Math.max(MIN_STEP, Math.min(MAX_STEP, dm * PPM));
     }
-    place(cur, y);
-    openEnd = Math.max(openEnd, endOf(cur));
-  }
-  const lastY = y + foot(anchors[anchors.length - 1]);
+    Yat.set(t, cur);
+  });
 
-  // Hidden events (faded by altitude) interpolate onto the same scale so they sit at their
-  // true time and grow into place when you descend, without opening dead space.
-  const A = anchors.map(startOf);
-  const yOf = (t: number): number => {
-    if (t <= A[0]) return pos.get(anchors[0].id)!;
-    if (t >= A[A.length - 1]) return pos.get(anchors[anchors.length - 1].id)!;
-    let i = 1; while (i < A.length && A[i] < t) i++;
-    const t0 = A[i - 1], t1 = A[i], y0 = yAt.get(t0)!, y1 = yAt.get(t1)!;
-    return t1 === t0 ? y0 : y0 + (y1 - y0) * ((t - t0) / (t1 - t0));
+  // interpolate for anything not on an anchor (an event faded out by altitude)
+  const Y = (t: number): number => {
+    const exact = Yat.get(t);
+    if (exact != null) return exact;
+    if (t <= instants[0]) return Yat.get(instants[0])!;
+    const last = instants[instants.length - 1];
+    if (t >= last) return Yat.get(last)!;
+    let i = 1;
+    while (i < instants.length && instants[i] < t) i++;
+    const a = instants[i - 1], b = instants[i];
+    const ya = Yat.get(a)!, yb = Yat.get(b)!;
+    return b === a ? ya : ya + (yb - ya) * ((t - a) / (b - a));
   };
-  for (const e of sorted) if (!pos.has(e.id)) pos.set(e.id, yOf(startOf(e)));
 
-  return { pos, spans, gaps, overlaps, h: lastY };
+  // 2. the activity lane: capsule boxes, then greedy sub-columns for concurrent spans
+  const visSpans = vis.filter(isSpan).sort((a, b) => startOf(a) - startOf(b) || endOf(b) - endOf(a));
+  const colEnds: number[] = [];                       // last occupied epoch per sub-column
+  for (const s of visSpans) {
+    const top = Y(startOf(s));
+    const height = Math.max(CAP_MIN, Y(endOf(s)) - top);
+    let col = colEnds.findIndex((end) => end <= startOf(s));
+    if (col === -1) { col = Math.min(colEnds.length, MAX_COLS - 1); }
+    colEnds[col] = endOf(s);
+    spans.set(s.id, { top, height, col });
+    pos.set(s.id, top);
+  }
+  const cols = Math.max(1, colEnds.length);
+
+  // 3. the moments lane, in time order, nudged apart only when they'd truly collide
+  const visMoments = vis.filter((e) => !isSpan(e)).sort((a, b) => a.epoch - b.epoch);
+  let lastY = -Infinity;
+  for (const mo of visMoments) {
+    const y = Math.max(Y(mo.epoch), lastY + ROW_MIN);
+    pos.set(mo.id, y);
+    lastY = y;
+    const host = hostOf(mo, visSpans);
+    if (host) hosts.set(mo.id, host.id);
+  }
+
+  // 4. one band per host that actually contains a visible moment, longest first so the
+  //    innermost host paints last and therefore reads as the nearer container
+  const hosted = new Set(hosts.values());
+  for (const s of visSpans) {
+    if (!hosted.has(s.id)) continue;
+    const box = spans.get(s.id)!;
+    bands.push({ hostId: s.id, top: box.top, height: box.height, color: colorOf(s.name) });
+  }
+  bands.sort((a, b) => b.height - a.height);
+
+  // 5. everything still unplaced is below the current altitude — park it at its true time
+  for (const e of events) if (!pos.has(e.id)) pos.set(e.id, Y(startOf(e)));
+
+  return { pos, spans, cols, bands, hosts, gaps, h: cur + PAD_BOTTOM };
 }
+
+
 
 /** When a span is on screen, its capsule already represents its start and end (a car trip's
  *  get-in/get-out ARE the capsule's ends), so showing those contributor events as separate

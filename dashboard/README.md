@@ -6,12 +6,47 @@ adding one is a module plus an entry, mirroring events-as-data):
 
 | dashboard | what it's for |
 |-----------|---------------|
-| **Day timeline** | one day as a Structured-style vertical timeline: duration events as capsules ∝ how long they lasted, quiet stretches collapsed, and a pinch/⌘-scroll **semantic zoom** that reveals or folds detail around the point you're looking at |
+| **Day timeline** | one day as **two parallel timelines** on a shared time scale (see below), with a pinch/⌘-scroll **semantic zoom** that reveals or folds detail around the point you're looking at |
 | **Compare** | any set of event types as parallel lanes on one shared per-day scale, so co-occurring signals line up |
 | **Signals** | the raw feed as a table |
 | **Levels** | the altitude ladder: where each event *type* lives, drag-and-drop (see below) |
 
 Tap any event for a recursive dig-down into its derivation lineage.
+
+## The day timeline: two lanes
+
+A day has two kinds of thing in it, and one column made them look alike:
+
+- **Activities** (left) — events with a duration, as capsules whose length is how long they
+  lasted. Concurrent activities sit in **sub-columns**, because on a true time scale a 6-hour
+  charge genuinely does span a 15-minute trip and the real feed has exactly that.
+- **Moments** (right) — points in time, as smaller hollow discs on their own dotted rail.
+  Half the visual weight is deliberate: the left lane is the shape of the day, the right lane
+  is texture within it.
+
+**One shared scale is what makes it work.** `dayLayout` builds a single piecewise-linear
+time→y map for the day and places both lanes on it, so a span's height is just
+`Y(end) − Y(start)` — a capsule is proportional to its duration *because* it sits on the same
+scale as the discs beside it. A card payment made during a trip therefore lands inside that
+trip's vertical range with no alignment maths, and the trip casts a tinted **band** across the
+moments lane to say so (figure/ground, not a tether line per dot, so five payments inside one
+visit stay legible).
+
+Containment is **time containment, not lineage** (`hostOf`): a payment is not
+`derived_from` the trip it happened during, it merely happened during it. That distinction is
+the point of the second lane. The innermost (shortest) container wins, so a long charge doesn't
+claim a payment that fell inside a short trip.
+
+The scale is deliberately "broken": steps are proportional to elapsed minutes but floored so
+labels have room, capped so a lull doesn't run off-screen, and a genuinely quiet stretch
+collapses to a labelled divider. Two consequences: a span crowded with moments grows taller
+than its duration alone implies, and a busy hour therefore gets more room than a dead one.
+
+**`MIN_SPAN_SECONDS` (2 min)** decides the lane, not just the look. Below it an interval has no
+meaningful extent and renders as a moment. This is the same line `scripts/trip_eval.py` uses to
+count junk trips, applied to presentation — the feed is full of sub-minute intervals (9s, 18s,
+32s "charging sessions" from a flaky car USB; 18s and 32s phantom "trips") and drawing each as
+a duration capsule fills the lane with slivers claiming a shape they don't have.
 
 ## Layout
 
