@@ -18,9 +18,10 @@ generators:
 # connection, so it must never overlap itself. (The runtime is NOT patched: Kafka consumer-group
 # rebalance handles overlapping consumers correctly.)
 #
-# The whole `strategy` object is set here, deliberately — two earlier attempts failed because
-# the Stakater chart renders NO strategy key at all (the RollingUpdate 25%/25% visible on the
-# live Deployment are API-server DEFAULTS, not chart values):
+# The whole `strategy` object is set here, deliberately. The Stakater chart renders
+# `strategy: {type: RollingUpdate}` — the TYPE only, with NO `rollingUpdate` child (verified with
+# `kustomize build --enable-helm`); the maxSurge/maxUnavailable 25% you see on the live Deployment
+# are API-server DEFAULTS. That combination broke two earlier attempts:
 #   1. `op: add /spec/strategy value: {type: Recreate}` — built fine, but under this app's
 #      ServerSideApply=true the server-defaulted rollingUpdate survived next to the new type:
 #      "Deployment.apps bmw-cardata is invalid: spec.strategy.rollingUpdate: Forbidden: may not
