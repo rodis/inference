@@ -6,13 +6,9 @@ import EventBody from "./EventBody";
 interface Props {
   events: AwareEvent[];
   layout: DayLayout;
-  levelOf: (name: string) => number;
-  defaultOf: (name: string) => number | null;
-  derivLevel: (e: AwareEvent) => number;
   onSelect: (e: AwareEvent) => void;
   /** 0..1 — how revealed an event is at the current altitude (1 = full detail). */
   revealOf: (e: AwareEvent) => number;
-  byId: Record<string, AwareEvent>;
 }
 
 const CAP_W = 46;      // one capsule sub-column, must match --capw in styles.css
@@ -29,20 +25,14 @@ const HIT_EPS = 0.1;   // below this an event is decorative — no pointer, no t
  *  tether line per dot, so five payments inside one visit stay legible.
  *
  *  Half the visual weight on the right is deliberate: the left lane is the shape of the day,
- *  the right lane is texture within it. See `dayLayout` for the scale and the lane rules. */
-export default function DayTimeline({
-  events, layout, levelOf, defaultOf, derivLevel, onSelect, revealOf, byId,
-}: Props) {
+ *  the right lane is texture within it. See `dayLayout` for the scale and the lane rules.
+ *
+ *  Cards here carry no L / override / D chips and no "N below" rollup: the day is for reading
+ *  what happened, and the taxonomy is one tap away in the event modal (`EventModal`). */
+export default function DayTimeline({ events, layout, onSelect, revealOf }: Props) {
   const { pos, spans, cols, bands, hosts, gaps, h } = layout;
 
   if (!events.length) return <div className="dt-wrap"><div className="vt-empty">— nothing here —</div></div>;
-
-  // how many of an event's direct contributors are currently collapsed below the altitude
-  const hiddenBeneath = (e: AwareEvent) =>
-    (e.message.derived_from || []).reduce((n, p) => {
-      const child = byId[p.id];
-      return child && revealOf(child) < 0.5 ? n + 1 : n;
-    }, 0);
 
   const activities = events.filter(isSpan).sort((a, b) => startOf(a) - startOf(b));
   const moments = events.filter((e) => !isSpan(e)).sort((a, b) => a.epoch - b.epoch);
@@ -96,8 +86,7 @@ export default function DayTimeline({
               </div>
             </div>
             <button className="dt-body" onClick={() => onSelect(e)} tabIndex={r < HIT_EPS ? -1 : undefined}>
-              <EventBody event={e} level={levelOf(e.name)} def={defaultOf(e.name)}
-                depth={derivLevel(e)} hiddenBeneath={hiddenBeneath(e)} />
+              <EventBody event={e} />
             </button>
           </div>
         );
@@ -117,8 +106,7 @@ export default function DayTimeline({
             <div className="t">{fmtTime(e.date)}</div>
             <div className="disc" style={{ color: cat.c }}><cat.Icon size={13} strokeWidth={2.4} /></div>
             <button className="dt-body" onClick={() => onSelect(e)} tabIndex={r < HIT_EPS ? -1 : undefined}>
-              <EventBody event={e} level={levelOf(e.name)} def={defaultOf(e.name)}
-                depth={derivLevel(e)} compact
+              <EventBody event={e} compact
                 orphan={!banded && !anyHost}
                 hostLabel={anyHost ? labelOf(anyHost) : undefined} />
             </button>

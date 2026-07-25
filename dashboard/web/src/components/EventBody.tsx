@@ -4,12 +4,13 @@ import LevelChip, { OverrideFlag } from "./LevelChip";
 
 interface Props {
   event: AwareEvent;
-  level: number;
-  def: number | null;
+  /** Lane (L) chips are opt-in: pass `level`/`def`/`depth` to get the L / override / D grammar.
+   *  The day timeline leaves all three out — that classification lives in the event modal there,
+   *  so a day of cards reads as what happened rather than as a wall of taxonomy. */
+  level?: number;
+  def?: number | null;
   /** Derivation depth of this event — how many layers of inference it stands on. */
-  depth: number;
-  /** How many of this event's direct contributors are collapsed below the current altitude. */
-  hiddenBeneath?: number;
+  depth?: number;
   /** The span this moment happened inside, when the layout isn't already saying so. */
   hostLabel?: string;
   /** A moment with no containing span — worth flagging, it may be an activity we can't infer yet. */
@@ -18,10 +19,10 @@ interface Props {
   compact?: boolean;
 }
 
-/** The text half of an event card: name + classification chips on line 1, the substantive
- *  detail on line 2. Shared by the Compare lanes and both lanes of the day timeline, so the
- *  L / override / D chip grammar can't drift between them. */
-export default function EventBody({ event: e, level, def, depth, hiddenBeneath = 0, hostLabel, orphan, compact }: Props) {
+/** The text half of an event card: name + chips on line 1, the substantive detail on line 2.
+ *  Shared by the Compare lanes and both lanes of the day timeline, so the L / override / D chip
+ *  grammar can't drift between them where it *is* shown (see `level`). */
+export default function EventBody({ event: e, level, def = null, depth, hostLabel, orphan, compact }: Props) {
   const iv = isSpan(e) ? intervalOf(e) : null;
   const isDer = e.event_class === "derived";
   const amount = Number(e.message.amount);
@@ -42,15 +43,10 @@ export default function EventBody({ event: e, level, def, depth, hiddenBeneath =
         <span className="ev-title">{labelOf(e)}</span>
         {Number.isFinite(amount) && amount > 0 && <span className="ev-amount">CHF {amount.toFixed(2)}</span>}
         {!compact && <span className="ev-kind">{isDer ? "inferred" : "signal"}</span>}
-        {hiddenBeneath > 0 && (
-          <span className="rollup" title="detail collapsed beneath — descend or tap to expand">
-            ↓ {hiddenBeneath} below
-          </span>
-        )}
         {orphan && <span className="orphan" title="not inside any activity we infer">no host</span>}
-        <LevelChip level={level} />
-        <OverrideFlag level={level} def={def} />
-        <span className="dbadge">D{depth}</span>
+        {level != null && <LevelChip level={level} />}
+        {level != null && <OverrideFlag level={level} def={def} />}
+        {depth != null && <span className="dbadge">D{depth}</span>}
       </div>
       {(iv || detail || hostLabel) && (
         <div className="ev-meta">

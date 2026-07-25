@@ -187,7 +187,7 @@ export default function TimelineDashboard() {
           <span className="zoom-hint">pinch or ⌘-scroll on the timeline to zoom · {shownCount} shown</span>
         </div>
         <div className="vtwrap" ref={wrapRef}>
-          <DayTimeline events={dayAll} layout={packed} levelOf={levelOf} defaultOf={defaultOf} derivLevel={derivLevel} onSelect={setModalEvent} revealOf={revealDay} byId={byId} />
+          <DayTimeline events={dayAll} layout={packed} onSelect={setModalEvent} revealOf={revealDay} />
         </div>
       </div>
 
@@ -206,7 +206,9 @@ export default function TimelineDashboard() {
         <button aria-label="zoom out — fewer, higher-level" onClick={() => zoomStep(-1)}>−</button>
       </div>
 
-      <EventModal event={modalEvent} byId={byId} levelOf={levelOf} derivLevel={derivLevel} onClose={() => setModalEvent(null)} />
+      {/* the timeline's cards carry no L / D / "below" chips — this is where that lives now */}
+      <EventModal event={modalEvent} byId={byId} levelOf={levelOf} derivLevel={derivLevel}
+        defaultOf={defaultOf} revealOf={revealDay} onClose={() => setModalEvent(null)} />
     </>
   );
 }

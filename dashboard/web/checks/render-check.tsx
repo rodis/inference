@@ -20,6 +20,7 @@ import { renderToString } from "react-dom/server";
 import { AwareContext } from "../src/app/useAware";
 import type { AwareCtx } from "../src/app/useAware";
 import DayTimeline from "../src/components/DayTimeline";
+import EventModal from "../src/components/EventModal";
 import LevelsDashboard from "../src/dashboards/levels/LevelsDashboard";
 import TimelineDashboard from "../src/dashboards/timeline/TimelineDashboard";
 import { catOf, dayLayout, defaultLevelOf, hostOf, isSpan, laneCount, laneNames, prepare } from "../src/view";
@@ -161,8 +162,7 @@ check("time order is preserved down the page", L.pos.get("e5")! < L.pos.get("e12
 console.log("\n— day timeline renders —");
 const dt = strip(renderToString(
   <AwareContext.Provider value={ctx}>
-    <DayTimeline events={all} layout={L} levelOf={levelOf} defaultOf={defaultOf}
-      derivLevel={prepared.derivLevel} onSelect={() => {}} revealOf={() => 1} byId={byId} />
+    <DayTimeline events={all} layout={L} onSelect={() => {}} revealOf={() => 1} />
   </AwareContext.Provider>));
 check("three activity capsules drawn", (dt.match(/class="capsule"/g) || []).length === 3,
   `${(dt.match(/class="capsule"/g) || []).length}`);
@@ -184,6 +184,25 @@ check("exactly the host-less moments are flagged",
   (dt.match(/no host/g) || []).length === orphans.length,
   `${(dt.match(/no host/g) || []).length} flags vs ${orphans.length} host-less`);
 check("the hosted payment is not among them", L.hosts.has("e5"));
+// The classification grammar (L lane, ↑/↓ override, D depth, "N below") is deliberately absent
+// from the day: it's taxonomy about the event, not what happened, and it lives in the modal.
+check("no L chips on the day's cards", !dt.includes('class="lchip'));
+check("no D badges on the day's cards", !dt.includes("dbadge"));
+check("no override flags on the day's cards", !dt.includes("ovrflag"));
+check("no rollup counter on the day's cards", !dt.includes("below"));
+// ...but the payment's "no host" flag stays: that's about the day's shape, not the ladder.
+check("the host flag survives the chip cleanup", dt.includes("no host"));
+
+console.log("\n— event modal carries the classification instead —");
+const modalOf = (id: string, reveal: number) => strip(renderToString(
+  <EventModal event={E(id)} byId={byId} levelOf={levelOf} derivLevel={prepared.derivLevel}
+    defaultOf={defaultOf} revealOf={() => reveal} onClose={() => {}} />));
+const mTrip = modalOf("e8", 0);
+check("the modal shows the L chip", mTrip.includes('class="lchip'));
+check("the modal shows the D badge", mTrip.includes("dbadge"));
+check("the modal counts contributors collapsed below the altitude", /↓ 2 below/.test(mTrip));
+check("nothing is 'below' when the lineage is fully revealed", !modalOf("e8", 1).includes("below"));
+check("the modal flags a lifted type", /ovrflag up[\s\S]{0,80}↑ L1/.test(modalOf("e5", 1)));
 
 console.log("\n— levels board —");
 const html = strip(renderToString(<AwareContext.Provider value={ctx}><LevelsDashboard /></AwareContext.Provider>));

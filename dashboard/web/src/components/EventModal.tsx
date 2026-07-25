@@ -1,13 +1,18 @@
 import { useEffect, useState } from "react";
 import type { AwareEvent } from "../types";
 import { catOf, fmtTimeSec, humanDur, labelOf } from "../view";
-import LevelChip from "./LevelChip";
+import LevelChip, { OverrideFlag } from "./LevelChip";
 
 interface Props {
   event: AwareEvent | null;
   byId: Record<string, AwareEvent>;
   levelOf: (name: string) => number;
   derivLevel: (e: AwareEvent) => number;
+  /** The lane depth puts this type at, when the caller has one — drives the ↑/↓ override flag. */
+  defaultOf?: (name: string) => number | null;
+  /** 0..1 reveal at the caller's current altitude; lets the header say how much of this
+   *  event's lineage is collapsed out of sight on the board behind the modal. */
+  revealOf?: (e: AwareEvent) => number;
   onClose: () => void;
 }
 
@@ -36,7 +41,7 @@ function DNode({ e, byId, levelOf, derivLevel, onOpen }: { e: AwareEvent; byId: 
   );
 }
 
-export default function EventModal({ event, byId, levelOf, derivLevel, onClose }: Props) {
+export default function EventModal({ event, byId, levelOf, derivLevel, defaultOf, revealOf, onClose }: Props) {
   // a drill trail so contributors can be opened recursively, with a way back up
   const [trail, setTrail] = useState<AwareEvent[]>([]);
   useEffect(() => { setTrail(event ? [event] : []); }, [event]);
@@ -57,7 +62,12 @@ export default function EventModal({ event, byId, levelOf, derivLevel, onClose }
   const kids = (e.message.derived_from || []).map((p) => byId[p.id]).filter(Boolean) as AwareEvent[];
   const conf = e.message.confidence_score;
   const dl = derivLevel(e);
+  const lv = levelOf(e.name);
   const cat = catOf(e.name);
+  // how many direct contributors are collapsed below the altitude of the board behind us
+  const hiddenBeneath = revealOf
+    ? kids.reduce((n, k) => (revealOf(k) < 0.5 ? n + 1 : n), 0)
+    : 0;
   const raw = { id: e.id, name: e.name, event_class: e.event_class, source_app: e.source_app, occurred_epoch: e.occurred_epoch, message: e.message };
   const rawJson = JSON.stringify(raw, null, 2);
 
@@ -77,8 +87,14 @@ export default function EventModal({ event, byId, levelOf, derivLevel, onClose }
             <div className="mtitle">{labelOf(e)}</div>
             <div className="mmeta">
               <span className="mt">{fmtTimeSec(e.date)}{e.message.interval ? " · " + humanDur(e.message.interval.duration_seconds) : ""}</span>
-              <LevelChip level={levelOf(e.name)} />
+              <LevelChip level={lv} />
+              {defaultOf && <OverrideFlag level={lv} def={defaultOf(e.name)} />}
               <span className="dbadge">D{dl}</span>
+              {hiddenBeneath > 0 && (
+                <span className="rollup" title="contributors collapsed below the current altitude — zoom in to see them on the timeline">
+                  ↓ {hiddenBeneath} below
+                </span>
+              )}
               {conf != null ? <span className="conf">confidence {conf}</span> : null}
             </div>
           </div>
