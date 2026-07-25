@@ -211,6 +211,20 @@ check("a boundary overlap doesn't widen the lane", L.cols === 2, `got ${L.cols}`
 check("the drive's capsule is butted below the stay's, not painted over it",
   home.top >= cafe.top + cafe.height, `trip top ${home.top} vs stay bottom ${cafe.top + cafe.height}`);
 
+// The lane is a track: consecutive capsules in one column are joined across the dead time
+// between them. Per column only — a line between two *concurrent* capsules would claim a
+// sequence that isn't there — and never as a smudge between two capsules that already touch.
+check("consecutive capsules in a column are joined", L.links.length > 0, `${L.links.length} links`);
+check("every connector sits in a real sub-column",
+  L.links.every((l) => l.col < L.cols), L.links.map((l) => l.col).join(","));
+check("a connector spans only dead time — never over a capsule",
+  !L.links.some((l) => [...L.spans.values()].some(
+    (b) => b.col === l.col && l.top < b.top + b.height && l.top + l.height > b.top)),
+  L.links.map((l) => `${l.col}@${l.top}+${l.height}`).join(" "));
+check("no hairline connector between the stay and the drive away from it",
+  !L.links.some((l) => l.col === cafe.col && l.top >= cafe.top + cafe.height && l.height < 8),
+  L.links.filter((l) => l.col === cafe.col).map((l) => l.height).join(","));
+
 console.log("\n— ink on a category fill —");
 // Every category colour is currently dark enough for white ink, so inkOn is a guard rather than a
 // live branch — assert the branch itself, so the palette can't gain a light colour that erases
@@ -230,6 +244,9 @@ check("moments drawn on the right rail", (dt.match(/class="dt-mom"/g) || []).len
   `${(dt.match(/class="dt-mom"/g) || []).length}`);
 check("a containment band is drawn", dt.includes("dt-band"));
 check("the moments rail is drawn", dt.includes("dt-rail"));
+check("the activity lane's connectors are drawn", (dt.match(/class="dt-link"/g) || []).length === L.links.length,
+  `${(dt.match(/class="dt-link"/g) || []).length} of ${L.links.length}`);
+check("a connector carries its sub-column", dt.includes("--lcol"));
 check("the lane divider is drawn", dt.includes("dt-rule"));
 check("both lanes are named in a header", dt.includes(">Activities<") && dt.includes(">Moments<"));
 check("the header shares the lanes' boundary variable", dt.includes("--capcols"));

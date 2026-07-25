@@ -26,6 +26,10 @@ with its own header:
   minute. That's a **handoff**, not concurrency — within `HANDOFF` the column is reused and the
   later capsule is butted below the earlier one, which trades a few px of truth about its start
   for a lane that stays single-file instead of widening to say "two things at once".
+  Consecutive capsules in a column are joined by a dotted **connector** across the dead time
+  between them (`links`), so the lane reads as a track rather than as capsules floating on a
+  background. Per column only: a line between two *concurrent* capsules would claim a sequence
+  that isn't there, and two capsules that already touch get nothing.
 - **Moments** (right) — points in time, as smaller hollow discs on their own dotted rail.
   Half the visual weight is deliberate: the left lane is the shape of the day, the right lane
   is texture within it.

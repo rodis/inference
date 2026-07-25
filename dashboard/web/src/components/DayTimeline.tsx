@@ -30,7 +30,7 @@ const HIT_EPS = 0.1;   // below this an event is decorative — no pointer, no t
  *  Cards here carry no L / override / D chips and no "N below" rollup: the day is for reading
  *  what happened, and the taxonomy is one tap away in the event modal (`EventModal`). */
 export default function DayTimeline({ events, layout, onSelect, revealOf }: Props) {
-  const { pos, spans, cols, bands, hosts, gaps, h } = layout;
+  const { pos, spans, cols, links, bands, hosts, gaps, h } = layout;
 
   if (!events.length) return <div className="dt-wrap"><div className="vt-empty">— nothing here —</div></div>;
 
@@ -55,6 +55,12 @@ export default function DayTimeline({ events, layout, onSelect, revealOf }: Prop
       <div className="dt-lanes" style={{ height: h }}>
       <div className="dt-rule" />
       <div className="dt-rail" />
+
+      {/* the activity lane's own track: dotted connectors down the dead time between capsules */}
+      {links.map((l, i) => (
+        <div key={"link-" + i} className="dt-link"
+          style={{ top: l.top, height: l.height, ["--lcol" as string]: l.col }} />
+      ))}
 
       {/* containment: a host's stripe across the moments lane, longest host first */}
       {bands.map((b) => (

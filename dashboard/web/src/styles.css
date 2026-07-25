@@ -259,6 +259,7 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 .dt-wrap {
   --gutter: 54px;                 /* right-aligned clock column, incl. 10px before the capsule */
   --capw: 46px;                   /* one capsule sub-column — must match CAP_W in DayTimeline */
+  --capd: 38px;                   /* the capsule itself, inside that column */
   --capcols: 1;                   /* set per day by the layout: concurrent activities */
   --actlabel: 220px;              /* room for an activity's name + chips */
   --laneA: calc(var(--gutter) + var(--capcols) * var(--capw) + var(--actlabel));
@@ -281,6 +282,12 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 .dt-rule { position: absolute; top: 0; bottom: 0; left: var(--laneA); border-left: 1px dashed var(--hair-2); }
 /* the moments lane gets its own track, so it reads as a timeline and not loose annotation */
 .dt-rail { position: absolute; top: 6px; bottom: 10px; left: var(--dotx); border-left: 2px dotted var(--rail); }
+/* …and the activity lane gets one too, but only between consecutive capsules in a sub-column
+   (--lcol, set per link): the dead time between two activities, not a rail through the day.
+   Centred on the capsule, not on the sub-column, since the capsule is narrower than its column. */
+.dt-link { position: absolute; width: 0; z-index: 0; border-left: 2px dotted var(--rail);
+  left: calc(var(--gutter) + var(--lcol) * var(--capw) + var(--capd) / 2 - 1px);
+  transition: top 0.6s cubic-bezier(.22,1,.36,1), height 0.6s cubic-bezier(.22,1,.36,1); }
 
 /* containment: the host activity's stripe across the moments lane */
 .dt-band { position: absolute; left: var(--laneA); right: 0; border-radius: 0 14px 14px 0; pointer-events: none; transition: top 0.6s cubic-bezier(.22,1,.36,1), height 0.6s cubic-bezier(.22,1,.36,1); }
@@ -292,7 +299,7 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 .dt-act { position: absolute; left: 0; width: var(--laneA); display: grid; grid-template-columns: var(--gutter) auto 1fr; align-items: start; z-index: 1; transition: top 0.6s cubic-bezier(.22,1,.36,1), opacity 0.55s ease; }
 .dt-act > .t { text-align: right; font-family: var(--mono); font-size: 11px; color: var(--muted); padding-top: 11px; padding-right: 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .dt-act .caps { position: relative; }
-.dt-act .capsule { width: 38px; border-radius: 19px; margin-top: 1px; display: flex; align-items: flex-start; justify-content: center; padding-top: 10px; color: #fff; box-shadow: 0 3px 8px rgba(24,28,40,0.2); transition: height 0.6s cubic-bezier(.22,1,.36,1), margin-left 0.4s ease; }
+.dt-act .capsule { width: var(--capd); border-radius: calc(var(--capd) / 2); margin-top: 1px; display: flex; align-items: flex-start; justify-content: center; padding-top: 10px; color: #fff; box-shadow: 0 3px 8px rgba(24,28,40,0.2); transition: height 0.6s cubic-bezier(.22,1,.36,1), margin-left 0.4s ease; }
 
 /* a moment: deliberately half the weight — hollow, smaller, on the rail */
 .dt-mom { position: absolute; left: var(--laneA); right: 0; display: grid; grid-template-columns: calc(var(--dotx) - var(--laneA) - 13px) 26px 1fr; align-items: start; z-index: 1; transition: top 0.6s cubic-bezier(.22,1,.36,1), opacity 0.55s ease; }
@@ -308,7 +315,7 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 
 /* during an active pinch/scroll gesture, positions track the fingers 1:1 (no glide) */
 .vtwrap.zooming .dt-act, .vtwrap.zooming .dt-mom, .vtwrap.zooming .dt-band,
-.vtwrap.zooming .dt-gap, .vtwrap.zooming .capsule { transition: none; }
+.vtwrap.zooming .dt-gap, .vtwrap.zooming .dt-link, .vtwrap.zooming .capsule { transition: none; }
 
 .ev-amount { font-family: var(--rounded); font-weight: 700; font-size: 13.5px; font-variant-numeric: tabular-nums; color: var(--accent); }
 .ev-host { color: var(--muted-2); }

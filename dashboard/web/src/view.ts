@@ -202,7 +202,9 @@ export { ROW };
  *  **Lanes.** `laneOf` puts intervals left and points right. Concurrent spans are packed into
  *  sub-columns (greedy, by start) rather than interlocked with a notch: on a true time scale a
  *  6-hour charge genuinely *does* span a 15-minute trip, and the real feed has exactly that,
- *  so they need to sit side by side instead of colliding in one 40px column.
+ *  so they need to sit side by side instead of colliding in one 40px column. Consecutive
+ *  capsules within a column are joined by a dotted `link` across the dead time between them,
+ *  so the lane reads as a track rather than as capsules floating on a background.
  *
  *  **Containment.** A moment inside a span gets a `band` — a tinted stripe across the moments
  *  lane covering the host's vertical range. Figure/ground rather than a tether line per dot,
@@ -222,14 +224,17 @@ const ROW_MIN = 34;         // smallest vertical room a moment row needs
 const MAX_COLS = 3;         // concurrent-span sub-columns before we stop fanning out
 const HANDOFF = 300;        // an overlap this short (seconds) is a boundary, not concurrency
 const CAP_GAP = 3;          // hairline between two capsules stacked in one sub-column
+const LINK_MIN = 8;         // shorter than this, a connector is a smudge — draw nothing
 const PAD_BOTTOM = 56;
 
 export interface SpanBox { top: number; height: number; col: number }
 export interface Band { hostId: string; top: number; height: number; color: string }
+export interface Link { top: number; height: number; col: number }
 export interface DayLayout {
   pos: Map<string, number>;          // event id → top y (capsule top, or a moment's disc centre line)
   spans: Map<string, SpanBox>;       // span id → capsule box + which sub-column it sits in
   cols: number;                      // how many sub-columns the activity lane needs
+  links: Link[];                     // dotted connectors between consecutive capsules in a column
   bands: Band[];                     // containment stripes, longest host first
   hosts: Map<string, string>;        // moment id → the span id containing it
   gaps: { y: number; seconds: number }[];
@@ -243,10 +248,11 @@ export function dayLayout(
 ): DayLayout {
   const pos = new Map<string, number>();
   const spans = new Map<string, SpanBox>();
+  const links: Link[] = [];
   const bands: Band[] = [];
   const hosts = new Map<string, string>();
   const gaps: { y: number; seconds: number }[] = [];
-  const empty = { pos, spans, cols: 1, bands, hosts, gaps, h: 40 };
+  const empty = { pos, spans, cols: 1, links, bands, hosts, gaps, h: 40 };
   if (!events.length) return empty;
 
   const vis = events.filter((e) => reveal(e) > VIS_EPS);
@@ -310,8 +316,16 @@ export function dayLayout(
   for (const s of visSpans) {
     let col = colEnds.findIndex((end) => end <= startOf(s) + HANDOFF);
     if (col === -1) { col = Math.min(colEnds.length, MAX_COLS - 1); }
-    const top = Math.max(Y(startOf(s)), colBottoms[col] != null ? colBottoms[col] + CAP_GAP : 0);
+    const prevBottom = colBottoms[col];
+    const top = Math.max(Y(startOf(s)), prevBottom != null ? prevBottom + CAP_GAP : 0);
     const height = Math.max(CAP_MIN, Y(endOf(s)) - top);
+    // The activity lane is a track, not a set of floating capsules: a dotted connector runs down
+    // the dead time between one capsule and the next *in the same column*, which is what makes a
+    // day read as one thing after another. Deliberately per-column — two capsules in different
+    // columns are concurrent, so a line between them would claim a sequence that isn't there.
+    if (prevBottom != null && top - prevBottom >= LINK_MIN) {
+      links.push({ top: prevBottom, height: top - prevBottom, col });
+    }
     colEnds[col] = Math.max(colEnds[col] ?? -Infinity, endOf(s));
     colBottoms[col] = top + height;
     spans.set(s.id, { top, height, col });
@@ -343,7 +357,7 @@ export function dayLayout(
   // 5. everything still unplaced is below the current altitude — park it at its true time
   for (const e of events) if (!pos.has(e.id)) pos.set(e.id, Y(startOf(e)));
 
-  return { pos, spans, cols, bands, hosts, gaps, h: cur + PAD_BOTTOM };
+  return { pos, spans, cols, links, bands, hosts, gaps, h: cur + PAD_BOTTOM };
 }
 
 
