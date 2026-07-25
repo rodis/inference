@@ -257,12 +257,12 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
    --capcols is set per day by the layout: how many concurrent activities need side-by-side
    capsules. The activity lane widens with it; the moments lane starts where it ends. */
 .dt-wrap {
-  --gutter: 44px;                 /* right-aligned clock column */
+  --gutter: 54px;                 /* right-aligned clock column, incl. 10px before the capsule */
   --capw: 46px;                   /* one capsule sub-column — must match CAP_W in DayTimeline */
   --capcols: 1;                   /* set per day by the layout: concurrent activities */
   --actlabel: 176px;              /* room for an activity's name + chips */
   --laneA: calc(var(--gutter) + var(--capcols) * var(--capw) + var(--actlabel));
-  --dotx: calc(var(--laneA) + 42px);   /* centre of the moments rail */
+  --dotx: calc(var(--laneA) + 56px);   /* centre of the moments rail */
   --band-a: 0.075;
 }
 @media (prefers-color-scheme: dark) { .dt-wrap { --band-a: 0.15; } }
@@ -290,13 +290,13 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 
 /* an activity: capsule ∝ duration, in its sub-column */
 .dt-act { position: absolute; left: 0; width: var(--laneA); display: grid; grid-template-columns: var(--gutter) auto 1fr; align-items: start; z-index: 1; transition: top 0.6s cubic-bezier(.22,1,.36,1), opacity 0.55s ease; }
-.dt-act > .t { text-align: right; font-family: var(--mono); font-size: 11px; color: var(--muted); padding-top: 11px; font-variant-numeric: tabular-nums; }
+.dt-act > .t { text-align: right; font-family: var(--mono); font-size: 11px; color: var(--muted); padding-top: 11px; padding-right: 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .dt-act .caps { position: relative; }
 .dt-act .capsule { width: 38px; border-radius: 19px; margin-top: 1px; display: flex; align-items: flex-start; justify-content: center; padding-top: 10px; color: #fff; box-shadow: 0 3px 8px rgba(24,28,40,0.2); transition: height 0.6s cubic-bezier(.22,1,.36,1), margin-left 0.4s ease; }
 
 /* a moment: deliberately half the weight — hollow, smaller, on the rail */
 .dt-mom { position: absolute; left: var(--laneA); right: 0; display: grid; grid-template-columns: calc(var(--dotx) - var(--laneA) - 13px) 26px 1fr; align-items: start; z-index: 1; transition: top 0.6s cubic-bezier(.22,1,.36,1), opacity 0.55s ease; }
-.dt-mom > .t { text-align: right; font-family: var(--mono); font-size: 11px; color: var(--muted); padding-top: 4px; padding-right: 10px; font-variant-numeric: tabular-nums; }
+.dt-mom > .t { text-align: right; font-family: var(--mono); font-size: 11px; color: var(--muted); padding-top: 4px; padding-right: 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .dt-mom .disc { width: 26px; height: 26px; border-radius: 50%; background: var(--card); border: 2px solid currentColor; display: flex; align-items: center; justify-content: center; box-shadow: var(--shadow-sm); }
 .dt-mom .dt-body { padding: 2px 8px 8px 12px; }
 .dt-mom .ev-title { font-size: 13.5px; font-weight: 600; }
@@ -317,7 +317,7 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 @media (max-width: 760px) {
   /* below this two full lanes don't fit: keep the capsules, strip the activity label, and let
      the moments lane carry the names */
-  .dt-wrap { --actlabel: 8px; --dotx: calc(var(--laneA) + 34px); }
+  .dt-wrap { --actlabel: 8px; --dotx: calc(var(--laneA) + 48px); }
   .dt-act .dt-body { display: none; }
   .dt-head .lh-sub { display: none; }
 }
