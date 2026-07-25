@@ -54,7 +54,12 @@ eligible (already streaming into a Home Assistant instance).
 
 Two hard facts shaped the decision:
 
-1. **One connection per GCID.** The MQTT username is the account-level **GCID**, not the per-client
+1. **One connection per GCID.** *(Deploy consequence, learned 2026-07-25: this also rules out a
+   rolling update. `maxSurge` starts the new subscriber while the old one still holds the only
+   permitted connection, so they evict each other — surfacing as `mqtt connect failed: Not
+   authorized` for ~56s until the old pod dies. The `bmw-cardata` Deployment is therefore pinned
+   to `strategy: Recreate` via a kustomize patch; see `deploy/inference/kustomize/base/bmw-cardata/`.)*
+   The MQTT username is the account-level **GCID**, not the per-client
    `client_id`; the topic is `{GCID}/{VIN}`. Two direct subscribers on the same account evict each
    other. So our subscriber and HA's direct subscription are **mutually exclusive** — creating our
    own CarData client does not dodge this (same GCID). The sanctioned multi-consumer pattern is a

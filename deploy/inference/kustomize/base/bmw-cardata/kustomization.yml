@@ -1,2 +1,28 @@
 generators:
   - helmChart.yml
+
+# BMW CarData permits exactly ONE MQTT connection per GCID (ADR 0006): a second subscriber on
+# the same account evicts the first. The default RollingUpdate (maxSurge 25% -> 1 for a single
+# replica) therefore starts the new subscriber while the old one still holds the only allowed
+# connection, and they fight over it. Observed on the 2026-07-25 rollout — eviction surfaces as
+# an auth failure, and the new pod only settled once the old one was gone:
+#   10:03:06  mqtt disconnected: Unspecified error (auto-reconnect)
+#   10:03:11  mqtt connect failed: Not authorized
+#   10:03:19  mqtt connect failed: Not authorized
+#   10:03:25  <old pod deleted>
+#   10:03:35  connected (Success); subscribed to <gcid>/+
+# ~56s of dropped stream per deploy, on a signal that now contributes to both got_into and
+# got_out (~94% per-trip coverage). Recreate makes the handover strictly sequential: the old
+# subscriber is fully gone before the new one connects. A few seconds with no subscriber is the
+# right trade — this pod holds a singleton external connection, so it must never overlap itself.
+# Patched here rather than through chart values so it doesn't depend on what the Stakater chart
+# happens to expose. (The runtime is NOT patched: Kafka consumer-group rebalance handles overlap.)
+patches:
+  - target:
+      kind: Deployment
+      name: bmw-cardata
+    patch: |-
+      - op: add
+        path: /spec/strategy
+        value:
+          type: Recreate
