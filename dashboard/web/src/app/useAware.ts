@@ -12,10 +12,20 @@ export interface AwareCtx {
   prepared: Prepared;        // all / byId / raw / derived / days / derivLevel
   selectedDay: string;       // shared across day-based dashboards so the day persists on nav
   setSelectedDay: (d: string) => void;
-  getL: (name: string) => number;
-  getCeil: (name: string) => number;
-  onHome: (name: string, level: number) => void;
-  onLift: (name: string, level: number) => void;
+
+  // --- the level ladder (one knob per event type; see view.ts) ---
+  lanes: number;                              // ladder height = laneCount(maxDepth)
+  levelOf: (name: string) => number;          // the lane a type renders in
+  defaultOf: (name: string) => number | null; // what its depth implies (null = never seen)
+  isHidden: (name: string) => boolean;        // kept off the timeline at every altitude
+  overrides: number;                          // how many types sit off their default
+  /** Types with a stored entry. Union with `prepared.types` to get every row the levels
+   *  board must show — a type can be configured but have no events in the window. */
+  configured: string[];
+  setLevel: (name: string, level: number) => void;
+  setHidden: (name: string, hidden: boolean) => void;
+  resetLevel: (name: string) => void;         // back to the depth default
+  resetAll: () => void;
   saved: boolean;
 }
 

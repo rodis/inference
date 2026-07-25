@@ -12,7 +12,7 @@ const DEFAULT_SERIES = ["car_lock_state_change", "device_connected_to_carplay", 
 /** Compare series: pick any event types and see them as parallel lanes on one shared
  *  per-day time scale, so the same moment lines up across columns. */
 export default function CompareDashboard() {
-  const { prepared, getL, getCeil, status, selectedDay } = useAware();
+  const { prepared, levelOf, defaultOf, status, selectedDay } = useAware();
   const { all, byId, derivLevel } = prepared;
 
   const [series, setSeries] = useState<Set<string>>(new Set());
@@ -86,14 +86,14 @@ export default function CompareDashboard() {
                   <span className="cln">{typeLabel(lane.name)}</span>
                   <span className="clc">{lane.events.length}</span>
                 </div>
-                <VTimeline events={lane.events} scale={scale} getL={getL} getCeil={getCeil} derivLevel={derivLevel} onSelect={setModalEvent} />
+                <VTimeline events={lane.events} scale={scale} levelOf={levelOf} defaultOf={defaultOf} derivLevel={derivLevel} onSelect={setModalEvent} />
               </div>
             ))}
           </div>
         )}
       </div>
 
-      <EventModal event={modalEvent} byId={byId} getL={getL} derivLevel={derivLevel} onClose={() => setModalEvent(null)} />
+      <EventModal event={modalEvent} byId={byId} levelOf={levelOf} derivLevel={derivLevel} onClose={() => setModalEvent(null)} />
     </>
   );
 }

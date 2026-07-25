@@ -1,23 +1,19 @@
 import { useEffect, useState } from "react";
 import type { AwareEvent } from "../types";
-import { catOf, fmtTimeSec, humanDur, labelOf, LCHIP } from "../view";
+import { catOf, fmtTimeSec, humanDur, labelOf } from "../view";
+import LevelChip from "./LevelChip";
 
 interface Props {
   event: AwareEvent | null;
   byId: Record<string, AwareEvent>;
-  getL: (name: string) => number;
+  levelOf: (name: string) => number;
   derivLevel: (e: AwareEvent) => number;
   onClose: () => void;
 }
 
-function LChip({ lv }: { lv: number }) {
-  const c = LCHIP[lv];
-  return <span className="lchip" style={{ background: c.bg, color: c.fg }}>L{lv}</span>;
-}
-
 /** Recursive lineage node — the derivation tree under an event. Each row is clickable to
  *  refocus the modal on that contributor (drill down into how *it* was built). */
-function DNode({ e, byId, getL, derivLevel, onOpen }: { e: AwareEvent; byId: Record<string, AwareEvent>; getL: (n: string) => number; derivLevel: (e: AwareEvent) => number; onOpen: (e: AwareEvent) => void }) {
+function DNode({ e, byId, levelOf, derivLevel, onOpen }: { e: AwareEvent; byId: Record<string, AwareEvent>; levelOf: (n: string) => number; derivLevel: (e: AwareEvent) => number; onOpen: (e: AwareEvent) => void }) {
   const kids = (e.message.derived_from || []).map((p) => byId[p.id]).filter(Boolean) as AwareEvent[];
   const cat = catOf(e.name);
   return (
@@ -27,20 +23,20 @@ function DNode({ e, byId, getL, derivLevel, onOpen }: { e: AwareEvent; byId: Rec
         <span className="dn">{labelOf(e)}</span>
         <span className="dg" />
         <span className="dt">{fmtTimeSec(e.date)}</span>
-        <LChip lv={getL(e.name)} />
+        <LevelChip level={levelOf(e.name)} />
         <span className="dbadge">D{derivLevel(e)}</span>
         <span className="dchev">›</span>
       </button>
       {kids.length > 0 && (
         <div className="dkids">
-          {kids.map((k) => <DNode key={k.id} e={k} byId={byId} getL={getL} derivLevel={derivLevel} onOpen={onOpen} />)}
+          {kids.map((k) => <DNode key={k.id} e={k} byId={byId} levelOf={levelOf} derivLevel={derivLevel} onOpen={onOpen} />)}
         </div>
       )}
     </div>
   );
 }
 
-export default function EventModal({ event, byId, getL, derivLevel, onClose }: Props) {
+export default function EventModal({ event, byId, levelOf, derivLevel, onClose }: Props) {
   // a drill trail so contributors can be opened recursively, with a way back up
   const [trail, setTrail] = useState<AwareEvent[]>([]);
   useEffect(() => { setTrail(event ? [event] : []); }, [event]);
@@ -81,7 +77,7 @@ export default function EventModal({ event, byId, getL, derivLevel, onClose }: P
             <div className="mtitle">{labelOf(e)}</div>
             <div className="mmeta">
               <span className="mt">{fmtTimeSec(e.date)}{e.message.interval ? " · " + humanDur(e.message.interval.duration_seconds) : ""}</span>
-              <LChip lv={getL(e.name)} />
+              <LevelChip level={levelOf(e.name)} />
               <span className="dbadge">D{dl}</span>
               {conf != null ? <span className="conf">confidence {conf}</span> : null}
             </div>
@@ -99,7 +95,7 @@ export default function EventModal({ event, byId, getL, derivLevel, onClose }: P
             )}
           </p>
           {kids.length ? (
-            <div className="dtree">{kids.map((k) => <DNode key={k.id} e={k} byId={byId} getL={getL} derivLevel={derivLevel} onOpen={open} />)}</div>
+            <div className="dtree">{kids.map((k) => <DNode key={k.id} e={k} byId={byId} levelOf={levelOf} derivLevel={derivLevel} onOpen={open} />)}</div>
           ) : (
             <div className="dleaf-note">— end of lineage —</div>
           )}

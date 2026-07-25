@@ -11,6 +11,7 @@ export const RAW_LABEL: Record<string, string> = {
   device_connected_to_carplay: "CarPlay connected", device_disconnected_from_carplay: "CarPlay disconnected",
   car_lock_state_change: "Car lock changed",
   credit_card_payment: "Card payment",
+  location_ping: "Location ping",
 };
 export const CAT: Record<string, { c: string; Icon: LucideIcon }> = {
   car_trip: { c: "#3d6cf7", Icon: Car }, got_into_the_car: { c: "#18b26b", Icon: LogIn }, got_out_the_car: { c: "#12a89b", Icon: LogOut },
@@ -21,10 +22,44 @@ export const CAT: Record<string, { c: string; Icon: LucideIcon }> = {
   credit_card_payment: { c: "#14b8a6", Icon: CreditCard },
 };
 
-export const NLOG = 4;
-export const LCHIP: Record<number, { bg: string; fg: string }> = {
-  1: { bg: "#e7eeff", fg: "#2f58d8" }, 2: { bg: "#e6f7ef", fg: "#178a55" },
-  3: { bg: "#efeaff", fg: "#6a4cd0" }, 4: { bg: "#eef0f4", fg: "#7a8294" },
+// --- the level ladder -----------------------------------------------------------
+// How many lanes the timeline has, and which one an event type lands in when the user
+// hasn't said otherwise.
+//
+// The ladder is as tall as the deepest inference in view: a D3 event stands on two layers
+// of reasoning and reads as a claim about your life, a D1 event is a wire reading, so
+// **depth inverted is the lane** — deepest at the top. That makes a brand-new definition
+// land somewhere sensible with zero configuration, which is the same bet as events-as-data.
+//
+// Depth is not importance, though, so the default is only a default: `credit_card_payment`
+// is D1 (a raw webhook, no inference at all) and belongs in the headlines. Those exceptions
+// are the *only* thing stored — see DataProvider.
+//
+// The floor keeps the board sane before the deep derivations exist; the ladder grows on its
+// own the first time something deeper fires (arrived_home_by_car will make it 4). Growing
+// re-points every default one lane down, which is the known cost of tying height to depth.
+export const LANE_FLOOR = 3;
+export const laneCount = (maxDepth: number) => Math.max(LANE_FLOOR, maxDepth);
+export const defaultLevelOf = (depth: number, lanes: number) =>
+  Math.min(lanes, Math.max(1, lanes - depth + 1));
+
+// Named for what you'd say out loud. The top is always the day at a glance and the bottom
+// is always raw signal; a taller ladder fills in between, and past the pool it falls back
+// to the bare number.
+const LANE_TOP = "Headlines", LANE_BOTTOM = "Signals";
+const LANE_MIDDLE = ["Activity", "Micro", "Traces", "Detail"];
+export function laneNames(n: number): string[] {
+  if (n <= 1) return [LANE_TOP];
+  const middle = Array.from({ length: n - 2 }, (_, i) => LANE_MIDDLE[i] ?? `Level ${i + 2}`);
+  return [LANE_TOP, ...middle, LANE_BOTTOM];
+}
+export const LANE_BLURB: Record<string, string> = {
+  Headlines: "the day at a glance",
+  Activity: "what you actually did",
+  Micro: "the moving parts",
+  Traces: "the steps between",
+  Detail: "the fine grain",
+  Signals: "raw wire readings",
 };
 
 export const catOf = (name: string) => CAT[name] || { c: "#9298a6", Icon: Circle };
@@ -187,18 +222,6 @@ export function absorbedIds(events: AwareEvent[], reveal: (e: AwareEvent) => num
   return out;
 }
 
-export interface GroupDef { key: string; label: string; Icon: LucideIcon; color: string; test: (n: string) => boolean }
-export const GROUP_DEFS: GroupDef[] = [
-  { key: "trip", label: "Car & trip", Icon: Car, color: "#3d6cf7", test: (n) => n === "car_trip" || n.includes("got_in") || n.includes("got_out") || n.includes("trip") },
-  { key: "door", label: "Doors", Icon: DoorClosed, color: "#7a5bff", test: (n) => n.includes("door") },
-  { key: "lock", label: "Lock", Icon: KeyRound, color: "#e0567f", test: (n) => n.includes("lock") },
-  { key: "carplay", label: "CarPlay", Icon: Smartphone, color: "#6b5bff", test: (n) => n.includes("carplay") },
-  { key: "power", label: "Power", Icon: Plug, color: "#f5a524", test: (n) => n.includes("power") || n.includes("charg") },
-  { key: "spend", label: "Spending", Icon: CreditCard, color: "#14b8a6", test: (n) => n.includes("payment") || n.includes("card") },
-  { key: "other", label: "Other", Icon: Circle, color: "#9298a6", test: () => true },
-];
-export const groupKey = (name: string) => (GROUP_DEFS.find((g) => g.test(name)) || GROUP_DEFS[GROUP_DEFS.length - 1]).key;
-
 export interface Prepared {
   all: AwareEvent[];
   byId: Record<string, AwareEvent>;
@@ -206,6 +229,14 @@ export interface Prepared {
   derived: AwareEvent[];
   days: string[];
   derivLevel: (e: AwareEvent | undefined) => number;
+  /** Every event *type* in the window, deepest first — the rows of the levels board. */
+  types: string[];
+  /** A type's derivation depth, or null for a type with no events in the window. */
+  depthOf: (name: string) => number | null;
+  /** Every depth this type appears at in the window (a definition can change shape). */
+  depthsOf: (name: string) => number[];
+  /** Deepest chain in view — the height of the level ladder (see laneCount). */
+  maxDepth: number;
 }
 
 /** Decorate API events with epoch/date and expose a memoized derivation-level function
@@ -229,8 +260,29 @@ export function prepare(events: AwareEvent[]): Prepared {
     return memo[e.id];
   };
 
+  // Depth per event *type*, which is what the level ladder is keyed on. A type's depth is a
+  // property of its instances and changes when a definition changes shape, so the window can
+  // hold more than one: `evs` is ascending, so last-write-wins reports the **current** shape.
+  // (Taking the oldest pinned each badge to the most obsolete lineage — car_trip was built on
+  // the intermediate car_door_* derivations, and reads straight off got_into/got_out since
+  // ADR 0005.) `depthsOf` owns up to the older ones for the tooltip.
+  const depthByType: Record<string, number> = {};
+  const depthsByType: Record<string, Set<number>> = {};
+  all.forEach((e) => {
+    const d = derivLevel(e);
+    depthByType[e.name] = d;
+    (depthsByType[e.name] ??= new Set<number>()).add(d);
+  });
+  const types = Object.keys(depthByType).sort(
+    (a, b) => depthByType[b] - depthByType[a] || a.localeCompare(b)
+  );
+  const depths = Object.values(depthByType);
+  const maxDepth = depths.length ? Math.max(...depths) : 1;
+  const depthOf = (name: string) => depthByType[name] ?? null;
+  const depthsOf = (name: string) => [...(depthsByType[name] ?? [])].sort((a, b) => a - b);
+
   // Every day present in the loaded set. No cap needed here: the API already serves a
   // trailing window (DAY_WINDOW in api.ts), so this list is bounded at the source.
   const days = [...new Set(all.map((e) => dayKey(e.date)))].sort();
-  return { all, byId, raw, derived, days, derivLevel };
+  return { all, byId, raw, derived, days, derivLevel, types, depthOf, depthsOf, maxDepth };
 }

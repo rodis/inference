@@ -1,14 +1,17 @@
 import type { AwareEvent } from "../types";
-import { ROW, catOf, fmtTime, humanDur, labelOf, LCHIP, isSpan, intervalOf } from "../view";
+import { ROW, catOf, fmtTime, humanDur, labelOf, isSpan, intervalOf } from "../view";
 import type { Scale } from "../view";
+import LevelChip, { OverrideFlag } from "./LevelChip";
 
 interface Props {
   events: AwareEvent[];
   scale?: Scale;                          // time-aligned layout (Compare lanes)
   posOf?: (e: AwareEvent) => number;      // time-proportional per-event layout (Day timeline)
   packedHeight?: number;                  // total height when posOf is used
-  getL: (name: string) => number;
-  getCeil: (name: string) => number;
+  /** The lane this type renders in, and what its depth would have chosen — so a card can
+   *  own up to sitting somewhere the user put it. Both come from the levels config. */
+  levelOf: (name: string) => number;
+  defaultOf: (name: string) => number | null;
   derivLevel: (e: AwareEvent) => number;
   onSelect: (e: AwareEvent) => void;
   /** 0..1 — how "revealed" an event is at the current altitude (1 = full detail). */
@@ -23,15 +26,10 @@ interface Props {
   overlaps?: Set<string>;
 }
 
-function LChip({ lv }: { lv: number }) {
-  const c = LCHIP[lv];
-  return <span className="lchip" style={{ background: c.bg, color: c.fg }}>L{lv}</span>;
-}
-
 /** One vertical timeline — absolute-positioned cards with a colored spine between
  *  consecutive events. Two layout modes: a shared time scale (Compare), or a
  *  reveal-weighted packed layout (Day timeline) where slots grow with altitude. */
-export default function VTimeline({ events, scale, posOf, packedHeight, getL, getCeil, derivLevel, onSelect, revealOf, byId, spans, gaps, overlaps }: Props) {
+export default function VTimeline({ events, scale, posOf, packedHeight, levelOf, defaultOf, derivLevel, onSelect, revealOf, byId, spans, gaps, overlaps }: Props) {
   const reveal = revealOf ?? (() => 1);
   const sorted = [...events].sort((a, b) => a.epoch - b.epoch);
   if (!sorted.length) {
@@ -90,7 +88,7 @@ export default function VTimeline({ events, scale, posOf, packedHeight, getL, ge
         );
       })}
       {placed.map(({ e, y }) => {
-        const cat = catOf(e.name), home = getL(e.name), ceil = getCeil(e.name);
+        const cat = catOf(e.name), level = levelOf(e.name), def = defaultOf(e.name);
         const isDer = e.event_class === "derived";
         const r = reveal(e);
         const hidden = hiddenBeneath(e);
@@ -123,8 +121,8 @@ export default function VTimeline({ events, scale, posOf, packedHeight, getL, ge
                 <span className="ev-title">{labelOf(e)}</span>
                 <span className="ev-kind">{kind}</span>
                 {hidden > 0 && <span className="rollup" title="detail collapsed beneath — descend or tap to expand">↓ {hidden} below</span>}
-                {ceil < home && <span className="liftflag">↑ L{ceil}</span>}
-                <LChip lv={home} />
+                <LevelChip level={level} />
+                <OverrideFlag level={level} def={def} />
                 <span className="dbadge">D{derivLevel(e)}</span>
               </div>
               {iv ? (

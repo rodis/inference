@@ -1,20 +1,26 @@
 # Aware dashboard
 
-A small, stateless web app that visualizes the `events` table in Neon as a
-Structured-style day timeline: two side-by-side vertical timelines on a shared
-per-day time scale (a level-filtered **Timeline** and a selectable **Compare**
-series), an editable **logical-level / lift** model, and a recursive dig-down into
-each event's derivation lineage.
+A small, stateless web app that visualizes the `events` table in Neon. A React SPA
+served by FastAPI, built as a **registry of dashboards** (`web/src/app/registry.tsx` —
+adding one is a module plus an entry, mirroring events-as-data):
+
+| dashboard | what it's for |
+|-----------|---------------|
+| **Day timeline** | one day as a Structured-style vertical timeline: duration events as capsules ∝ how long they lasted, quiet stretches collapsed, and a pinch/⌘-scroll **semantic zoom** that reveals or folds detail around the point you're looking at |
+| **Compare** | any set of event types as parallel lanes on one shared per-day scale, so co-occurring signals line up |
+| **Signals** | the raw feed as a table |
+| **Levels** | the altitude ladder: where each event *type* lives, drag-and-drop (see below) |
+
+Tap any event for a recursive dig-down into its derivation lineage.
 
 ## Layout
 
 | file | role |
 |------|------|
-| `index.html` | the whole UI (HTML/CSS/JS, no build step) — fetches its data from `/api/*` |
-| `app.py` | FastAPI server: serves `index.html` + read-only Neon endpoints |
-| `logical_levels.json` | the logical-level + lift config the UI seeds from (later: per-user, in the DB) |
+| `web/` | the React/Vite/TS SPA — `npm run build` emits `web/dist`, which `app.py` serves |
+| `app.py` | FastAPI server: the SPA bundle, read-only Neon event endpoints, and the one write path (`/api/preferences`) |
+| `logical_levels.json` | first-run level config for a user who has never saved one |
 | `requirements.txt` / `Dockerfile` | container packaging |
-| `build_preview.py` | bakes a static snapshot of `index.html` (data inlined) for sharing |
 
 ## Endpoints
 
@@ -22,7 +28,7 @@ each event's derivation lineage.
 - `GET /api/users` — distinct `user_id`s in the `events` table (the selector)
 - `GET /api/events?user_id=…&days=N` — that user's events over the last `N` whole days
   (UTC, default 7, max 90), oldest first, shaped for the page
-- `GET /api/preferences?user_id=…` / `PUT` — the logical-level/lift config (seed + overrides)
+- `GET /api/preferences?user_id=…` / `PUT` — that user's level config (their row, else the seed)
 - `GET /api/stream?user_id=…` — SSE seam for the deferred live view (heartbeat only)
 - `GET /healthz` — liveness (the one path exempt from auth)
 
@@ -32,7 +38,8 @@ every event ever recorded (steeply, once a high-rate source like the movement tr
 pings is in the mix). The window is the client's working set; `DAY_WINDOW` in `web/src/api.ts`
 is what the SPA asks for, and it sizes the day picker.
 
-**Read-only**: the dashboard only reads Neon; the inference runtime is the sole writer.
+The dashboard only ever **reads** the `events` table — the inference runtime is its sole
+writer. The one thing the dashboard writes is its own `dashboard_prefs` table.
 
 ## Authentication
 
@@ -48,6 +55,21 @@ so the SPA needs no code change.
   secret; set it locally to serve the app.
 - `DASHBOARD_USER` — the username, defaults to `aware`.
 - `/healthz` is exempt so K8s liveness/readiness probes (which send no credentials) pass.
+
+## Checks
+
+```bash
+cd dashboard/web
+npx tsc -b        # typecheck (src + checks)
+npm run check     # render + model checks for the level ladder
+```
+
+`npm run check` is an SSR pass (`checks/render-check.tsx`) that drives the Timeline and
+Levels dashboards through a real `prepare()` lineage graph and asserts the depth→lane
+defaults, the override flags and the hidden-type handling. It exists because the lane a type
+lands in is computed from the *shape of the lineage graph* — so a change to `derivLevel`,
+`laneCount` or `defaultLevelOf` silently re-points every default. Both run in CI
+(`_ci-checks.yml`, the `web` job), which gates image builds.
 
 ## Run locally
 
@@ -99,16 +121,64 @@ same as the runtime) with a standalone ArgoCD app `deploy/argocd/application-das
 Pushing `deploy/**` and code in one go races on the `deploy-state` force-push — keep them
 in separate pushes (see top-level `CLAUDE.md`).
 
-## Logical levels & lift
+## Levels — the altitude ladder
 
-`logical_levels.json` is the exploration seed:
+Two orthogonal numbers ride on every event, and keeping them apart is the point:
+
+- **D — derivation depth.** *Structural*, computed from the lineage graph, not configurable.
+  A raw signal is `D1`; an inference built on it is `D2`; one built on *that* is `D3`.
+- **L — level.** *How much you care.* Which altitude the event appears at when you zoom
+  the timeline: `L1` is the day at a glance, the bottom lane is raw signal.
+
+**The ladder is as tall as the deepest inference in view, and a type's depth picks its
+lane** (deepest at the top — `laneCount` / `defaultLevelOf` in `web/src/view.ts`). Depth is
+a real signal about altitude: a `D3` event stands on two layers of reasoning and reads as a
+claim about your life, a `D1` event is a wire reading. So a new `events/*.yml` definition
+lands somewhere sensible with **zero configuration**, and its lane keeps following the
+definitions as they change instead of freezing at whatever it was when you last saved.
+
+Depth is not importance, though, so the default is only a default. The **Levels** dashboard
+is a drag-and-drop board of lanes where you record the exceptions:
+
+- drag a type **up** to promote it — `credit_card_payment` is the canonical case: `D1`, zero
+  inference, and one of the most interesting things in a day;
+- drag it **down** to demote a noisy inference out of the headlines;
+- drag it **out of the stack** to keep it off the timeline at every altitude —
+  `location_ping` is why this exists, since a day holds hundreds once the movement tracker
+  is feeding and they would bury everything else.
+
+Keyboard equivalents on a focused type: <kbd>↑</kbd> promote, <kbd>↓</kbd> demote,
+<kbd>⌫</kbd> drop, <kbd>↵</kbd> back to the depth default.
+
+Stored per user in `dashboard_prefs`, debounced, as **overrides only**:
 
 ```jsonc
 {
-  "levels": { "car_trip": 1, "got_into_the_car": 2, "car_door_opened": 3, ... },  // home level (1=top)
-  "lift":   { "got_into_the_car": 1, "got_out_the_car": 1 }                        // also surface up to L1
+  "level":  { "credit_card_payment": 1 },   // sparse — types sitting at their depth default are absent
+  "hidden": [ "location_ping" ]             // off the timeline entirely
 }
 ```
 
-Edits in the UI are session-only; this file is the durable source until levels move
-into the DB as user-owned data.
+`logical_levels.json` holds the same shape and is the **first-run** config for a user with
+no row yet — a default, *not* an overlay. Merging it would make "reset this override"
+impossible, because the seed would immediately put the override back.
+
+> **Superseded:** this replaced an `Assign & lift` sidebar backed by a `levels` + `lift`
+> column pair, which stored a *home lane* and a *ceiling* per type. Only the ceiling ever
+> affected what rendered (`getCeil` drove every visibility decision; `getL` painted a chip),
+> so the home lane was decoration that doubled the write and the UI. The two old columns are
+> still on the table, unread, as a rollback path — drop them once this has settled.
+
+## Theme
+
+Light and dark, both designed rather than inverted. The palette is a token set declared
+three times in `web/src/styles.css` — the light default, the `prefers-color-scheme: dark`
+preference, then an explicit `data-theme` choice which must beat the media query in *both*
+directions. Components only ever reference tokens; that's what makes the second theme a
+redefinition rather than a second stylesheet. The toggle in the app bar cycles
+**system → light → dark** and persists to `localStorage` (`web/src/app/theme.ts`), applied
+before the first paint so an override doesn't flash.
+
+Event *category* colours (a trip's blue, a payment's teal) are deliberately outside the
+token set: they identify an event type, always sit under white iconography on a filled
+shape, and read on either ground.

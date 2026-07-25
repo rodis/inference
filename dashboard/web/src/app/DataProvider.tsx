@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchEvents, fetchPreferences, fetchUsers, savePreferences } from "../api";
 import type { AwareEvent, Preferences } from "../types";
-import { prepare } from "../view";
+import { defaultLevelOf, laneCount, prepare } from "../view";
 import { AwareContext } from "./useAware";
 import type { AwareCtx } from "./useAware";
 
-const EMPTY_PREFS: Preferences = { levels: {}, lift: {} };
+const EMPTY_PREFS: Preferences = { level: {}, hidden: [] };
 
 /** Loads users + per-user events/prefs once, derives the prepared event graph, and owns
  *  the level/lift config (global to all dashboards). Everything is exposed via context so
@@ -45,12 +45,30 @@ export default function DataProvider({ children }: { children: React.ReactNode }
     if (days.length) setSelectedDay(days[days.length - 1]);
   }, [prepared]);
 
-  const getL = useCallback((name: string) => prefs.levels[name] ?? 4, [prefs]);
-  const getCeil = useCallback((name: string) => {
-    const h = getL(name);
-    const k = prefs.lift[name];
-    return k == null || k > h ? h : k;
-  }, [prefs, getL]);
+  // --- the level ladder ----------------------------------------------------------
+  // One number per event type, and most types don't need one: the ladder is as tall as the
+  // deepest inference in view and a type's depth picks its lane, so `prefs.level` holds only
+  // the exceptions. A type with no events in the window has no depth to read, so it falls to
+  // the bottom lane until one fires.
+  const lanes = useMemo(() => laneCount(prepared.maxDepth), [prepared.maxDepth]);
+  const defaultOf = useCallback((name: string) => {
+    const d = prepared.depthOf(name);
+    return d == null ? null : defaultLevelOf(d, lanes);
+  }, [prepared, lanes]);
+  const levelOf = useCallback((name: string) => {
+    const set = prefs.level[name];
+    if (set != null) return Math.min(lanes, Math.max(1, set));
+    return defaultOf(name) ?? lanes;
+  }, [prefs, defaultOf, lanes]);
+  const isHidden = useCallback((name: string) => prefs.hidden.includes(name), [prefs]);
+  const overrides = useMemo(
+    () => Object.keys(prefs.level).length + prefs.hidden.length,
+    [prefs]
+  );
+  const configured = useMemo(
+    () => [...new Set([...Object.keys(prefs.level), ...prefs.hidden])],
+    [prefs]
+  );
 
   const saveTimer = useRef<number | undefined>(undefined);
   const scheduleSave = useCallback((next: Preferences) => {
@@ -63,25 +81,43 @@ export default function DataProvider({ children }: { children: React.ReactNode }
     }, 400);
   }, [userId]);
 
-  const onHome = useCallback((name: string, level: number) => {
+  const commit = useCallback((mutate: (p: Preferences) => Preferences) => {
     setPrefs((p) => {
-      const next = { levels: { ...p.levels, [name]: level }, lift: { ...p.lift, [name]: level } };
+      const next = mutate(p);
       scheduleSave(next);
       return next;
     });
   }, [scheduleSave]);
 
-  const onLift = useCallback((name: string, level: number) => {
-    setPrefs((p) => {
-      const next = { levels: p.levels, lift: { ...p.lift, [name]: level } };
-      scheduleSave(next);
-      return next;
-    });
-  }, [scheduleSave]);
+  // Landing on the depth default stores *nothing* — that's what keeps the config sparse, and
+  // what lets a default follow the definitions as they change instead of freezing on save.
+  const setLevel = useCallback((name: string, level: number) => commit((p) => {
+    const level_ = { ...p.level };
+    if (level === defaultOf(name)) delete level_[name];
+    else level_[name] = Math.min(lanes, Math.max(1, level));
+    return { level: level_, hidden: p.hidden.filter((n) => n !== name) };
+  }), [commit, defaultOf, lanes]);
+
+  const setHidden = useCallback((name: string, hidden: boolean) => commit((p) => ({
+    level: p.level,
+    hidden: hidden
+      ? (p.hidden.includes(name) ? p.hidden : [...p.hidden, name])
+      : p.hidden.filter((n) => n !== name),
+  })), [commit]);
+
+  const resetLevel = useCallback((name: string) => commit((p) => {
+    const level = { ...p.level };
+    delete level[name];
+    return { level, hidden: p.hidden.filter((n) => n !== name) };
+  }), [commit]);
+
+  const resetAll = useCallback(() => commit(() => EMPTY_PREFS), [commit]);
 
   const ctx: AwareCtx = {
     users, userId, setUserId, status, eventsCount: events.length,
-    prepared, selectedDay, setSelectedDay, getL, getCeil, onHome, onLift, saved,
+    prepared, selectedDay, setSelectedDay,
+    lanes, levelOf, defaultOf, isHidden, overrides, configured,
+    setLevel, setHidden, resetLevel, resetAll, saved,
   };
 
   return <AwareContext.Provider value={ctx}>{children}</AwareContext.Provider>;

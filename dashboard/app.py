@@ -4,7 +4,7 @@ Serves the built single-page app (``web/dist``) and a handful of JSON endpoints:
 
   GET  /api/users               — distinct user_ids in the events table (the selector)
   GET  /api/events?user_id=…&days=N — one user's events over a trailing N-day window
-  GET  /api/preferences?user_id=… — that user's logical-level/lift config (seed + overrides)
+  GET  /api/preferences?user_id=… — that user's level config (their row, else the seed)
   PUT  /api/preferences?user_id=… — persist that user's config (the one write path)
   GET  /api/stream?user_id=…    — SSE seam for the (deferred) live view; stubbed for now
   GET  /healthz                 — liveness
@@ -70,13 +70,21 @@ DEFAULT_DAYS = 7
 
 USERS_SQL = "SELECT user_id FROM events GROUP BY user_id ORDER BY user_id"
 
-PREFS_GET_SQL = "SELECT levels, lift FROM dashboard_prefs WHERE user_id = %s"
+# The dashboard's level config, as of the single-override model: `level` holds only the
+# event types whose lane differs from the one their derivation depth implies, and `hidden`
+# lists the types kept off the timeline entirely. A type the user never touched has no
+# entry in either — the client derives its lane from depth (see web/src/view.ts).
+#
+# This replaced a `levels` + `lift` pair that stored a home lane *and* a ceiling for every
+# type. Only the ceiling ever affected what rendered, so the home lane was decoration that
+# doubled the write. Those two columns are still on the table, unread, as a rollback path.
+PREFS_GET_SQL = "SELECT level, hidden FROM dashboard_prefs WHERE user_id = %s"
 
 PREFS_UPSERT_SQL = """
-INSERT INTO dashboard_prefs (user_id, levels, lift, updated_at)
+INSERT INTO dashboard_prefs (user_id, level, hidden, updated_at)
 VALUES (%s, %s, %s, now())
 ON CONFLICT (user_id) DO UPDATE
-  SET levels = EXCLUDED.levels, lift = EXCLUDED.lift, updated_at = now()
+  SET level = EXCLUDED.level, hidden = EXCLUDED.hidden, updated_at = now()
 """
 
 
@@ -88,7 +96,12 @@ def _db_url() -> str:
 
 
 def _seed() -> dict:
-    """The logical_levels.json defaults — `levels`/`lift` maps a user's prefs overlay."""
+    """logical_levels.json — the config a user starts with before they've saved anything.
+
+    A first-run default, *not* an overlay: once a row exists it is the whole truth. Merging
+    would make "reset this override" impossible, because the seed would immediately put the
+    override back.
+    """
     return json.loads(SEED_PATH.read_text())
 
 
@@ -185,28 +198,35 @@ def events(user_id: str = Query(...), days: int = Query(DEFAULT_DAYS, ge=1, le=9
 
 @app.get("/api/preferences")
 def get_preferences(user_id: str = Query(...)):
-    """Seed defaults overlaid by this user's stored overrides (row may not exist yet)."""
-    seed = _seed()
-    levels = dict(seed.get("levels", {}))
-    lift = dict(seed.get("lift", {}))
+    """This user's stored level config, or the seed if they have never saved one."""
     with app.state.pool.connection() as conn, conn.cursor() as cur:
         cur.execute(PREFS_GET_SQL, (user_id,))
         row = cur.fetchone()
-    if row:
-        levels.update(row[0] or {})
-        lift.update(row[1] or {})
-    return JSONResponse({"levels": levels, "lift": lift})
+    if row is None:
+        seed = _seed()
+        return JSONResponse(
+            {"level": seed.get("level", {}), "hidden": seed.get("hidden", [])}
+        )
+    return JSONResponse({"level": row[0] or {}, "hidden": row[1] or []})
 
 
 @app.put("/api/preferences")
 def put_preferences(user_id: str = Query(...), body: dict = Body(...)):
-    """Persist a user's full level/lift config — the dashboard's only write."""
-    levels = body.get("levels")
-    lift = body.get("lift")
-    if not isinstance(levels, dict) or not isinstance(lift, dict):
-        raise HTTPException(422, "body must be {levels: {...}, lift: {...}}")
+    """Persist a user's level config — the dashboard's only write.
+
+    `level` is sparse by design (overrides only) and `hidden` replaces rather than merges,
+    so an empty body is a meaningful state: "everything sits where its depth puts it".
+    """
+    level = body.get("level")
+    hidden = body.get("hidden")
+    if not isinstance(level, dict) or not isinstance(hidden, list):
+        raise HTTPException(422, "body must be {level: {...}, hidden: [...]}")
+    if not all(isinstance(v, int) and not isinstance(v, bool) for v in level.values()):
+        raise HTTPException(422, "level values must be integers")
+    if not all(isinstance(n, str) for n in hidden):
+        raise HTTPException(422, "hidden must be a list of event names")
     with app.state.pool.connection() as conn, conn.cursor() as cur:
-        cur.execute(PREFS_UPSERT_SQL, (user_id, Jsonb(levels), Jsonb(lift)))
+        cur.execute(PREFS_UPSERT_SQL, (user_id, Jsonb(level), Jsonb(hidden)))
     return JSONResponse({"ok": True})
 
 

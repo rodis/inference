@@ -1,7 +1,31 @@
+import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { Car } from "lucide-react";
+import { Car, Monitor, Moon, Sun } from "lucide-react";
 import { DASHBOARDS } from "./registry";
 import { useAware } from "./useAware";
+import { applyTheme, readTheme, THEMES } from "./theme";
+import type { Theme } from "./theme";
+
+const THEME_ICON = { system: Monitor, light: Sun, dark: Moon };
+const THEME_LABEL: Record<Theme, string> = {
+  system: "matching your system", light: "light", dark: "dark",
+};
+
+/** Cycles system → light → dark. "System" is the default and the honest one: the palette
+ *  follows `prefers-color-scheme` until you overrule it. */
+function ThemeToggle() {
+  const [theme, setTheme] = useState<Theme>(readTheme);
+  const Icon = THEME_ICON[theme];
+  const next = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
+  return (
+    <button type="button" className="themebtn"
+      aria-label={`Theme: ${THEME_LABEL[theme]}. Switch to ${THEME_LABEL[next]}.`}
+      title={`Theme: ${THEME_LABEL[theme]}`}
+      onClick={() => { applyTheme(next); setTheme(next); }}>
+      <Icon size={15} strokeWidth={2.25} />
+    </button>
+  );
+}
 
 /** Persistent app frame: brand, registry-driven nav, global controls (user + save state),
  *  and the routed dashboard in the outlet. */
@@ -20,6 +44,7 @@ export default function Shell() {
           ))}
         </nav>
         <span className={"saveflag" + (saved ? " show" : "")}>saved ✓</span>
+        <ThemeToggle />
         {users.length > 0 && (
           <span className="userselect">
             <label htmlFor="usersel">user</label>

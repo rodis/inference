@@ -2,37 +2,43 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useAware } from "../../app/useAware";
 import { DAY_WINDOW } from "../../api";
 import type { AwareEvent } from "../../types";
-import { absorbedIds, dayKey, dayScale, humanDur } from "../../view";
+import { absorbedIds, dayKey, dayScale, humanDur, laneNames } from "../../view";
 import VTimeline from "../../components/VTimeline";
 import WeekStrip from "../../components/WeekStrip";
-import AssignPanel from "../../components/AssignPanel";
 import EventModal from "../../components/EventModal";
 
 const MON = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-const ALT_NAMES: Record<number, string> = { 1: "headlines", 2: "activity", 3: "micro", 4: "signals" };
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 /** The day at a glance: one altitude-zoomed timeline. Altitude is driven by a pinch /
  *  ⌘-scroll gesture *anchored at the point you're looking at* (the focused event stays put
  *  while detail grows/collapses around it), plus a fixed +/- control for discoverability. */
 export default function TimelineDashboard() {
-  const { prepared, getL, getCeil, onHome, onLift, status, eventsCount, userId, selectedDay } = useAware();
+  const { prepared, lanes, levelOf, defaultOf, isHidden, status, eventsCount, userId, selectedDay } = useAware();
   const { all, byId, derivLevel } = prepared;
 
-  const [altitude, setAltitude] = useState<number>(1); // 1 = headlines (high) … 4 = signals (ground)
+  const [altitude, setAltitude] = useState<number>(1); // 1 = headlines (high) … `lanes` = ground
   const [modalEvent, setModalEvent] = useState<AwareEvent | null>(null);
 
+  // An event's lane comes from the levels board (/d/levels); a type parked there is off the
+  // timeline at every altitude, not merely deep — hence the hard zero rather than a low reveal.
   const revealOf = useCallback((e: AwareEvent) => {
-    const displayLevel = getCeil(e.name);
-    return Math.max(0, Math.min(1, altitude - displayLevel + 1));
-  }, [altitude, getCeil]);
+    if (isHidden(e.name)) return 0;
+    return Math.max(0, Math.min(1, altitude - levelOf(e.name) + 1));
+  }, [altitude, levelOf, isHidden]);
 
   // All of the day's events stay in the layout; dayScale positions each by *time of day*
   // (proportional, quiet gaps collapsed) and grows/reveals detail with altitude, so lower-
   // layer events fade in/out at their true time instead of popping the layout. A visible
   // span's get-in/get-out contributors fold into its capsule (revealDay), so the day reads as
   // a flat list of activities rather than a capsule plus its redundant boundary rows.
-  const dayAll = useMemo(() => all.filter((e) => dayKey(e.date) === selectedDay), [all, selectedDay]);
+  // A type parked on the levels board is dropped here, not merely faded: leaving it in with
+  // reveal 0 would keep an invisible card in the layout (and in the tab order) at every
+  // altitude, which is not what "off the timeline" means.
+  const dayAll = useMemo(
+    () => all.filter((e) => dayKey(e.date) === selectedDay && !isHidden(e.name)),
+    [all, selectedDay, isHidden]
+  );
   const absorbed = useMemo(() => absorbedIds(dayAll, revealOf), [dayAll, revealOf]);
   const revealDay = useCallback((e: AwareEvent) => (absorbed.has(e.id) ? 0 : revealOf(e)), [absorbed, revealOf]);
   const packed = useMemo(() => dayScale(dayAll, revealDay), [dayAll, revealDay]);
@@ -50,7 +56,7 @@ export default function TimelineDashboard() {
   // visible event nearest the gesture focus that will still be visible afterwards.
   const applyAltitude = useCallback((rawNext: number, clientY: number) => {
     const cur = altitudeRef.current;
-    const next = clamp(rawNext, 1, 4);
+    const next = clamp(rawNext, 1, lanes);
     if (Math.abs(next - cur) < 0.001) return;
     const wrap = wrapRef.current;
     if (wrap && dayAllRef.current.length) {
@@ -58,7 +64,7 @@ export default function TimelineDashboard() {
       const pos = packedRef.current.pos;
       let best: AwareEvent | null = null, bestD = Infinity;
       for (const ev of dayAllRef.current) {
-        const targetReveal = clamp(next - getCeil(ev.name) + 1, 0, 1);
+        const targetReveal = isHidden(ev.name) ? 0 : clamp(next - levelOf(ev.name) + 1, 0, 1);
         if (targetReveal < 0.4) continue; // anchor to something that stays visible
         const y = pos.get(ev.id) ?? 0;
         const d = Math.abs(wrapTop + y - clientY);
@@ -68,7 +74,7 @@ export default function TimelineDashboard() {
     }
     altitudeRef.current = next;
     setAltitude(next);
-  }, [getCeil]);
+  }, [lanes, levelOf, isHidden]);
 
   // After re-layout, scroll so the anchored event stays where it was (transition-safe:
   // computed from the scale, not mid-animation DOM measurement).
@@ -153,7 +159,8 @@ export default function TimelineDashboard() {
   if (status) return <div className="statusline">{status}</div>;
 
   const dh = selectedDay ? new Date(selectedDay + "T00:00:00") : null;
-  const altL = Math.round(altitude);
+  const altL = clamp(Math.round(altitude), 1, lanes);
+  const altName = laneNames(lanes)[altL - 1]?.toLowerCase() ?? "";
 
   return (
     <>
@@ -171,46 +178,35 @@ export default function TimelineDashboard() {
         <Pill v={daily.spent ? `CHF ${daily.spent.toFixed(2)}` : "—"} k="spent" accent />
       </div>
 
-      <div className="cols">
-        <div className="col-main">
-          <div className="sheet">
-            <div className="handle" />
-            <div className="sheet-head">
-              <span className="stitle">Timeline</span>
-              <span className="zoom-hint">pinch or ⌘-scroll on the timeline to zoom · {shownCount} shown</span>
-            </div>
-            <div className="vtwrap" ref={wrapRef}>
-              <VTimeline events={dayAll} posOf={(e) => packed.pos.get(e.id) ?? 0} packedHeight={packed.h} spans={packed.spans} gaps={packed.gaps} overlaps={packed.overlaps} getL={getL} getCeil={getCeil} derivLevel={derivLevel} onSelect={setModalEvent} revealOf={revealDay} byId={byId} />
-            </div>
-          </div>
+      {/* Full width since the "Assign & lift" sidebar moved to its own board (/d/levels) —
+          the timeline is the thing you came to read, and the config was permanent furniture. */}
+      <div className="sheet">
+        <div className="handle" />
+        <div className="sheet-head">
+          <span className="stitle">Timeline</span>
+          <span className="zoom-hint">pinch or ⌘-scroll on the timeline to zoom · {shownCount} shown</span>
         </div>
-
-        <div className="col-side">
-          <div className="card-box">
-            <div className="assign-head">
-              <span className="ah-title">Assign &amp; lift</span>
-              <span className="ah-hint">level = home lane · “also up to” lifts an event into higher views. Persisted per user in Neon.</span>
-            </div>
-            <AssignPanel all={all} derivLevel={derivLevel} getL={getL} getCeil={getCeil} onHome={onHome} onLift={onLift} />
-          </div>
+        <div className="vtwrap" ref={wrapRef}>
+          <VTimeline events={dayAll} posOf={(e) => packed.pos.get(e.id) ?? 0} packedHeight={packed.h} spans={packed.spans} gaps={packed.gaps} overlaps={packed.overlaps} levelOf={levelOf} defaultOf={defaultOf} derivLevel={derivLevel} onSelect={setModalEvent} revealOf={revealDay} byId={byId} />
         </div>
       </div>
 
       <footer>
         <b>Aware</b> — from the <b>events</b> table in Neon (Postgres): {eventsCount} events for <b>{userId}</b> over the last {DAY_WINDOW} days.
         Raw signals come from iPhone Shortcuts via Vector → Kafka; inferences from the runtime, each with a <b>derivation lineage</b>.
-        Zoom anchors on what you're looking at — headline inferences up high, raw signals down low. <b>Car trip</b> is synthesized when no real trip exists.
-        Logical levels &amp; lifts are saved per user. Tap any event to trace how it was built.
+        Zoom anchors on what you're looking at — headline inferences up high, raw signals down low.
+        Which lane a type lives in defaults to its derivation depth; set the exceptions on <b>Levels</b>.
+        Tap any event to trace how it was built.
       </footer>
 
       {/* fixed, always-reachable zoom control — discoverability + keyboard/accessibility */}
       <div className="zoomctl" role="group" aria-label="timeline altitude">
         <button aria-label="zoom in — more detail" onClick={() => zoomStep(+1)}>+</button>
-        <span className="zlevel"><b>L{altL}</b>{ALT_NAMES[altL]}</span>
+        <span className="zlevel"><b>L{altL}</b>{altName}</span>
         <button aria-label="zoom out — fewer, higher-level" onClick={() => zoomStep(-1)}>−</button>
       </div>
 
-      <EventModal event={modalEvent} byId={byId} getL={getL} derivLevel={derivLevel} onClose={() => setModalEvent(null)} />
+      <EventModal event={modalEvent} byId={byId} levelOf={levelOf} derivLevel={derivLevel} onClose={() => setModalEvent(null)} />
     </>
   );
 }

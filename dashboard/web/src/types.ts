@@ -26,7 +26,10 @@ export interface AwareEvent {
   date: Date;
 }
 
+/** The whole level config: sparse overrides plus the types kept off the timeline. A type
+ *  the user never touched appears in neither — its lane comes from its derivation depth
+ *  (view.ts::defaultLevelOf). Mirrors the `level`/`hidden` columns of `dashboard_prefs`. */
 export interface Preferences {
-  levels: Record<string, number>;
-  lift: Record<string, number>;
+  level: Record<string, number>;
+  hidden: string[];
 }

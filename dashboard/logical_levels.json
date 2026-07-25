@@ -1,20 +1,7 @@
 {
-  "_comment": "Logical level per event type — how much YOU care (1=Headline … 4=Background). Distinct from derivation level (structural). 'lift' lets an event ALSO appear in higher (more important) lanes up to the given ceiling — e.g. an L2 event lifted to 1 shows in both L1 and L2. Exploration seed only; later this becomes user-set and stored in the DB. The aware dashboard reads this file at build time.",
-  "levels": {
-    "car_trip": 1,
-    "phone_is_charging": 2,
-    "got_into_the_car": 2,
-    "got_out_the_car": 2,
-    "car_door_opened": 3,
-    "car_door_closed": 3,
-    "car_lock_state_change": 4,
-    "device_connected_to_carplay": 4,
-    "device_disconnected_from_carplay": 4,
-    "device_connected_to_power": 4,
-    "device_disconnected_from_power": 4
+  "_comment": "First-run level config for a user who has never saved one (dashboard/app.py::_seed). NOT an overlay — once a dashboard_prefs row exists it is the whole truth, so an override the user clears stays cleared. `level` is SPARSE: it lists only the event types whose lane differs from the one their derivation depth implies; every other type gets its lane from depth at render time (web/src/view.ts::defaultLevelOf). `hidden` lists types kept off the timeline at every altitude. credit_card_payment is the canonical override — D1, zero inference, and still one of the most interesting things in a day.",
+  "level": {
+    "credit_card_payment": 1
   },
-  "lift": {
-    "got_into_the_car": 1,
-    "got_out_the_car": 1
-  }
+  "hidden": []
 }

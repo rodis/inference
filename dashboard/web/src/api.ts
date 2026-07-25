@@ -23,8 +23,17 @@ export function fetchEvents(userId: string, days = DAY_WINDOW): Promise<AwareEve
   );
 }
 
-export function fetchPreferences(userId: string): Promise<Preferences> {
-  return getJSON<Preferences>(`/api/preferences?user_id=${encodeURIComponent(userId)}`);
+/** Normalised on the way in: a rolling deploy can briefly pair a new bundle with the old
+ *  `{levels, lift}` API (or the reverse), and a missing key would otherwise crash the app
+ *  rather than degrade to "everything sits at its depth default". */
+export async function fetchPreferences(userId: string): Promise<Preferences> {
+  const raw = await getJSON<Partial<Preferences>>(
+    `/api/preferences?user_id=${encodeURIComponent(userId)}`,
+  );
+  return {
+    level: typeof raw?.level === "object" && raw.level ? raw.level : {},
+    hidden: Array.isArray(raw?.hidden) ? raw.hidden : [],
+  };
 }
 
 export async function savePreferences(userId: string, prefs: Preferences): Promise<void> {
