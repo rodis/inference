@@ -112,6 +112,33 @@ export const labelOf = (e: AwareEvent) =>
     ? e.message.place.label
     : e.event_class === "derived" ? VERBS[e.name] || titleize(e.name) : RAW_LABEL[e.name] || titleize(e.name);
 export const typeLabel = (n: string) => VERBS[n] || RAW_LABEL[n] || titleize(n);
+
+/** An event that knows *where* it happened but not *what* that place is: the `place` capability
+ *  is there (centroid + spread — geometry, always known) but nothing in the place registry
+ *  matched, so `labelOf` falls back to the bare verb ("Stay").
+ *
+ *  Drawn weaker on the timeline. The inference is not less *true* — you did stop here for 40
+ *  minutes — it is less *resolved*, and a board where "Konditorei von Rotz Baar" and "Stay" carry
+ *  identical weight overstates what the second one tells you. Keyed on the capability rather than
+ *  on `name === "stay"` so the next place-carrying event inherits the treatment for free; and on
+ *  the *label* rather than on dwell length or fix accuracy, because the fix is to add a `poi` row
+ *  and re-derive (ADR 0007 — a label is frozen at derive time). The weaker drawing therefore
+ *  reads as "not named yet", which is an invitation, not an error. */
+export const placeUnknown = (e: AwareEvent) => !!e.message.place && !e.message.place.label;
+
+/** How an unnamed place is drawn — two candidate treatments, both live, one active.
+ *
+ *  - `"fade"`: the same filled capsule at half opacity. Quietest, and it composes with the
+ *    altitude fade for free; the cost is that *faded* already means "deep" on this board, so
+ *    the two readings share one channel.
+ *  - `"outline"`: a dashed ring in the category colour over a 14% wash instead of a solid fill.
+ *    Says "unresolved" in a channel nothing else uses, and reads at full strength rather than
+ *    as something disappearing — a 40-minute stop is not a faint event. Costs more ink, and a
+ *    lane of unnamed stays looks busier than a lane of faded ones.
+ *
+ *  A switch, not an escape hatch: pick one once you've seen both on a real day and delete the
+ *  loser (and its CSS block). Two treatments for one fact is not a thing to keep. */
+export const UNNAMED_STYLE: "fade" | "outline" = "outline";
 export const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 
 // --- presentation config (dashboard-owned) --------------------------------------
@@ -213,7 +240,9 @@ const LINK_MIN = 8;         // shorter than this, a connector is a smudge — dr
 const PAD_BOTTOM = 56;
 
 export interface SpanBox { top: number; height: number; col: number }
-export interface Band { hostId: string; top: number; height: number; color: string }
+/** `weak`: the host is an unnamed place (see `placeUnknown`) — its stripe is drawn fainter, so
+ *  the containment claim carries the same confidence as the capsule casting it. */
+export interface Band { hostId: string; top: number; height: number; color: string; weak: boolean }
 export interface Link { top: number; height: number; col: number }
 export interface DayLayout {
   pos: Map<string, number>;          // event id → top y (capsule top, or a moment's disc centre line)
@@ -335,7 +364,7 @@ export function dayLayout(
   for (const s of visSpans) {
     if (!hosted.has(s.id)) continue;
     const box = spans.get(s.id)!;
-    bands.push({ hostId: s.id, top: box.top, height: box.height, color: colorOf(s.name) });
+    bands.push({ hostId: s.id, top: box.top, height: box.height, color: colorOf(s.name), weak: placeUnknown(s) });
   }
   bands.sort((a, b) => b.height - a.height);
 

@@ -266,7 +266,43 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 .dt-act { position: absolute; left: 0; width: var(--laneA); display: grid; grid-template-columns: var(--gutter) auto 1fr; align-items: start; z-index: 1; transition: top 0.6s cubic-bezier(.22,1,.36,1), opacity 0.55s ease; }
 .dt-act > .t { text-align: right; font-family: var(--mono); font-size: 11px; color: var(--muted); padding-top: 11px; padding-right: 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .dt-act .caps { position: relative; }
-.dt-act .capsule { width: var(--capd); border-radius: calc(var(--capd) / 2); margin-top: 1px; display: flex; align-items: flex-start; justify-content: center; padding-top: 10px; color: #fff; box-shadow: 0 3px 8px rgba(24,28,40,0.2); transition: height 0.6s cubic-bezier(.22,1,.36,1), margin-left 0.4s ease; }
+/* --cat / --capink come from the component per event (category colour + its readable ink), so a
+   variant below can restate the fill without fighting an inline background. */
+.dt-act .capsule { width: var(--capd); border-radius: calc(var(--capd) / 2); margin-top: 1px; display: flex; align-items: flex-start; justify-content: center; padding-top: 10px; background: var(--cat); color: var(--capink); box-shadow: 0 3px 8px rgba(24,28,40,0.2); transition: height 0.6s cubic-bezier(.22,1,.36,1), margin-left 0.4s ease; }
+
+/* An activity at a place we couldn't name (`placeUnknown`): same shape, less certainty.
+   Shared by both candidate treatments — the *words* carry the uncertainty too, not just the
+   swatch, so this holds either way. The capsule itself is styled by the variant blocks below
+   (UNNAMED_STYLE picks one); both style it *inside* the row, because the row's opacity is the
+   altitude reveal and the two meanings must not share one channel. */
+.dt-act.unnamed .ev-title { color: var(--muted); font-weight: 620; }
+.dt-act.unnamed .ev-meta { opacity: 0.8; }
+
+/* variant "fade" — the same filled capsule, half strength. The shadow goes with it: a
+   lifted-but-translucent capsule looks like a rendering bug rather than a softer claim.
+   0.5 is about the floor that keeps the white MapPin legible on the fill (see inkOn). */
+.dt-act.unnamed-fade .capsule { opacity: 0.5; box-shadow: none; }
+
+/* variant "outline" — unresolved as *unfilled*: a dashed ring in the category colour over a thin
+   wash of it, icon in the same hue. Dashed rather than solid because the dash is already this
+   board's grammar for "approximate" (the lane rules, the collapsed-gap pill, the moments rail),
+   and the two ends of a stay genuinely are approximate — a stay ends when the next fix breaks
+   its cluster. Full opacity on purpose: a 40-minute stop is not a faint event, it is a firm
+   event with a blank where its name goes. The wash keeps it from vanishing on a busy row, and
+   border-box (global) means the 2px ring costs no width, so the capsule stays on the same
+   sub-column grid as a filled one. padding-top absorbs the ring so the icon doesn't shift. */
+.dt-act.unnamed-outline .capsule {
+  background: color-mix(in srgb, var(--cat) 14%, transparent);
+  border: 2px dashed var(--cat);
+  color: var(--cat);
+  box-shadow: none;
+  padding-top: 8px;
+}
+.dt-band.unnamed { --band-a: 0.035; }
+.dt-band.unnamed::before { opacity: 0.22; }
+@media (prefers-color-scheme: dark) { .dt-band.unnamed { --band-a: 0.07; } }
+:root[data-theme="dark"] .dt-band.unnamed { --band-a: 0.07; }
+:root[data-theme="light"] .dt-band.unnamed { --band-a: 0.035; }
 
 /* a moment: deliberately half the weight — hollow, smaller, on the rail */
 .dt-mom { position: absolute; left: var(--laneA); right: 0; display: grid; grid-template-columns: calc(var(--dotx) - var(--laneA) - 13px) 26px 1fr; align-items: start; z-index: 1; transition: top 0.6s cubic-bezier(.22,1,.36,1), opacity 0.55s ease; }

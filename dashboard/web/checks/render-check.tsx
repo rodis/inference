@@ -24,7 +24,7 @@ import DayTimeline from "../src/components/DayTimeline";
 import EventModal from "../src/components/EventModal";
 import LevelsDashboard from "../src/dashboards/levels/LevelsDashboard";
 import TimelineDashboard from "../src/dashboards/timeline/TimelineDashboard";
-import { catOf, dayLayout, defaultLevelOf, hostOf, inkOn, isSpan, labelOf, laneCount, laneNames, prepare } from "../src/view";
+import { UNNAMED_STYLE, catOf, dayLayout, defaultLevelOf, hostOf, inkOn, isSpan, labelOf, laneCount, laneNames, placeUnknown, prepare } from "../src/view";
 import type { AwareEvent } from "../src/types";
 
 // Both dashboards use useLayoutEffect (scroll anchoring, focus-after-move) — correct on the
@@ -146,6 +146,12 @@ check("a stay is a span", isSpan(E("e14")));
 check("a named stay is labelled with its place", labelOf(E("e14")) === "Konditorei von Rotz Baar",
       labelOf(E("e14")));
 check("an unnamed stay falls back to its verb", labelOf(E("e15")) === "Stay", labelOf(E("e15")));
+// …and that fallback is what `placeUnknown` reports, so the drawing and the label can't disagree.
+// Keyed on the label being absent, NOT on the place capability being absent: a trip carries no
+// place at all and is not "unnamed", it simply isn't a place-shaped event.
+check("placeUnknown is about the label, not the capability",
+  placeUnknown(E("e15")) && !placeUnknown(E("e14")) && !placeUnknown(E("e8")),
+  `e15 ${placeUnknown(E("e15"))} / e14 ${placeUnknown(E("e14"))} / e8 ${placeUnknown(E("e8"))}`);
 // Depth is not importance: a stay stands on raw pings alone, so the ladder defaults it DOWN even
 // though a 96-minute named visit belongs in the headlines. That is the documented tension — the
 // fix is the levels board (stored prefs), not a special case here. Asserted so the surprise is
@@ -240,6 +246,19 @@ const dt = strip(renderToString(
   </AwareContext.Provider>));
 check("seven activity capsules drawn", (dt.match(/class="capsule"/g) || []).length === 7,
   `${(dt.match(/class="capsule"/g) || []).length}`);
+// A stay at a place nothing matched is drawn weaker than a named one (placeUnknown): the shared
+// `unnamed` class carries the muted title, `unnamed-<UNNAMED_STYLE>` the capsule treatment.
+// Counted rather than merely found, so a treatment that leaks onto the named stays — or onto
+// every capsule in the lane — fails here instead of being noticed on a screenshot.
+const weakRows = (dt.match(/class="dt-act unnamed /g) || []).length;
+check("exactly the unnamed stay is drawn weaker", weakRows === 1, `${weakRows} of 7 rows`);
+check("…and it names the active variant", dt.includes(`unnamed unnamed-${UNNAMED_STYLE}`));
+check("the other six activities draw at full strength",
+  (dt.match(/class="dt-act"/g) || []).length === 6, `${(dt.match(/class="dt-act"/g) || []).length}`);
+// The category colour reaches CSS as a custom property, which is what lets a variant restate the
+// fill as a border + icon colour. Hard-coding `background` inline again would silently break the
+// outline treatment while leaving the fade one working.
+check("a capsule exposes its category colour to CSS", dt.includes("--cat:"));
 check("moments drawn on the right rail", (dt.match(/class="dt-mom"/g) || []).length >= 5,
   `${(dt.match(/class="dt-mom"/g) || []).length}`);
 check("a containment band is drawn", dt.includes("dt-band"));
