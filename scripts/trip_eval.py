@@ -11,6 +11,11 @@ derived `got_into`/`got_out` pairs against two things a weight change must not t
                   the start or no got_out near the end. This is the *independent* check — CarPlay
                   is not in the phantom path (the charger and the ambiguous lock/door are), so it
                   catches a tuning that buys precision by dropping real trips. LOWER is better.
+  end_error       signed seconds between got_out and the drive's CarPlay disconnect, plus a count
+                  of trips closing >2 min EARLY. A trip can have a plausible duration and still be
+                  wrong: `junk_trips` only sees spans under 2 minutes, so it was blind to a 13-min
+                  drive recorded as 9m39s (2026-07-25). Whenever a window/weight change moves a
+                  boundary rather than adding or removing one, THIS is the metric that sees it.
 
 Pairing mirrors `session_window` exactly (latch the start, the next end closes it, an end with no
 open start is dropped, a pairing older than max_duration is dropped) so the numbers are the trips
@@ -89,6 +94,16 @@ def spans(derived) -> list[tuple[int, int]]:
     return out
 
 
+def end_error(ends: list[int], drives: list[tuple[int, int]]) -> list[int]:
+    """got_out minus the drive's CarPlay disconnect, per drive with a boundary in range."""
+    out = []
+    for _, end in drives:
+        near = [t for t in ends if abs(t - end) <= NEAR]
+        if near:
+            out.append(min(near, key=lambda t: abs(t - end)) - end)
+    return out
+
+
 def score(label: str, defs, signals, drives, verbose: bool) -> None:
     derived = replay(defs, signals)
     paired = spans(derived)
@@ -99,11 +114,17 @@ def score(label: str, defs, signals, drives, verbose: bool) -> None:
     missed = [d for d in drives
               if not any(abs(t - d[0]) <= NEAR for t in starts)
               or not any(abs(t - d[1]) <= NEAR for t in ends)]
+    errs = end_error(ends, drives)
+    mean_err = sum(errs) / len(errs) if errs else 0
+    early = [e for e in errs if e < -JUNK_UNDER]
     print(f"{label:<24} {START}={len(starts):3d} {END}={len(ends):3d} | "
           f"real_trips={len(real):3d} junk_trips={len(junk):3d} | "
-          f"drives_missed={len(missed):2d}/{len(drives)}")
+          f"drives_missed={len(missed):2d}/{len(drives)} | "
+          f"end_error mean {mean_err:+5.0f}s, >2min early {len(early):2d}/{len(errs)}")
     if not verbose:
         return
+    if early:
+        print(f"      early closes (s): {sorted(early)}")
     for a, b in missed:
         print(f"      MISSED drive {_fmt(a)}Z -> {_fmt(b)}Z ({(b - a) // 60}min)")
     for a, b in junk:

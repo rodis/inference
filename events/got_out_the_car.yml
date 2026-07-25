@@ -21,7 +21,16 @@ engine_config:
   gate_event: got_into_the_car
   gate_weight: 4
   max_open_seconds: 21600   # 6h — a trip open longer than this is stale (mirrors car_trip)
-  window_seconds: 600
+  # 5 min, was 10 (2026-07-25). At 600s a *departure* signal is still in the window when you
+  # ARRIVE from a 10-minute drive, so a stale entry signal could pair with mid-drive noise and
+  # close the trip early. Live case: entry door 09:29:47 + a mid-drive charger unplug 09:39:41
+  # (594s apart, both in window) + the open-trip gate = 14 -> fired, and the real arrival
+  # (CarPlay-disconnect 09:43:17) was then swallowed by the 600s cooldown. car_trip recorded
+  # 9m39s for a 13m03s drive. Across 26 days this hit 18 of 77 drives (>2 min early, worst
+  # ~10 min); at 300s that falls to 12 and mean end-error halves (-91s -> -63s), with junk
+  # trips and missed drives unchanged. Real arrivals bunch inside ~30s (door 09:43:05,
+  # CarPlay 09:43:17, lock 09:43:34), so 300s is still ample. Measured with scripts/trip_eval.py.
+  window_seconds: 300
   threshold: 10
   cooldown_seconds: 600     # 10 min — fires at most once per trip
   weights:
