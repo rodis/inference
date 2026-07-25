@@ -11,7 +11,8 @@
  *
  * The fixture mirrors shapes that actually occur in the feed, including the awkward ones: a
  * 6-hour charge spanning a 15-minute trip (concurrent activities), a payment inside both (the
- * innermost must win), and a 60-second charge whose capsule has to be floored to stay legible.
+ * innermost must win), a 60-second charge whose capsule has to be floored to stay legible, and a
+ * café stay whose end lands a minute *after* the drive home began (a handoff, not concurrency).
  *
  * Adding a case is one `check(...)` line. Throws at the end if anything failed, which is what
  * makes `npm run check` exit non-zero for CI.
@@ -80,6 +81,11 @@ const rows = [
                                    place: { label: "Konditorei von Rotz Baar" } }), // e14 96min, named
   ev("stay", "derived", "15:00", { parents: ["e13"], span: ["14:20", "15:00"],
                                    place: { label: null } }),                    // e15 40min, unknown place
+  // The real 25 July shape: the stay's end is the fix that broke its cluster, which arrives
+  // after the drive away has started — so the two overlap by a minute without being concurrent.
+  ev("stay", "derived", "13:20", { parents: ["e13"], span: ["11:43", "13:20"],
+                                   place: { label: "Café Frisch" } }),           // e16 97min
+  ev("car_trip", "derived", "13:33", { parents: ["e4", "e7"], span: ["13:19", "13:33"] }), // e17 14min
 ];
 const prepared = prepare(rows as unknown as AwareEvent[]);
 // Always go through prepare() — it decorates each row with `epoch` and `date`, which every
@@ -194,17 +200,31 @@ check("no divider lands inside an activity's capsule",
 check("a 96-minute stay is taller than a 19-minute trip", stayBox.height > tripBox.height,
   `stay ${stayBox.height} vs trip ${tripBox.height}`);
 
+// A second sub-column is earned by genuine concurrency only. A stay ends when the fix that broke
+// its cluster arrives — after the drive away has begun — so the café visit and the trip home
+// overlap by a minute. That's a handoff: one lane, capsules stacked, not two columns reading as
+// "two things at once". (The 6h charge over the 19min trip above is the real thing, and still fans.)
+const cafe = L.spans.get("e16")!, home = L.spans.get("e17")!;
+check("a stay and the drive away from it share one sub-column", cafe.col === home.col,
+  `stay ${cafe.col} / trip ${home.col}`);
+check("a boundary overlap doesn't widen the lane", L.cols === 2, `got ${L.cols}`);
+check("the drive's capsule is butted below the stay's, not painted over it",
+  home.top >= cafe.top + cafe.height, `trip top ${home.top} vs stay bottom ${cafe.top + cafe.height}`);
+
 console.log("\n— ink on a category fill —");
-// A stay is yellow, which white content disappears on; every icon-on-fill site asks inkOn.
-check("a yellow stay takes dark ink", inkOn(catOf("stay").c) !== "#fff", inkOn(catOf("stay").c));
+// Every category colour is currently dark enough for white ink, so inkOn is a guard rather than a
+// live branch — assert the branch itself, so the palette can't gain a light colour that erases
+// its own icon. (`stay` was that light colour, briefly.)
+check("a light fill takes dark ink", inkOn("#f2b705") === "#221a00", inkOn("#f2b705"));
 check("a dark trip keeps white ink", inkOn(catOf("car_trip").c) === "#fff", inkOn(catOf("car_trip").c));
+check("the stay's brown is dark enough for white", inkOn(catOf("stay").c) === "#fff", inkOn(catOf("stay").c));
 
 console.log("\n— day timeline renders —");
 const dt = strip(renderToString(
   <AwareContext.Provider value={ctx}>
     <DayTimeline events={all} layout={L} onSelect={() => {}} revealOf={() => 1} />
   </AwareContext.Provider>));
-check("five activity capsules drawn", (dt.match(/class="capsule"/g) || []).length === 5,
+check("seven activity capsules drawn", (dt.match(/class="capsule"/g) || []).length === 7,
   `${(dt.match(/class="capsule"/g) || []).length}`);
 check("moments drawn on the right rail", (dt.match(/class="dt-mom"/g) || []).length >= 5,
   `${(dt.match(/class="dt-mom"/g) || []).length}`);

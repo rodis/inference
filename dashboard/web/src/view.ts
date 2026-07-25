@@ -27,18 +27,21 @@ export const CAT: Record<string, { c: string; Icon: LucideIcon }> = {
   credit_card_payment: { c: "#14b8a6", Icon: CreditCard },
   car_driver_door_opened: { c: "#7a5bff", Icon: DoorOpen },
   arrived_home_by_car: { c: "#c2557f", Icon: House }, left_home_by_car: { c: "#d1719b", Icon: House },
-  // Yellow, and deliberately the only yellow: a stay is where the day actually happened, so it
-  // should be the warmest thing on a board of blues and teals. Light enough that white content
-  // would vanish on it — see `inkOn`, which every icon-on-fill site uses.
-  stay: { c: "#f2b705", Icon: MapPin },
+  // Warm brown, and deliberately the only warm colour: a stay is where the day actually
+  // happened, so it should stand out on a board of blues and teals. Lifted from the
+  // coffee-shop capsule in the parallel-lanes design sketch, which is what a stay turned out
+  // to be in practice — most of them are a café.
+  stay: { c: "#b4732f", Icon: MapPin },
 };
 
 /** Readable ink for something drawn ON a category fill (a capsule icon, a lineage tile).
  *
- *  Most category colours are dark enough for white. A light one — the yellow `stay` — isn't, and
- *  a white MapPin on yellow is close to invisible, so pick dark ink instead of hard-coding
- *  `#fff` at each site. sRGB relative luminance, thresholded where white falls below ~3:1
- *  (the non-text contrast floor). */
+ *  Every category colour is currently dark enough for white, so this returns `#fff` throughout
+ *  today — it exists because that is a property of the palette, not a rule. `stay` was briefly
+ *  a light yellow and its white MapPin was close to invisible; asking here instead of
+ *  hard-coding `#fff` at each site means the next light colour can't quietly erase its own icon.
+ *  sRGB relative luminance, thresholded where white falls below ~3:1 (the non-text contrast
+ *  floor). */
 export const inkOn = (hex: string): string => {
   const chan = (i: number) => {
     const c = parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16) / 255;
@@ -217,6 +220,8 @@ const GAP_H = 56;           // height of a collapsed-gap divider
 const CAP_MIN = 44;         // shortest a duration capsule can be (its icon must fit)
 const ROW_MIN = 34;         // smallest vertical room a moment row needs
 const MAX_COLS = 3;         // concurrent-span sub-columns before we stop fanning out
+const HANDOFF = 300;        // an overlap this short (seconds) is a boundary, not concurrency
+const CAP_GAP = 3;          // hairline between two capsules stacked in one sub-column
 const PAD_BOTTOM = 56;
 
 export interface SpanBox { top: number; height: number; col: number }
@@ -290,14 +295,25 @@ export function dayLayout(
     return b === a ? ya : ya + (yb - ya) * ((t - a) / (b - a));
   };
 
-  // 2. the activity lane: capsule boxes, then greedy sub-columns for concurrent spans
+  // 2. the activity lane: capsule boxes, then greedy sub-columns for concurrent spans.
+  //
+  // A second sub-column is expensive — it widens the whole lane — so it has to be earned by
+  // *genuine* concurrency. Two activities that merely touch at their boundary are a **handoff**,
+  // and the boundary is only approximately known: a stay ends when the next location fix breaks
+  // its cluster, which lands after the drive away has already started, so a café visit and the
+  // trip home overlap by a minute and used to fan out into two columns — reading as "two things
+  // at once" for what is one thing following another. Within HANDOFF the column is reused and
+  // the later capsule is butted below the earlier one (CAP_GAP), which costs it a few px of
+  // truth about its start time in exchange for the lane staying single-file.
   const colEnds: number[] = [];                       // last occupied epoch per sub-column
+  const colBottoms: number[] = [];                    // …and its px bottom, so a reuse can't overlap it
   for (const s of visSpans) {
-    const top = Y(startOf(s));
-    const height = Math.max(CAP_MIN, Y(endOf(s)) - top);
-    let col = colEnds.findIndex((end) => end <= startOf(s));
+    let col = colEnds.findIndex((end) => end <= startOf(s) + HANDOFF);
     if (col === -1) { col = Math.min(colEnds.length, MAX_COLS - 1); }
-    colEnds[col] = endOf(s);
+    const top = Math.max(Y(startOf(s)), colBottoms[col] != null ? colBottoms[col] + CAP_GAP : 0);
+    const height = Math.max(CAP_MIN, Y(endOf(s)) - top);
+    colEnds[col] = Math.max(colEnds[col] ?? -Infinity, endOf(s));
+    colBottoms[col] = top + height;
     spans.set(s.id, { top, height, col });
     pos.set(s.id, top);
   }

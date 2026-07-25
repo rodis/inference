@@ -20,7 +20,12 @@ with its own header:
 
 - **Activities** (left) — events with a duration, as capsules whose length is how long they
   lasted. Concurrent activities sit in **sub-columns**, because on a true time scale a 6-hour
-  charge genuinely does span a 15-minute trip and the real feed has exactly that.
+  charge genuinely does span a 15-minute trip and the real feed has exactly that. A brief
+  overlap does *not* earn one: a stay ends when the fix that broke its cluster arrives, which is
+  after the drive away has already started, so a café visit and the trip home overlap by about a
+  minute. That's a **handoff**, not concurrency — within `HANDOFF` the column is reused and the
+  later capsule is butted below the earlier one, which trades a few px of truth about its start
+  for a lane that stays single-file instead of widening to say "two things at once".
 - **Moments** (right) — points in time, as smaller hollow discs on their own dotted rail.
   Half the visual weight is deliberate: the left lane is the shape of the day, the right lane
   is texture within it.
@@ -232,9 +237,10 @@ redefinition rather than a second stylesheet. The toggle in the app bar cycles
 **system → light → dark** and persists to `localStorage` (`web/src/app/theme.ts`), applied
 before the first paint so an override doesn't flash.
 
-Event *category* colours (a trip's blue, a payment's teal, a stay's yellow) are deliberately
+Event *category* colours (a trip's blue, a payment's teal, a stay's coffee brown) are deliberately
 outside the token set: they identify an event type, sit under iconography on a filled shape, and
 read on either ground. The ink on that shape is **not** a fixed white — `inkOn` picks white or
-dark from the fill's relative luminance, because a stay is yellow and a white pin on yellow is
-invisible. Every icon-on-fill site (the day's capsules, the modal's header and lineage tiles, the
-levels board's tokens) asks for it, so a light category colour can't quietly erase its own icon.
+dark from the fill's relative luminance. Every icon-on-fill site (the day's capsules, the modal's
+header and lineage tiles, the levels board's tokens) asks for it, so a light category colour can't
+quietly erase its own icon. Nothing in the palette needs the dark branch today; `stay` did while
+it was a light yellow, which is how the function got written.
