@@ -32,7 +32,7 @@ const HIT_EPS = 0.1;   // below this an event is decorative — no pointer, no t
 export default function DayTimeline({ events, layout, onSelect, revealOf }: Props) {
   const { pos, spans, cols, links, bands, hosts, gaps, h } = layout;
 
-  if (!events.length) return <div className="dt-wrap"><div className="vt-empty">— nothing here —</div></div>;
+  if (!events.length) return <div className="dt-wrap"><div className="dt-empty">— nothing here —</div></div>;
 
   const activities = events.filter(isSpan).sort((a, b) => startOf(a) - startOf(b));
   const moments = events.filter((e) => !isSpan(e)).sort((a, b) => a.epoch - b.epoch);

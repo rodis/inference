@@ -167,21 +167,6 @@ export function humanDur(sec: number): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
-// shared per-day time scale: same timestamp -> same y in both timelines
-const ROW = 92, GAP_MAX = 150, PXMIN = 1.2;
-export interface Scale { y: Record<number, number>; h: number }
-export function buildScale(epochs: number[]): Scale {
-  const E = [...new Set(epochs)].sort((a, b) => a - b);
-  const y: Record<number, number> = {};
-  let cur = 0;
-  E.forEach((t, i) => {
-    if (i > 0) { const gapMin = (t - E[i - 1]) / 60; cur += Math.min(GAP_MAX, Math.max(ROW, gapMin * PXMIN)); }
-    y[t] = cur;
-  });
-  return { y, h: cur + ROW };
-}
-export { ROW };
-
 /** Two-lane day layout on one shared time scale.
  *
  *  **The scale is the whole trick.** Instead of packing events into a single column and
@@ -377,8 +362,6 @@ export function absorbedIds(events: AwareEvent[], reveal: (e: AwareEvent) => num
 export interface Prepared {
   all: AwareEvent[];
   byId: Record<string, AwareEvent>;
-  raw: AwareEvent[];
-  derived: AwareEvent[];
   days: string[];
   derivLevel: (e: AwareEvent | undefined) => number;
   /** Every event *type* in the window, deepest first — the rows of the levels board. */
@@ -398,9 +381,9 @@ export function prepare(events: AwareEvent[]): Prepared {
   const evs = events.map((e) => ({ ...e, epoch: +e.occurred_epoch, date: new Date(+e.occurred_epoch * 1000) }));
   evs.sort((a, b) => a.epoch - b.epoch);
   const byId: Record<string, AwareEvent> = Object.fromEntries(evs.map((e) => [e.id, e]));
-  const raw = evs.filter((e) => e.event_class === "raw");
-  const derived = evs.filter((e) => e.event_class === "derived");
   const all = evs;
+  // No pre-split by event_class: the two boards left both work over `all` and ask `isSpan` /
+  // `event_class` per event. (A `raw` / `derived` pair lived here for the Signals table.)
 
   const memo: Record<string, number> = {};
   const derivLevel = (e: AwareEvent | undefined): number => {
@@ -436,5 +419,5 @@ export function prepare(events: AwareEvent[]): Prepared {
   // Every day present in the loaded set. No cap needed here: the API already serves a
   // trailing window (DAY_WINDOW in api.ts), so this list is bounded at the source.
   const days = [...new Set(all.map((e) => dayKey(e.date)))].sort();
-  return { all, byId, raw, derived, days, derivLevel, types, depthOf, depthsOf, maxDepth };
+  return { all, byId, days, derivLevel, types, depthOf, depthsOf, maxDepth };
 }

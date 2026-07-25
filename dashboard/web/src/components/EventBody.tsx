@@ -20,8 +20,9 @@ interface Props {
 }
 
 /** The text half of an event card: name + chips on line 1, the substantive detail on line 2.
- *  Shared by the Compare lanes and both lanes of the day timeline, so the L / override / D chip
- *  grammar can't drift between them where it *is* shown (see `level`). */
+ *  Shared by both lanes of the day timeline, so an activity and a moment can't drift apart in
+ *  how they name themselves — the difference between them is weight, not grammar. The L /
+ *  override / D chips are supported but unused on the day (see `level`); the modal shows them. */
 export default function EventBody({ event: e, level, def = null, depth, hostLabel, orphan, compact }: Props) {
   const iv = isSpan(e) ? intervalOf(e) : null;
   const isDer = e.event_class === "derived";

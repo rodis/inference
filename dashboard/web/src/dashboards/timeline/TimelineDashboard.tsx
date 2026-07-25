@@ -186,7 +186,7 @@ export default function TimelineDashboard() {
           <span className="stitle">Timeline</span>
           <span className="zoom-hint">pinch or ⌘-scroll on the timeline to zoom · {shownCount} shown</span>
         </div>
-        <div className="vtwrap" ref={wrapRef}>
+        <div className="dtwrap" ref={wrapRef}>
           <DayTimeline events={dayAll} layout={packed} onSelect={setModalEvent} revealOf={revealDay} />
         </div>
       </div>

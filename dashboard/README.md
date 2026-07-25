@@ -7,11 +7,17 @@ adding one is a module plus an entry, mirroring events-as-data):
 | dashboard | what it's for |
 |-----------|---------------|
 | **Day timeline** | one day as **two parallel timelines** on a shared time scale (see below), with a pinch/⌘-scroll **semantic zoom** that reveals or folds detail around the point you're looking at |
-| **Compare** | any set of event types as parallel lanes on one shared per-day scale, so co-occurring signals line up |
-| **Signals** | the raw feed as a table |
 | **Levels** | the altitude ladder: where each event *type* lives, drag-and-drop (see below) |
 
 Tap any event for a recursive dig-down into its derivation lineage.
+
+> **Removed:** a **Compare** board (any event types as parallel lanes on one shared scale) and a
+> **Signals** board (the raw feed as a table). Both existed because the day timeline was one
+> undifferentiated column: lining signals up meant doing it by eye in a second view, and reading
+> the raw feed meant leaving the day. The two-lane day answers both directly — a moment renders
+> inside the activity that contains it, and the event modal walks the lineage down to the raw
+> contributors — so they had become second ways to see what the day already shows. The registry
+> seam is what made deleting them as cheap as adding them was.
 
 ## The day timeline: two lanes
 
