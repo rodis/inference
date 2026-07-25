@@ -58,11 +58,18 @@ def fetch_signals(dsn: str, user: str, days: int, input_names: set[str]) -> list
     Ordered by ingested_at (Kafka-arrival ≈ how the runtime saw them); message.timestamp is
     the event-time (occurred_at) the engines do window/cooldown math on. Only names the loaded
     definitions actually consume externally are fetched.
+
+    The FULL persisted `message` body is carried through, not a reconstructed {id,name,
+    timestamp} stub. The windowed engines only need names and times, but the geometry engines
+    (`geofence`, `stay_window`) read `lat`/`lon`/`acc` — with a stub they silently derive
+    nothing, which reads as "the engine doesn't fire" rather than "the replay starved it".
+    Canonical fields are overlaid from the columns so a body missing/disagreeing on them still
+    replays with the same identity and event-time production used.
     """
     with psycopg.connect(dsn) as conn:
         rows = conn.execute(
             """
-            SELECT name, EXTRACT(EPOCH FROM occurred_at)::bigint AS ts, id::text
+            SELECT name, EXTRACT(EPOCH FROM occurred_at)::bigint AS ts, id::text, message
             FROM events
             WHERE user_id = %s
               AND occurred_at > now() - make_interval(days => %s)
@@ -73,8 +80,8 @@ def fetch_signals(dsn: str, user: str, days: int, input_names: set[str]) -> list
         ).fetchall()
     return [
         {"name": n, "source_app": "backtest", "source_type": "http_server",
-         "message": {"id": i, "name": n, "user_id": user, "timestamp": ts}}
-        for (n, ts, i) in rows
+         "message": {**(msg or {}), "id": i, "name": n, "user_id": user, "timestamp": ts}}
+        for (n, ts, i, msg) in rows
     ]
 
 

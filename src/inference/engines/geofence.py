@@ -24,20 +24,12 @@ gate drops points too imprecise to trust; there is no dwell/hysteresis yet (a kn
 limitation — jitter right on the boundary can still flap).
 """
 
-import math
-
 from inference.engines.base import Decision, ScopedState, register_engine
+from inference.geo import DEFAULT_MAX_SPEED_KMH, haversine_m, is_implausible_jump
 
-_EARTH_RADIUS_M = 6_371_000.0
-
-
-def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Great-circle distance in metres between two lat/lon points."""
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dp = math.radians(lat2 - lat1)
-    dl = math.radians(lon2 - lon1)
-    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
-    return 2 * _EARTH_RADIUS_M * math.asin(math.sqrt(a))
+# Kept as module-level aliases: `scripts/` and tests import these, and the geometry now lives
+# in `inference.geo` because `stay_window` needs the same primitives (and must agree on them).
+_haversine_m = haversine_m
 
 
 @register_engine("geofence")
@@ -57,6 +49,10 @@ class GeofenceEngine:
         # points less accurate than this can't be trusted to flip containment; default
         # to the region radius (a fix vaguer than the region tells us nothing about it).
         self.max_accuracy_m = float(config.get("max_accuracy_m", self.radius_m))
+        # ...and reported accuracy is not enough on its own: a fix can claim `acc: 5` and be
+        # 700m wrong (2026-07-25), which would flip containment twice and emit two bogus
+        # edges. So also reject fixes that imply impossible travel from the previous one.
+        self.max_speed_kmh = float(config.get("max_speed_kmh", DEFAULT_MAX_SPEED_KMH))
 
     def input_event_names(self) -> set[str]:
         return {"location_ping"}
@@ -72,14 +68,34 @@ class GeofenceEngine:
         if acc is not None and float(acc) > self.max_accuracy_m:
             return None                                         # too imprecise — don't touch state
 
-        inside = _haversine_m(float(lat), float(lon), self.lat, self.lon) <= self.radius_m
+        lat, lon = float(lat), float(lon)
+        now = int(msg.get("timestamp", 0))
+
+        # Reject a fix that could not physically follow the last accepted one (see
+        # max_speed_kmh). Judged against the last ACCEPTED fix, so one bad point is skipped
+        # and containment continues from the last trustworthy position.
+        last = state.get("last_fix")
+        if last is not None and is_implausible_jump(
+            last["lat"], last["lon"], last["ts"], lat, lon, now, self.max_speed_kmh
+        ):
+            return None
+        if last is None or now >= last["ts"]:
+            state.set("last_fix", {"lat": lat, "lon": lon, "ts": now})
+
+        inside = haversine_m(lat, lon, self.lat, self.lon) <= self.radius_m
         was_inside = bool(state.get("inside", False))
-        state.set("inside", inside)
+        # Write only on CHANGE. Quix `State` is RocksDB + a changelog topic, so an
+        # unconditional write here costs a Kafka record per ping per region definition — and
+        # a continuous stream samples every ~11s. (Honest accounting: `last_fix` above is
+        # still written per accepted fix, so total writes are not reduced — the plausibility
+        # reference must be FRESH or it can't catch a 700m/1s snap. What this removes is the
+        # write that carried no information: `inside` is unchanged on the vast majority of pings.)
+        if inside != was_inside:
+            state.set("inside", inside)
 
         crossed_in = inside and not was_inside
         crossed_out = was_inside and not inside
         fires = crossed_in if self.direction == "enter" else crossed_out
         if not fires:
             return None
-        now = int(msg.get("timestamp", 0))
         return Decision(occurred_at=now, score=1.0, sources=(event,))

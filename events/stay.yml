@@ -1,0 +1,32 @@
+# A stay: you stopped somewhere long enough for it to count (Activity level). Derived from the
+# raw location stream by clustering consecutive fixes, NOT by crossing a declared fence —
+# see the engine docstring and ADR 0007 for why edges don't work on a real phone stream.
+#
+# This is deliberately place-AGNOSTIC: it emits one `stay` per cluster carrying its centroid
+# and duration, and says nothing about which place that is. Naming a stay ("the Konditorei")
+# is a labelling step over centroids, and a stay whose centroid matches nothing is still
+# useful — "42 min somewhere at 47.195,8.524" can be labelled later, which is a discovery
+# loop rather than a declare-everything-first one.
+#
+# Parameters are the ones measured against real Overland history (2026-07-25), not guesses:
+# radius 60m / dwell 300s produced exactly two stays for the day — 96.8min at a shop (47
+# fixes) and 27.7min at home (16 fixes, centroid 10m from the true location) — while the
+# 13-minute drive between them fragmented into ~35 singleton clusters that correctly produced
+# nothing. max_accuracy_m 100 drops the vague fixes (p90 was 36m, max 169m).
+name: stay
+enabled: true
+
+engine: stay_window
+engine_config:
+  radius_m: 60
+  min_dwell_seconds: 300     # 5 min — below this you were passing through
+  max_accuracy_m: 100        # a fix vaguer than this can't place you
+  max_gap_seconds: 3600      # a sampling outage longer than this ends the stay, so an iOS
+                             # suspension can't fuse two visits hours apart into one
+
+source_topic: raw_sensors
+sink_topic: high_level_events
+
+# Fires at departure with the last fix INSIDE as its event-time, so start/end bound the
+# actual dwell (the interval capability projects them from the lineage).
+capabilities: [interval]

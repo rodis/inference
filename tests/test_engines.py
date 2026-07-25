@@ -6,6 +6,7 @@ from inference.engines.geofence import GeofenceEngine
 from inference.engines.naive_bayes_window import NaiveBayesWindowEngine
 from inference.engines.session_gated_window import SessionGatedWindowEngine
 from inference.engines.session_window import SessionWindowEngine
+from inference.engines.stay_window import StayWindowEngine
 from inference.engines.weighted_window import WeightedWindowEngine
 
 
@@ -189,15 +190,17 @@ def _ping(event, t, **over):
 def test_geofence_enter_fires_once_on_boundary_cross(state, event):
     eng = _geofence("enter")
     assert eng.decide(_ping(event, T, **_OUT), state) is None          # outside -> no fire
-    d = eng.decide(_ping(event, T + 60), state)                        # crossed in -> fire
-    assert d is not None and d.occurred_at == T + 60
-    assert eng.decide(_ping(event, T + 120), state) is None            # still inside -> no re-fire
+    # _OUT is ~14km away, so allow a plausible travel time: the engine rejects fixes implying
+    # impossible speed, and 14km in 60s (840km/h) is a bad fix, not a boundary crossing.
+    d = eng.decide(_ping(event, T + 3600), state)                      # crossed in -> fire
+    assert d is not None and d.occurred_at == T + 3600
+    assert eng.decide(_ping(event, T + 3660), state) is None           # still inside -> no re-fire
 
 
 def test_geofence_leave_fires_on_exit(state, event):
     eng = _geofence("leave")
     assert eng.decide(_ping(event, T), state) is None                  # inside first -> leave doesn't fire
-    assert eng.decide(_ping(event, T + 60, **_OUT), state) is not None  # inside -> outside -> fire
+    assert eng.decide(_ping(event, T + 3600, **_OUT), state) is not None  # inside -> outside -> fire
 
 
 def test_geofence_ignores_other_users(state, event):
@@ -209,3 +212,107 @@ def test_geofence_accuracy_gate_ignores_imprecise_points(state, event):
     eng = _geofence("enter", radius_m=100)                             # max_accuracy defaults to radius
     assert eng.decide(_ping(event, T, acc=500), state) is None         # too vague -> ignored, state untouched
     assert eng.decide(_ping(event, T + 60, acc=10), state) is not None  # precise inside -> fires (state wasn't flipped)
+
+
+def test_geofence_rejects_a_confidently_wrong_fix(state, event):
+    """A fix can claim excellent accuracy and be a long way wrong (700m in one second,
+    observed 2026-07-25) — reported accuracy is not a safety net, so containment must also
+    reject physically impossible travel from the last accepted fix."""
+    eng = _geofence("leave")
+    assert eng.decide(_ping(event, T), state) is None                  # inside, accepted
+    # 1s later, 11km away, and it insists acc=5 -> implies ~40M km/h -> not a real move
+    assert eng.decide(_ping(event, T + 1, acc=5, **_OUT), state) is None
+    # a plausible move out later still fires: state was never corrupted by the bad fix
+    assert eng.decide(_ping(event, T + 3600, **_OUT), state) is not None
+
+
+def test_geofence_writes_state_only_on_change(state, event):
+    """A dense stream would otherwise write `inside` on every ping for every region, which is
+    pure changelog traffic (Quix State = RocksDB + changelog)."""
+    eng = _geofence("enter")
+    eng.decide(_ping(event, T, **_OUT), state)                         # outside: no change from default
+    writes = len(state._d)
+    for i in range(5):
+        eng.decide(_ping(event, T + 10 + i, **_OUT), state)            # still outside
+    inside_writes = [k for k in state._d if k.endswith("inside")]
+    assert inside_writes == []                                         # never flipped -> never written
+    assert eng.decide(_ping(event, T + 3600), state) is not None       # crossing in writes it once
+    assert [k for k in state._d if k.endswith("inside")] != []
+    assert writes <= len(state._d)
+
+
+# --- stay_window ----------------------------------------------------------------
+
+# ~9m apart (jitter while standing still) and ~1.2km apart (a different place).
+_HOME = dict(lat=47.20694, lon=8.57468)
+_NEAR = dict(lat=47.20702, lon=8.57472)
+_AWAY = dict(lat=47.19507, lon=8.52435)
+
+
+def _stay(**over):
+    cfg = {"radius_m": 60, "min_dwell_seconds": 300, "max_accuracy_m": 100}
+    cfg.update(over)
+    return StayWindowEngine(cfg)
+
+
+def _fix(event, t, **over):
+    kw = {"user_id": "rods", "acc": 10, **_HOME, **over}
+    return event("location_ping", t, **kw)
+
+
+def test_stay_fires_at_departure_dated_by_last_fix_inside(state, event):
+    eng = _stay()
+    eng.decide(_fix(event, T), state)
+    eng.decide(_fix(event, T + 300, **_NEAR), state)
+    eng.decide(_fix(event, T + 600), state)                            # 10 min of dwell so far
+    d = eng.decide(_fix(event, T + 900, **_AWAY), state)               # leaving closes it
+    assert d is not None
+    assert d.occurred_at == T + 600                                    # the LAST fix inside, not the breaker
+    assert d.score == 3                                                # three fixes supported it
+    assert len(d.sources) == 3 and all("message" in s for s in d.sources)
+
+
+def test_stay_ignores_passing_through(state, event):
+    eng = _stay()
+    eng.decide(_fix(event, T), state)
+    assert eng.decide(_fix(event, T + 60, **_AWAY), state) is None      # only 60s < 300s dwell
+
+
+def test_stay_starts_a_new_cluster_after_closing_one(state, event):
+    eng = _stay()
+    eng.decide(_fix(event, T), state)
+    eng.decide(_fix(event, T + 600), state)
+    assert eng.decide(_fix(event, T + 900, **_AWAY), state) is not None  # first stay closes
+    assert eng.decide(_fix(event, T + 1500, **_AWAY), state) is None     # second cluster accruing
+    d = eng.decide(_fix(event, T + 2000), state)                         # back home closes the second
+    assert d is not None and d.occurred_at == T + 1500
+
+
+def test_stay_gap_ends_the_stay_rather_than_fusing_two_visits(state, event):
+    """An iOS suspension (10h of silence, observed 2026-07-24) must not become one long stay
+    spanning both visits — even though both are at the same place."""
+    eng = _stay(max_gap_seconds=3600)
+    eng.decide(_fix(event, T), state)
+    eng.decide(_fix(event, T + 600), state)
+    d = eng.decide(_fix(event, T + 600 + 7200, **_HOME), state)          # same place, 2h later
+    assert d is not None and d.occurred_at == T + 600                    # closed at the pre-gap end
+
+
+def test_stay_skips_out_of_order_and_implausible_fixes(state, event):
+    eng = _stay()
+    eng.decide(_fix(event, T), state)
+    eng.decide(_fix(event, T + 600), state)
+    assert eng.decide(_fix(event, T + 300, **_NEAR), state) is None       # late arrival: ignored
+    assert eng.decide(_fix(event, T + 601, acc=5, **_AWAY), state) is None  # 1.2km in 1s: bad fix
+    d = eng.decide(_fix(event, T + 4000, **_AWAY), state)                 # a real move later closes it
+    assert d is not None and d.occurred_at == T + 600                     # end unaffected by both
+    assert len(d.sources) == 2
+
+
+def test_stay_ignores_vague_fixes(state, event):
+    eng = _stay()
+    eng.decide(_fix(event, T), state)
+    eng.decide(_fix(event, T + 600), state)
+    assert eng.decide(_fix(event, T + 900, acc=500, **_AWAY), state) is None  # too vague to close it
+    d = eng.decide(_fix(event, T + 1200, **_AWAY), state)
+    assert d is not None and d.occurred_at == T + 600
