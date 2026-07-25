@@ -123,22 +123,17 @@ export const typeLabel = (n: string) => VERBS[n] || RAW_LABEL[n] || titleize(n);
  *  on `name === "stay"` so the next place-carrying event inherits the treatment for free; and on
  *  the *label* rather than on dwell length or fix accuracy, because the fix is to add a `poi` row
  *  and re-derive (ADR 0007 — a label is frozen at derive time). The weaker drawing therefore
- *  reads as "not named yet", which is an invitation, not an error. */
+ *  reads as "not named yet", which is an invitation, not an error.
+ *
+ *  **Drawn as the same capsule at half strength**, plus a muted title. A second treatment was
+ *  built and compared on a real day — a dashed ring in the category colour, no transparency —
+ *  and dropped: it says "unresolved" in a channel nothing else uses, but it costs more ink per
+ *  capsule and a lane of them reads busier than a lane of faded ones. The known cost of what
+ *  won is that *faded* also means "below the current altitude" here, so one channel carries two
+ *  readings; they compose rather than collide only because the row's opacity (altitude) and the
+ *  capsule's (unnamed) are separate elements. If that ambiguity ever bites, the outline
+ *  treatment is in git history at the commit that added this. */
 export const placeUnknown = (e: AwareEvent) => !!e.message.place && !e.message.place.label;
-
-/** How an unnamed place is drawn — two candidate treatments, both live, one active.
- *
- *  - `"fade"`: the same filled capsule at half opacity. Quietest, and it composes with the
- *    altitude fade for free; the cost is that *faded* already means "deep" on this board, so
- *    the two readings share one channel.
- *  - `"outline"`: a dashed ring in the category colour over a 14% wash instead of a solid fill.
- *    Says "unresolved" in a channel nothing else uses, and reads at full strength rather than
- *    as something disappearing — a 40-minute stop is not a faint event. Costs more ink, and a
- *    lane of unnamed stays looks busier than a lane of faded ones.
- *
- *  A switch, not an escape hatch: pick one once you've seen both on a real day and delete the
- *  loser (and its CSS block). Two treatments for one fact is not a thing to keep. */
-export const UNNAMED_STYLE: "fade" | "outline" = "outline";
 export const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 
 // --- presentation config (dashboard-owned) --------------------------------------

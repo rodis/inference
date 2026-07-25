@@ -1,6 +1,6 @@
 import type { AwareEvent } from "../types";
 import type { DayLayout } from "../view";
-import { UNNAMED_STYLE, catOf, fmtTime, hostOf, humanDur, inkOn, intervalOf, isSpan, labelOf, placeUnknown, startOf } from "../view";
+import { catOf, fmtTime, hostOf, humanDur, inkOn, intervalOf, isSpan, labelOf, placeUnknown, startOf } from "../view";
 import EventBody from "./EventBody";
 
 interface Props {
@@ -82,26 +82,18 @@ export default function DayTimeline({ events, layout, onSelect, revealOf }: Prop
         const box = spans.get(e.id);
         const top = box?.top ?? pos.get(e.id) ?? 0;
         const cat = catOf(e.name), r = revealOf(e), iv = intervalOf(e);
-        // An activity at an unnamed place is drawn weaker (see `placeUnknown`), in two classes:
-        // `unnamed` carries what both candidate treatments share (a muted title), and
-        // `unnamed-<UNNAMED_STYLE>` picks the capsule treatment — so swapping the constant swaps
-        // the look with no change here. Never a lower `opacity` on this row: that number is the
-        // altitude reveal, and folding two meanings into it would make "faded" ambiguous between
-        // "deep" and "unnamed". Styling the capsule *inside* the row keeps them independent.
-        const unnamed = placeUnknown(e);
+        // An activity at an unnamed place is drawn weaker (see `placeUnknown`) via a class, never
+        // by lowering `opacity` on this row: that number is the altitude reveal, and folding two
+        // meanings into it would make "faded" ambiguous between "deep" and "unnamed". The class
+        // fades the capsule *inside* the row, so the two nest and multiply instead of overwriting
+        // each other — the row still reaches full strength for its own reason.
         return (
-          <div key={e.id} className={"dt-act" + (unnamed ? ` unnamed unnamed-${UNNAMED_STYLE}` : "")}
+          <div key={e.id} className={"dt-act" + (placeUnknown(e) ? " unnamed" : "")}
             style={{ top, opacity: r, pointerEvents: r < HIT_EPS ? "none" : undefined }}>
             <div className="t">{fmtTime(new Date((iv?.started_at ?? e.epoch) * 1000))}</div>
             <div className="caps" style={{ width: cols * CAP_W }}>
-              {/* The category colour reaches CSS as `--cat` (and its readable ink as `--capink`)
-                  rather than as a fixed `background`, so a variant can restate the fill —
-                  the outline treatment needs that same hue as a border and as the icon. */}
               <div className="capsule"
-                style={{
-                  ["--cat" as string]: cat.c, ["--capink" as string]: inkOn(cat.c),
-                  height: box?.height ?? 44, marginLeft: (box?.col ?? 0) * CAP_W,
-                }}>
+                style={{ background: cat.c, color: inkOn(cat.c), height: box?.height ?? 44, marginLeft: (box?.col ?? 0) * CAP_W }}>
                 <cat.Icon size={18} strokeWidth={2.25} />
               </div>
             </div>

@@ -24,7 +24,7 @@ import DayTimeline from "../src/components/DayTimeline";
 import EventModal from "../src/components/EventModal";
 import LevelsDashboard from "../src/dashboards/levels/LevelsDashboard";
 import TimelineDashboard from "../src/dashboards/timeline/TimelineDashboard";
-import { UNNAMED_STYLE, catOf, dayLayout, defaultLevelOf, hostOf, inkOn, isEverydayPlace, isSpan, labelOf, laneCount, laneNames, placeUnknown, prepare } from "../src/view";
+import { catOf, dayLayout, defaultLevelOf, hostOf, inkOn, isEverydayPlace, isSpan, labelOf, laneCount, laneNames, placeUnknown, prepare } from "../src/view";
 import type { AwareEvent } from "../src/types";
 
 // Both dashboards use useLayoutEffect (scroll anchoring, focus-after-move) — correct on the
@@ -255,19 +255,15 @@ const dt = strip(renderToString(
 // site, not a rule duplicated in every consumer.
 check("eight activity capsules drawn", (dt.match(/class="capsule"/g) || []).length === 8,
   `${(dt.match(/class="capsule"/g) || []).length}`);
-// A stay at a place nothing matched is drawn weaker than a named one (placeUnknown): the shared
-// `unnamed` class carries the muted title, `unnamed-<UNNAMED_STYLE>` the capsule treatment.
-// Counted rather than merely found, so a treatment that leaks onto the named stays — or onto
-// every capsule in the lane — fails here instead of being noticed on a screenshot.
-const weakRows = (dt.match(/class="dt-act unnamed /g) || []).length;
+// A stay at a place nothing matched is drawn weaker than a named one (placeUnknown), via the
+// `unnamed` class. Counted rather than merely found, so a treatment that leaks onto the named
+// stays — or onto every capsule in the lane — fails here instead of being noticed on a
+// screenshot. The class is also what keeps the weakening off `.dt-act`'s own opacity, which
+// belongs to the altitude reveal.
+const weakRows = (dt.match(/class="dt-act unnamed"/g) || []).length;
 check("exactly the unnamed stay is drawn weaker", weakRows === 1, `${weakRows} of 8 rows`);
-check("…and it names the active variant", dt.includes(`unnamed unnamed-${UNNAMED_STYLE}`));
 check("the other seven activities draw at full strength",
   (dt.match(/class="dt-act"/g) || []).length === 7, `${(dt.match(/class="dt-act"/g) || []).length}`);
-// The category colour reaches CSS as a custom property, which is what lets a variant restate the
-// fill as a border + icon colour. Hard-coding `background` inline again would silently break the
-// outline treatment while leaving the fade one working.
-check("a capsule exposes its category colour to CSS", dt.includes("--cat:"));
 check("moments drawn on the right rail", (dt.match(/class="dt-mom"/g) || []).length >= 5,
   `${(dt.match(/class="dt-mom"/g) || []).length}`);
 check("a containment band is drawn", dt.includes("dt-band"));
