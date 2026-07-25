@@ -51,6 +51,15 @@ labels have room, capped so a lull doesn't run off-screen, and a genuinely quiet
 collapses to a labelled divider. Two consequences: a span crowded with moments grows taller
 than its duration alone implies, and a busy hour therefore gets more room than a dead one.
 
+**"Quiet" means nothing was happening, not that nothing was reported** (`busy` in `dayLayout`).
+A stretch only collapses if no visible span is in progress across it. Without that test the
+collapse fires on exactly the events it shouldn't: standing still produces no location fixes at
+all (ADR 0007 — the reason `stay` clusters rather than fences), so a 96-minute café visit has no
+interior instants and used to collapse *its own duration* into a divider reading "1h 36m quiet",
+drawn opaque on top of its own capsule. It also crushed the capsule to near the CAP_MIN floor,
+which hid a real overlap — the drive home starts about a minute *before* the stay's cluster
+breaks, and at 90px of stay there was nowhere for that to show.
+
 **A note on the feed's noise.** `phone_is_charging` fires ~20×/day with durations like 5s, 9s,
 18s, 32s — a flaky car USB toggling power, not twenty charging sessions — and `car_trip` has
 phantom entries of the same order. They all draw as (floored) capsules in the activity lane,
@@ -223,6 +232,9 @@ redefinition rather than a second stylesheet. The toggle in the app bar cycles
 **system → light → dark** and persists to `localStorage` (`web/src/app/theme.ts`), applied
 before the first paint so an override doesn't flash.
 
-Event *category* colours (a trip's blue, a payment's teal) are deliberately outside the
-token set: they identify an event type, always sit under white iconography on a filled
-shape, and read on either ground.
+Event *category* colours (a trip's blue, a payment's teal, a stay's yellow) are deliberately
+outside the token set: they identify an event type, sit under iconography on a filled shape, and
+read on either ground. The ink on that shape is **not** a fixed white — `inkOn` picks white or
+dark from the fill's relative luminance, because a stay is yellow and a white pin on yellow is
+invisible. Every icon-on-fill site (the day's capsules, the modal's header and lineage tiles, the
+levels board's tokens) asks for it, so a light category colour can't quietly erase its own icon.

@@ -1,6 +1,6 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useAware } from "../../app/useAware";
-import { catOf, LANE_BLURB, laneNames, typeLabel } from "../../view";
+import { catOf, inkOn, LANE_BLURB, laneNames, typeLabel } from "../../view";
 import LevelChip, { OverrideFlag } from "../../components/LevelChip";
 
 /** A drop target: a lane number, or "off" for the tray. */
@@ -141,7 +141,7 @@ export default function LevelsDashboard() {
         onPointerCancel={endDrag}
         onKeyDown={(e) => onKeyDown(e, name)}
       >
-        <span className="ti" style={{ background: cat.c }}><cat.Icon size={14} strokeWidth={2.25} /></span>
+        <span className="ti" style={{ background: cat.c, color: inkOn(cat.c) }}><cat.Icon size={14} strokeWidth={2.25} /></span>
         <span className="tn">{typeLabel(name)}</span>
         <span className="dbadge" title={seen
           ? (ds.length > 1
@@ -211,7 +211,7 @@ export default function LevelsDashboard() {
                         const cat = catOf(n);
                         return (
                           <span className={"ghost" + (dragName === n ? " lit" : "")} key={"g-" + n}>
-                            <span className="ti" style={{ background: cat.c }}><cat.Icon size={14} strokeWidth={2.25} /></span>
+                            <span className="ti" style={{ background: cat.c, color: inkOn(cat.c) }}><cat.Icon size={14} strokeWidth={2.25} /></span>
                             <span className="gt">{typeLabel(n)} · default</span>
                           </span>
                         );
@@ -276,7 +276,7 @@ export default function LevelsDashboard() {
       {dragName && dragAt && (
         <div className="draglayer">
           <div className="tok floating" style={{ left: dragAt.x, top: dragAt.y, width: dragAt.w }}>
-            <span className="ti" style={{ background: catOf(dragName).c }}>
+            <span className="ti" style={{ background: catOf(dragName).c, color: inkOn(catOf(dragName).c) }}>
               {(() => { const C = catOf(dragName).Icon; return <C size={14} strokeWidth={2.25} />; })()}
             </span>
             <span className="tn">{typeLabel(dragName)}</span>

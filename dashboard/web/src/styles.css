@@ -260,7 +260,7 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
   --gutter: 54px;                 /* right-aligned clock column, incl. 10px before the capsule */
   --capw: 46px;                   /* one capsule sub-column — must match CAP_W in DayTimeline */
   --capcols: 1;                   /* set per day by the layout: concurrent activities */
-  --actlabel: 176px;              /* room for an activity's name + chips */
+  --actlabel: 220px;              /* room for an activity's name + chips */
   --laneA: calc(var(--gutter) + var(--capcols) * var(--capw) + var(--actlabel));
   --dotx: calc(var(--laneA) + 56px);   /* centre of the moments rail */
   --band-a: 0.075;

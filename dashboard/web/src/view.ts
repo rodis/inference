@@ -27,9 +27,25 @@ export const CAT: Record<string, { c: string; Icon: LucideIcon }> = {
   credit_card_payment: { c: "#14b8a6", Icon: CreditCard },
   car_driver_door_opened: { c: "#7a5bff", Icon: DoorOpen },
   arrived_home_by_car: { c: "#c2557f", Icon: House }, left_home_by_car: { c: "#d1719b", Icon: House },
-  // Deliberately in the same pin/teal family as the entered_/left_ geofence dots below: a stay
-  // is a *place* fact, and reading as one makes the timeline legible at a glance.
-  stay: { c: "#177f73", Icon: MapPin },
+  // Yellow, and deliberately the only yellow: a stay is where the day actually happened, so it
+  // should be the warmest thing on a board of blues and teals. Light enough that white content
+  // would vanish on it — see `inkOn`, which every icon-on-fill site uses.
+  stay: { c: "#f2b705", Icon: MapPin },
+};
+
+/** Readable ink for something drawn ON a category fill (a capsule icon, a lineage tile).
+ *
+ *  Most category colours are dark enough for white. A light one — the yellow `stay` — isn't, and
+ *  a white MapPin on yellow is close to invisible, so pick dark ink instead of hard-coding
+ *  `#fff` at each site. sRGB relative luminance, thresholded where white falls below ~3:1
+ *  (the non-text contrast floor). */
+export const inkOn = (hex: string): string => {
+  const chan = (i: number) => {
+    const c = parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  const lum = 0.2126 * chan(0) + 0.7152 * chan(1) + 0.0722 * chan(2);
+  return lum > 0.3 ? "#221a00" : "#fff";
 };
 
 // --- the level ladder -----------------------------------------------------------
@@ -174,11 +190,11 @@ export { ROW };
  *
  *  The map is deliberately "broken": a step between two consecutive instants is proportional
  *  to the elapsed minutes (PPM), but floored at MIN_STEP so labels have room, capped at
- *  MAX_STEP so a lull doesn't run off-screen, and a genuinely quiet stretch (over QUIET_MIN)
- *  collapses to a short labelled divider. Two consequences worth knowing: a span crowded with
- *  moments grows taller than its duration alone implies (each interior instant costs at least
- *  MIN_STEP), and a busy hour therefore gets more room than a dead one — which reads correctly
- *  even though it isn't linear.
+ *  MAX_STEP so a lull doesn't run off-screen, and a genuinely quiet stretch (over QUIET_MIN,
+ *  and with no activity in progress across it — see `busy`) collapses to a short labelled
+ *  divider. Two consequences worth knowing: a span crowded with moments grows taller than its
+ *  duration alone implies (each interior instant costs at least MIN_STEP), and a busy hour
+ *  therefore gets more room than a dead one — which reads correctly even though it isn't linear.
  *
  *  **Lanes.** `laneOf` puts intervals left and points right. Concurrent spans are packed into
  *  sub-columns (greedy, by start) rather than interlocked with a notch: on a true time scale a
@@ -236,13 +252,25 @@ export function dayLayout(
   }
 
   // 1. the shared scale: every instant any visible event begins or ends at
+  const visSpans = vis.filter(isSpan).sort((a, b) => startOf(a) - startOf(b) || endOf(b) - endOf(a));
   const instants = [...new Set(vis.flatMap((e) => [startOf(e), endOf(e)]))].sort((a, b) => a - b);
+
+  /** Was anything going on across this stretch? A span whose interval overlaps it — and since
+   *  every span boundary is itself an instant, an overlap here means the span covers the whole
+   *  stretch. This is what keeps a *long, quiet activity* off the collapse path: an hour and a
+   *  half at a café produces no location fixes at all (ADR 0007 — the reason `stay` clusters
+   *  rather than fences), so the stay has zero interior instants and would otherwise collapse
+   *  its own duration to a divider labelled "1h 36m quiet", drawn on top of its own capsule.
+   *  Collapsing it also crushed the capsule to CAP_MIN-ish, hiding the fact that the drive home
+   *  starts *before* the stay ends. */
+  const busy = (a: number, b: number) => visSpans.some((s) => startOf(s) < b && endOf(s) > a);
+
   const Yat = new Map<number, number>();
   let cur = 0;
   instants.forEach((t, i) => {
     if (i) {
-      const dm = (t - instants[i - 1]) / 60;
-      if (dm > QUIET_MIN) { gaps.push({ y: cur + GAP_H / 2, seconds: t - instants[i - 1] }); cur += GAP_H; }
+      const prev = instants[i - 1], dm = (t - prev) / 60;
+      if (dm > QUIET_MIN && !busy(prev, t)) { gaps.push({ y: cur + GAP_H / 2, seconds: t - prev }); cur += GAP_H; }
       else cur += Math.max(MIN_STEP, Math.min(MAX_STEP, dm * PPM));
     }
     Yat.set(t, cur);
@@ -263,7 +291,6 @@ export function dayLayout(
   };
 
   // 2. the activity lane: capsule boxes, then greedy sub-columns for concurrent spans
-  const visSpans = vis.filter(isSpan).sort((a, b) => startOf(a) - startOf(b) || endOf(b) - endOf(a));
   const colEnds: number[] = [];                       // last occupied epoch per sub-column
   for (const s of visSpans) {
     const top = Y(startOf(s));

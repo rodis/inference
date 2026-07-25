@@ -23,7 +23,7 @@ import DayTimeline from "../src/components/DayTimeline";
 import EventModal from "../src/components/EventModal";
 import LevelsDashboard from "../src/dashboards/levels/LevelsDashboard";
 import TimelineDashboard from "../src/dashboards/timeline/TimelineDashboard";
-import { catOf, dayLayout, defaultLevelOf, hostOf, isSpan, labelOf, laneCount, laneNames, prepare } from "../src/view";
+import { catOf, dayLayout, defaultLevelOf, hostOf, inkOn, isSpan, labelOf, laneCount, laneNames, prepare } from "../src/view";
 import type { AwareEvent } from "../src/types";
 
 // Both dashboards use useLayoutEffect (scroll anchoring, focus-after-move) — correct on the
@@ -173,13 +173,31 @@ check("the payment's band is its innermost host", L.hosts.get("e5") === "e8", L.
 // 09:00 ping). A stay overlapping a charge — being home while the phone charges — is a real
 // concurrency shape, so it belongs here rather than in a fixture of its own.
 check("a band per hosting activity", L.bands.length === 3, `${L.bands.length} bands`);
-check("bands are ordered longest host first", L.bands[0].hostId === "e10" && L.bands[1].hostId === "e8",
-  L.bands.map((b) => b.hostId).join(","));
+// 6h charge, then the 96-minute stay, then the 19-minute trip — i.e. the same order as their
+// durations, which only holds because a span's own quiet stretch no longer collapses (see below).
+check("bands are ordered longest host first",
+  L.bands.map((b) => b.hostId).join(",") === "e10,e14,e8", L.bands.map((b) => b.hostId).join(","));
 check("a brief span still gets a capsule box", L.spans.has("e11"));
 check("a brief span's capsule is floored for legibility", L.spans.get("e11")!.height === 44,
   `${L.spans.get("e11")!.height}px`);
-check("a quiet stretch collapsed to a divider", L.gaps.length > 0, `${L.gaps.length} gaps`);
 check("time order is preserved down the page", L.pos.get("e5")! < L.pos.get("e12")!);
+
+// A quiet stretch collapses only where *nothing was happening*. A stay produces no location
+// fixes while you sit still (ADR 0007), so a 96-minute café visit has zero interior instants and
+// used to collapse its own duration into a divider labelled "1h 36m quiet" — drawn on top of its
+// own capsule, and crushing the capsule so an overlapping trip couldn't be seen to overlap.
+const stayBox = L.spans.get("e14")!, tripBox = L.spans.get("e8")!;
+check("a quiet stretch with nothing in it still collapses to a divider", L.gaps.length > 0, `${L.gaps.length} gaps`);
+check("no divider lands inside an activity's capsule",
+  !L.gaps.some((g) => [...L.spans.values()].some((b) => g.y > b.top && g.y < b.top + b.height)),
+  L.gaps.map((g) => g.y).join(","));
+check("a 96-minute stay is taller than a 19-minute trip", stayBox.height > tripBox.height,
+  `stay ${stayBox.height} vs trip ${tripBox.height}`);
+
+console.log("\n— ink on a category fill —");
+// A stay is yellow, which white content disappears on; every icon-on-fill site asks inkOn.
+check("a yellow stay takes dark ink", inkOn(catOf("stay").c) !== "#fff", inkOn(catOf("stay").c));
+check("a dark trip keeps white ink", inkOn(catOf("car_trip").c) === "#fff", inkOn(catOf("car_trip").c));
 
 console.log("\n— day timeline renders —");
 const dt = strip(renderToString(

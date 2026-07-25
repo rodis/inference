@@ -1,6 +1,6 @@
 import type { AwareEvent } from "../types";
 import type { DayLayout } from "../view";
-import { catOf, fmtTime, hostOf, humanDur, intervalOf, isSpan, labelOf, startOf } from "../view";
+import { catOf, fmtTime, hostOf, humanDur, inkOn, intervalOf, isSpan, labelOf, startOf } from "../view";
 import EventBody from "./EventBody";
 
 interface Props {
@@ -81,7 +81,7 @@ export default function DayTimeline({ events, layout, onSelect, revealOf }: Prop
             <div className="t">{fmtTime(new Date((iv?.started_at ?? e.epoch) * 1000))}</div>
             <div className="caps" style={{ width: cols * CAP_W }}>
               <div className="capsule"
-                style={{ background: cat.c, height: box?.height ?? 44, marginLeft: (box?.col ?? 0) * CAP_W }}>
+                style={{ background: cat.c, color: inkOn(cat.c), height: box?.height ?? 44, marginLeft: (box?.col ?? 0) * CAP_W }}>
                 <cat.Icon size={18} strokeWidth={2.25} />
               </div>
             </div>

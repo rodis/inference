@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { AwareEvent } from "../types";
-import { catOf, fmtTimeSec, humanDur, labelOf } from "../view";
+import { catOf, fmtTimeSec, humanDur, inkOn, labelOf } from "../view";
 import LevelChip, { OverrideFlag } from "./LevelChip";
 
 interface Props {
@@ -24,7 +24,7 @@ function DNode({ e, byId, levelOf, derivLevel, onOpen }: { e: AwareEvent; byId: 
   return (
     <div className="dnode">
       <button className="drow" onClick={() => onOpen(e)} title="Open this event">
-        <span className="dtile" style={{ background: cat.c }}><cat.Icon size={15} strokeWidth={2.25} /></span>
+        <span className="dtile" style={{ background: cat.c, color: inkOn(cat.c) }}><cat.Icon size={15} strokeWidth={2.25} /></span>
         <span className="dn">{labelOf(e)}</span>
         <span className="dg" />
         <span className="dt">{fmtTimeSec(e.date)}</span>
@@ -77,7 +77,7 @@ export default function EventModal({ event, byId, levelOf, derivLevel, defaultOf
       <div className="modal">
         <div className="modal-head">
           <button className="x" aria-label="Close" onClick={onClose}>✕</button>
-          <div className="htile" style={{ background: cat.c }}><cat.Icon size={22} strokeWidth={2.25} /></div>
+          <div className="htile" style={{ background: cat.c, color: inkOn(cat.c) }}><cat.Icon size={22} strokeWidth={2.25} /></div>
           <div>
             <div className="mlabel">
               {e.event_class === "derived"
