@@ -12,17 +12,28 @@ generators:
 #   10:03:25  <old pod deleted>
 #   10:03:35  connected (Success); subscribed to <gcid>/+
 # ~56s of dropped stream per deploy, on a signal that now contributes to both got_into and
-# got_out (~94% per-trip coverage). Recreate makes the handover strictly sequential: the old
-# subscriber is fully gone before the new one connects. A few seconds with no subscriber is the
-# right trade — this pod holds a singleton external connection, so it must never overlap itself.
-# Patched here rather than through chart values so it doesn't depend on what the Stakater chart
-# happens to expose. (The runtime is NOT patched: Kafka consumer-group rebalance handles overlap.)
+# got_out (~94% per-trip coverage). maxSurge 0 makes the handover strictly sequential: the old
+# subscriber is scaled away BEFORE the new one starts, so the two never hold the connection at
+# once. A few seconds with no subscriber is the right trade — this pod owns a singleton external
+# connection, so it must never overlap itself. (The runtime is NOT patched: Kafka consumer-group
+# rebalance handles overlapping consumers correctly.)
+#
+# Why maxSurge 0 and not `type: Recreate`: Recreate was tried first and REJECTED by the API
+# server — the chart renders spec.strategy.rollingUpdate, and under this app's
+# ServerSideApply=true that field survives next to the new type, giving
+#   Deployment.apps "bmw-cardata" is invalid: spec.strategy.rollingUpdate: Forbidden:
+#   may not be specified when strategy `type` is 'Recreate'
+# which fails the whole app's sync (every resource, not just this one). Tuning the existing
+# rollingUpdate fields keeps the type unchanged, so there is no forbidden-field conflict and
+# nothing depends on SSA field-ownership subtleties.
 patches:
   - target:
       kind: Deployment
       name: bmw-cardata
     patch: |-
       - op: add
-        path: /spec/strategy
-        value:
-          type: Recreate
+        path: /spec/strategy/rollingUpdate/maxSurge
+        value: 0
+      - op: add
+        path: /spec/strategy/rollingUpdate/maxUnavailable
+        value: 1

@@ -58,7 +58,7 @@ Two hard facts shaped the decision:
    rolling update. `maxSurge` starts the new subscriber while the old one still holds the only
    permitted connection, so they evict each other — surfacing as `mqtt connect failed: Not
    authorized` for ~56s until the old pod dies. The `bmw-cardata` Deployment is therefore pinned
-   to `strategy: Recreate` via a kustomize patch; see `deploy/inference/kustomize/base/bmw-cardata/`.)*
+   to a no-overlap rollout (`maxSurge: 0`) via a kustomize patch; see `deploy/inference/kustomize/base/bmw-cardata/`.)*
    The MQTT username is the account-level **GCID**, not the per-client
    `client_id`; the topic is `{GCID}/{VIN}`. Two direct subscribers on the same account evict each
    other. So our subscriber and HA's direct subscription are **mutually exclusive** — creating our
