@@ -18,22 +18,28 @@ generators:
 # connection, so it must never overlap itself. (The runtime is NOT patched: Kafka consumer-group
 # rebalance handles overlapping consumers correctly.)
 #
-# Why maxSurge 0 and not `type: Recreate`: Recreate was tried first and REJECTED by the API
-# server — the chart renders spec.strategy.rollingUpdate, and under this app's
-# ServerSideApply=true that field survives next to the new type, giving
-#   Deployment.apps "bmw-cardata" is invalid: spec.strategy.rollingUpdate: Forbidden:
-#   may not be specified when strategy `type` is 'Recreate'
-# which fails the whole app's sync (every resource, not just this one). Tuning the existing
-# rollingUpdate fields keeps the type unchanged, so there is no forbidden-field conflict and
-# nothing depends on SSA field-ownership subtleties.
+# The whole `strategy` object is set here, deliberately — two earlier attempts failed because
+# the Stakater chart renders NO strategy key at all (the RollingUpdate 25%/25% visible on the
+# live Deployment are API-server DEFAULTS, not chart values):
+#   1. `op: add /spec/strategy value: {type: Recreate}` — built fine, but under this app's
+#      ServerSideApply=true the server-defaulted rollingUpdate survived next to the new type:
+#      "Deployment.apps bmw-cardata is invalid: spec.strategy.rollingUpdate: Forbidden: may not
+#      be specified when strategy type is 'Recreate'" — which failed the sync for EVERY resource
+#      in the app, not just this one.
+#   2. `op: add /spec/strategy/rollingUpdate/maxSurge` — failed at kustomize BUILD time
+#      ("missing path ... missing value"), because that parent path isn't in the manifest.
+# Writing the complete object is immune to both: it creates the key when absent, replaces it
+# when present, keeps type=RollingUpdate so no field is forbidden, and states both numbers
+# explicitly so nothing depends on server defaults or SSA field ownership.
 patches:
   - target:
       kind: Deployment
       name: bmw-cardata
     patch: |-
       - op: add
-        path: /spec/strategy/rollingUpdate/maxSurge
-        value: 0
-      - op: add
-        path: /spec/strategy/rollingUpdate/maxUnavailable
-        value: 1
+        path: /spec/strategy
+        value:
+          type: RollingUpdate
+          rollingUpdate:
+            maxSurge: 0
+            maxUnavailable: 1
