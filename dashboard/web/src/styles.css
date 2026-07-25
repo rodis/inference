@@ -188,7 +188,10 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 .daycell .dots { display: flex; gap: 3px; justify-content: center; margin-top: 6px; height: 6px; }
 .daycell .dots i { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
 
-.summary { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 0; }
+/* The day's headline numbers, sitting between the week strip and the timeline sheet. The
+   bottom margin is its own: these pills used to be followed by `.cols`, which supplied the
+   gap, and the timeline went full-width when the levels sidebar moved to its own board. */
+.summary { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 18px; }
 .pill { background: var(--card); border-radius: 11px; box-shadow: var(--shadow-sm); padding: 8px 12px; display: flex; align-items: baseline; gap: 7px; }
 .pill .pv { font-family: var(--rounded); font-weight: 700; font-size: 15px; font-variant-numeric: tabular-nums; }
 .pill .pk { font-size: 11.5px; color: var(--muted); }
