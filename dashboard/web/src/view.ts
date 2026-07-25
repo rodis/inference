@@ -6,6 +6,9 @@ export const VERBS: Record<string, string> = {
   car_trip: "Car trip", got_into_the_car: "Got into the car", got_out_the_car: "Got out of the car",
   car_door_opened: "Car door opened", car_door_closed: "Car door closed", phone_is_charging: "Phone charging",
   arrived_home_by_car: "Arrived home by car", left_home_by_car: "Left home by car",
+  // Fallback only: a `stay` that matched a known place is labelled with the place itself
+  // (see labelOf), because "Konditorei von Rotz Baar" says more than "Stay" ever will.
+  stay: "Stay",
 };
 export const RAW_LABEL: Record<string, string> = {
   device_connected_to_power: "Power connected", device_disconnected_from_power: "Power disconnected",
@@ -24,6 +27,9 @@ export const CAT: Record<string, { c: string; Icon: LucideIcon }> = {
   credit_card_payment: { c: "#14b8a6", Icon: CreditCard },
   car_driver_door_opened: { c: "#7a5bff", Icon: DoorOpen },
   arrived_home_by_car: { c: "#c2557f", Icon: House }, left_home_by_car: { c: "#d1719b", Icon: House },
+  // Deliberately in the same pin/teal family as the entered_/left_ geofence dots below: a stay
+  // is a *place* fact, and reading as one makes the timeline legible at a glance.
+  stay: { c: "#177f73", Icon: MapPin },
 };
 
 // --- the level ladder -----------------------------------------------------------
@@ -79,8 +85,13 @@ const pad = (n: number) => String(n).padStart(2, "0");
 export const fmtTime = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 export const fmtTimeSec = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 const titleize = (s: string) => { const t = s.replace(/_/g, " "); return t.charAt(0).toUpperCase() + t.slice(1); };
+/** An event carrying the `place` capability names itself after the place it matched — the label
+ *  IS the useful noun ("Konditorei von Rotz Baar", not "Stay"). Falls back to the verb when the
+ *  place is unknown, which is the honest reading: we know you stopped, not where. */
 export const labelOf = (e: AwareEvent) =>
-  e.event_class === "derived" ? VERBS[e.name] || titleize(e.name) : RAW_LABEL[e.name] || titleize(e.name);
+  e.message.place?.label
+    ? e.message.place.label
+    : e.event_class === "derived" ? VERBS[e.name] || titleize(e.name) : RAW_LABEL[e.name] || titleize(e.name);
 export const typeLabel = (n: string) => VERBS[n] || RAW_LABEL[n] || titleize(n);
 export const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 
@@ -90,7 +101,7 @@ export const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 // span is a view decision, so it lives here, not in the event definition. Both events that
 // carry an interval today (a trip, a charge) read naturally as durations, so both render as
 // capsules whose length is proportional to how long they lasted.
-export const SPAN_EVENTS = new Set<string>(["car_trip", "phone_is_charging"]);
+export const SPAN_EVENTS = new Set<string>(["car_trip", "phone_is_charging", "stay"]);
 export const intervalOf = (e: AwareEvent) => e.message.interval ?? null;
 
 /** Whether to draw this event as a duration capsule — and therefore which *lane* of the day

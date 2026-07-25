@@ -23,7 +23,7 @@ import DayTimeline from "../src/components/DayTimeline";
 import EventModal from "../src/components/EventModal";
 import LevelsDashboard from "../src/dashboards/levels/LevelsDashboard";
 import TimelineDashboard from "../src/dashboards/timeline/TimelineDashboard";
-import { catOf, dayLayout, defaultLevelOf, hostOf, isSpan, laneCount, laneNames, prepare } from "../src/view";
+import { catOf, dayLayout, defaultLevelOf, hostOf, isSpan, labelOf, laneCount, laneNames, prepare } from "../src/view";
 import type { AwareEvent } from "../src/types";
 
 // Both dashboards use useLayoutEffect (scroll anchoring, focus-after-move) — correct on the
@@ -43,7 +43,8 @@ const at = (hhmm: string) => {
 let n = 0;
 const ev = (
   name: string, cls: "raw" | "derived", when: string,
-  opts: { parents?: string[]; span?: [string, string]; amount?: number } = {},
+  opts: { parents?: string[]; span?: [string, string]; amount?: number;
+          place?: { label: string | null } } = {},
 ) => {
   const id = `e${++n}`;
   const iv = opts.span
@@ -56,6 +57,7 @@ const ev = (
       derived_from: (opts.parents ?? []).map((p) => ({ id: p, name: "" })),
       ...(iv ? { interval: iv } : {}),
       ...(opts.amount ? { amount: opts.amount } : {}),
+      ...(opts.place ? { place: { lat: 47.2, lon: 8.57, spread_m: 12, ...opts.place } } : {}),
     },
   };
 };
@@ -73,6 +75,11 @@ const rows = [
   ev("phone_is_charging", "derived", "11:22", { parents: ["e1", "e9"], span: ["05:20", "11:22"] }), // e10 D2, 6h
   ev("phone_is_charging", "derived", "14:16", { parents: ["e1", "e9"], span: ["14:15", "14:16"] }), // e11 60s — junk
   ev("credit_card_payment", "raw", "19:00", { amount: 62.4 }),                   // e12 orphan
+  ev("location_ping", "raw", "09:00"),                                           // e13
+  ev("stay", "derived", "10:36", { parents: ["e13"], span: ["09:00", "10:36"],
+                                   place: { label: "Konditorei von Rotz Baar" } }), // e14 96min, named
+  ev("stay", "derived", "15:00", { parents: ["e13"], span: ["14:20", "15:00"],
+                                   place: { label: null } }),                    // e15 40min, unknown place
 ];
 const prepared = prepare(rows as unknown as AwareEvent[]);
 // Always go through prepare() — it decorates each row with `epoch` and `date`, which every
@@ -127,6 +134,18 @@ check("a 6-hour charge is a span", isSpan(E("e10")));
 // same day, which read as a broken categorisation rather than the bad inference it is.
 check("a 60-second charge is still a span", isSpan(E("e11")));
 check("a payment is never a span", !isSpan(E("e5")));
+check("a stay is a span", isSpan(E("e14")));
+// The label IS the place when one matched — the whole point of naming places, and the reason a
+// stay reads as "Konditorei von Rotz Baar" rather than the type's verb.
+check("a named stay is labelled with its place", labelOf(E("e14")) === "Konditorei von Rotz Baar",
+      labelOf(E("e14")));
+check("an unnamed stay falls back to its verb", labelOf(E("e15")) === "Stay", labelOf(E("e15")));
+// Depth is not importance: a stay stands on raw pings alone, so the ladder defaults it DOWN even
+// though a 96-minute named visit belongs in the headlines. That is the documented tension — the
+// fix is the levels board (stored prefs), not a special case here. Asserted so the surprise is
+// recorded rather than rediscovered.
+check("a stay defaults to a deep lane despite being headline-worthy",
+      defaultOf("stay") === 2, `got ${defaultOf("stay")}`);
 
 console.log("\n— containment —");
 const spansAll = all.filter(isSpan);
@@ -150,7 +169,10 @@ check("the payment renders inside its host's vertical range",
 check("the payment's band is its innermost host", L.hosts.get("e5") === "e8", L.hosts.get("e5"));
 // Both activities host something at full detail: the power events fall inside the charge, the
 // carplay/lock signals inside the trip. Bands go longest-first so the innermost paints on top.
-check("a band per hosting activity", L.bands.length === 2, `${L.bands.length} bands`);
+// 3 since stays joined the fixture: the trip, the 6h charge, and the named stay (which hosts the
+// 09:00 ping). A stay overlapping a charge — being home while the phone charges — is a real
+// concurrency shape, so it belongs here rather than in a fixture of its own.
+check("a band per hosting activity", L.bands.length === 3, `${L.bands.length} bands`);
 check("bands are ordered longest host first", L.bands[0].hostId === "e10" && L.bands[1].hostId === "e8",
   L.bands.map((b) => b.hostId).join(","));
 check("a brief span still gets a capsule box", L.spans.has("e11"));
@@ -164,7 +186,7 @@ const dt = strip(renderToString(
   <AwareContext.Provider value={ctx}>
     <DayTimeline events={all} layout={L} onSelect={() => {}} revealOf={() => 1} />
   </AwareContext.Provider>));
-check("three activity capsules drawn", (dt.match(/class="capsule"/g) || []).length === 3,
+check("five activity capsules drawn", (dt.match(/class="capsule"/g) || []).length === 5,
   `${(dt.match(/class="capsule"/g) || []).length}`);
 check("moments drawn on the right rail", (dt.match(/class="dt-mom"/g) || []).length >= 5,
   `${(dt.match(/class="dt-mom"/g) || []).length}`);
