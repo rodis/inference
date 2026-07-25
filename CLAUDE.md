@@ -100,6 +100,13 @@ uv run pytest                # tests/ exercise the import-clean core in-memory (
 NEON_DATABASE_URL=... uv run python scripts/backtest.py --days 25 --candidate <cand.yml> --focus car_trip
 NEON_DATABASE_URL=... uv run python scripts/trip_eval.py --days 25 [-v] [<cand.yml> ...]
 
+# Rebuild derived events from retained raws after a definition change (a new engine can't
+# see the past; a `place` label is frozen at mint time). Dry-run by default; --only is
+# REQUIRED because every definition fires in a replay and most already exist in Neon.
+# Run from inside workers/ so find_dotenv picks up the Kafka creds.
+(cd workers && NEON_DATABASE_URL=... uv run python ../scripts/rederive.py \
+    --since '2026-07-25 00:00' --only stay --events-dir $PWD/../events [--produce])
+
 # Validate Vector config/VRL locally BEFORE deploying (vector 0.57.0 = the pinned chart version)
 vector vrl -i sample.json -p program.vrl                 # run one transform's `source:` program
 (cd deploy/vector/kustomize/base/configs && vector validate --no-environment --config-dir .)

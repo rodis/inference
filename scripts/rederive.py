@@ -1,0 +1,154 @@
+"""Re-derive events from retained raw signals and (optionally) produce them to Kafka.
+
+Derived events are a **cache**; the raw signals are the source of truth. So whenever a
+definition changes — a retuned weight map, a new engine, a place that just got a name — the
+history in Neon is stale and can be rebuilt from the raws that are still there. That is what
+this does, and it is why keeping raw events matters more than the storage they cost.
+
+Two uses it was built for, both real:
+  - a new definition can't see the past (a stream processor derives forward only), so
+    `stay` existed for hours with nothing to show for the day it could have described;
+  - a `place` label is frozen when an event is minted, so naming a place only labels the
+    future — re-deriving relabels what already happened.
+
+SAFETY, because this writes to the production topic:
+  - dry-run by DEFAULT; producing requires --produce;
+  - `--only NAME` is REQUIRED, so you must name exactly which derived events to emit. Every
+    definition fires during a replay, and most of those already exist in Neon from the live
+    runtime — producing them all would duplicate history rather than repair it;
+  - it prints every event it will produce, and refuses to run without a time window.
+
+It replays through the real `Router`/`Shaper` over the real definitions (same code path as
+production, minus Kafka), so what it emits is what the runtime would have emitted.
+
+Usage:
+  NEON_DATABASE_URL=... uv run python scripts/rederive.py --since '2026-07-25 00:00' --only stay
+  ... same, plus --produce   # actually send to high_level_events
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from datetime import UTC, datetime
+from pathlib import Path
+
+import psycopg
+from dotenv import find_dotenv, load_dotenv
+
+from inference.capabilities import set_place_book
+from inference.runtime import config
+from inference.runtime.core import Router, RoutingPlan, Shaper
+from inference.runtime.definition import load_definitions
+from inference.runtime.places import load_places
+
+
+class DictState:
+    """In-memory StateStore — the replay gets fresh state, exactly as a new definition would."""
+
+    def __init__(self):
+        self._d: dict = {}
+
+    def get(self, key, default=None):
+        return self._d.get(key, default)
+
+    def set(self, key, value) -> None:
+        self._d[key] = value
+
+
+def fetch_signals(dsn: str, user: str, since: str, until: str | None, names: set[str]) -> list[dict]:
+    """Raw signals in PRODUCTION order (ingested_at), carrying the full persisted body."""
+    sql = """
+        SELECT name, EXTRACT(EPOCH FROM occurred_at)::bigint AS ts, id::text, message
+        FROM events
+        WHERE user_id = %s AND name = ANY(%s) AND occurred_at >= %s::timestamptz
+          AND (%s::timestamptz IS NULL OR occurred_at < %s::timestamptz)
+        ORDER BY ingested_at, id
+    """
+    with psycopg.connect(dsn) as conn:
+        rows = conn.execute(sql, (user, list(names), since, until, until)).fetchall()
+    return [
+        {"name": n, "source_app": "backtest", "source_type": "http_server",
+         "message": {**(msg or {}), "id": i, "name": n, "user_id": user, "timestamp": ts}}
+        for (n, ts, i, msg) in rows
+    ]
+
+
+def main() -> None:
+    if _p := find_dotenv(usecwd=True, raise_error_if_not_found=False):
+        load_dotenv(_p)                      # NEON_DATABASE_URL + KAFKA_* for producing
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--since", required=True, help="inclusive start, e.g. '2026-07-25 00:00'")
+    ap.add_argument("--until", help="exclusive end (default: now)")
+    ap.add_argument("--only", required=True, action="append",
+                    help="derived event name to emit (repeatable). Required — see SAFETY.")
+    ap.add_argument("--user", default="rods")
+    ap.add_argument("--events-dir", default=os.environ.get("EVENTS_DIR", "events"))
+    ap.add_argument("--produce", action="store_true",
+                    help="actually produce to the sink topic (default: dry run)")
+    args = ap.parse_args()
+
+    dsn = os.environ.get("NEON_DATABASE_URL")
+    if not dsn:
+        raise SystemExit("set NEON_DATABASE_URL")
+
+    defs = load_definitions(Path(args.events_dir))
+    plan = RoutingPlan.from_definitions(defs)
+    wanted = set(args.only)
+    if unknown := wanted - set(plan.sink_for):
+        raise SystemExit(f"not produced by any definition: {sorted(unknown)}")
+
+    # Labels come from the SAME reference data the runtime uses, so a re-derived event carries
+    # what the runtime would carry today (which is the point when relabelling after naming).
+    set_place_book(load_places(dsn))
+
+    external = set(plan.consumers) - set(plan.sink_for)
+    signals = fetch_signals(dsn, args.user, args.since, args.until, external)
+    router, shaper, state = Router(plan), Shaper(plan), DictState()
+
+    emit: list[dict] = []
+    for ev in signals:
+        for item in router.route(ev, state):
+            if item["message"]["name"] in wanted:
+                emit.append(shaper.shape(item))
+
+    def _fmt(ts: int) -> str:
+        return datetime.fromtimestamp(ts, UTC).strftime("%m-%d %H:%M")
+
+    print(f"replayed {len(signals)} signals since {args.since} "
+          f"({args.user}) -> {len(emit)} event(s) to emit: {sorted(wanted)}\n")
+    for e in emit:
+        m = e["message"]
+        iv, pl = m.get("interval") or {}, m.get("place") or {}
+        extra = ""
+        if iv:
+            extra += f" {iv['duration_seconds'] / 60:.1f}min"
+        if pl:
+            extra += f" @ {pl.get('label') or f'{pl['lat']:.5f},{pl['lon']:.5f}'}"
+        print(f"  {m['name']:12s} {_fmt(m['timestamp'])}Z{extra}  id={m['id'][:8]}")
+
+    if not args.produce:
+        print("\nDRY RUN — nothing produced. Re-run with --produce to emit these.")
+        return
+    if not emit:
+        print("\nnothing to produce")
+        return
+
+    # Produce through the real sink so the persist lane (Vector -> Neon) handles them exactly
+    # as it handles live derived events: same wrapper, same topic, DB-set ingested_at.
+    from quixstreams import Application
+    # mTLS goes in producer_extra_config (librdkafka keys), not as Application kwargs —
+    # same wiring as inference.runtime.quix.build_runtime.
+    app = Application(broker_address=config.kafka_bootstrap(), consumer_group="rederive-oneshot",
+                      producer_extra_config=config.kafka_ssl())
+    with app.get_producer() as producer:
+        for e in emit:
+            topic = plan.sink_for[e["message"]["name"]]
+            producer.produce(topic=topic, key=e["message"]["user_id"].encode(),
+                             value=json.dumps(e).encode())
+    print(f"\nproduced {len(emit)} event(s) to {sorted({plan.sink_for[e['message']['name']] for e in emit})}")
+
+
+if __name__ == "__main__":
+    main()
