@@ -3,6 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- The Aware mark on its coral tile, inlined rather than served from `public/`: the FastAPI
+         host mounts only /assets, so a file at the site root would be swallowed by the SPA
+         fallback and come back as HTML. Same geometry as src/components/AwareMark.tsx — the
+         component is the source of truth; change one, change the other. -->
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='.5' y2='.87'%3E%3Cstop stop-color='%23fb6f6a'/%3E%3Cstop offset='1' stop-color='%23fd9a63'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='9' fill='url(%23g)'/%3E%3Cg fill='%23fff' transform='translate(6.4 6.4) scale(.8)'%3E%3Ccircle cx='3.4' cy='12' r='1.1' opacity='.26'/%3E%3Ccircle cx='8' cy='12' r='1.6' opacity='.48'/%3E%3Ccircle cx='13.4' cy='12' r='2.3' opacity='.74'/%3E%3Ccircle cx='19.6' cy='12' r='3.2'/%3E%3C/g%3E%3C/svg%3E"
+    />
     <title>Aware — life, inferred</title>
     <meta
       name="description"

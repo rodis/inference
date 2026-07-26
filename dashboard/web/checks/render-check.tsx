@@ -18,6 +18,8 @@
  * makes `npm run check` exit non-zero for CI.
  */
 import { renderToString } from "react-dom/server";
+import { MemoryRouter } from "react-router-dom";
+import Shell from "../src/app/Shell";
 import { AwareContext } from "../src/app/useAware";
 import type { AwareCtx } from "../src/app/useAware";
 import DayTimeline from "../src/components/DayTimeline";
@@ -337,6 +339,30 @@ check("...while a stay at a real destination still draws", tl.includes("Café Fr
 check("the everyday stay is still in the loaded event set", all.some((e) => e.id === "e18"));
 check("isEverydayPlace keys on the flag, not the label",
   isEverydayPlace(E("e18")) && !isEverydayPlace(E("e16")) && !isEverydayPlace(E("e15")));
+
+console.log("\n— the brand mark —");
+// The Shell hosts the theme toggle, which reads `localStorage` while rendering — correct in the
+// browser (the app never server-renders), missing under this SSR harness. A three-line in-memory
+// shim is the honest fix: guarding the real `readTheme` would be production code existing only
+// for a check. Same spirit as the useLayoutEffect silencer above. Assigned rather than
+// `??=`-defaulted because merely *reading* node's absent `localStorage` prints an experimental
+// warning, and this harness's output is read by humans in CI.
+(globalThis as { localStorage?: unknown }).localStorage = {
+  getItem: () => null, setItem: () => {}, removeItem: () => {},
+};
+// The appbar tile carries the Aware mark (four moments of a day arriving from faint to solid),
+// not an event-category glyph. Asserted because the previous logo was a `Car` — a fossil of
+// car_trip being the first derivation — and reaching into lucide for the brand is exactly the
+// easy mistake to make twice. The opacity ramp is the mark's whole idea, so it's checked too:
+// four dots at one strength is a different logo.
+const shell = strip(renderToString(
+  <MemoryRouter><AwareContext.Provider value={ctx}><Shell /></AwareContext.Provider></MemoryRouter>));
+check("the appbar draws the brand tile", shell.includes('class="applogo"'));
+check("the mark is four dots", (shell.match(/<circle/g) || []).length === 4,
+  `${(shell.match(/<circle/g) || []).length} circles`);
+check("...on an opacity ramp", ["0.26", "0.48", "0.74"].every((o) => shell.includes(`opacity="${o}"`)));
+check("the mark inherits the tile's ink", shell.includes('fill="currentColor"'));
+check("the wordmark is next to it", shell.includes(">Aware<"));
 
 if (fails.length) throw new Error(`${fails.length} check(s) failed: ${fails.join("; ")}`);
 console.log("\nall checks passed\n");

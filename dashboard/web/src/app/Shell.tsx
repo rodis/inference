@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { Car, Monitor, Moon, Sun } from "lucide-react";
+import { Monitor, Moon, Sun } from "lucide-react";
+import AwareMark from "../components/AwareMark";
 import { DASHBOARDS } from "./registry";
 import { useAware } from "./useAware";
 import { applyTheme, readTheme, THEMES } from "./theme";
@@ -34,7 +35,7 @@ export default function Shell() {
   return (
     <div className="wrap">
       <header className="appbar">
-        <div className="applogo"><Car size={22} strokeWidth={2.25} color="#fff" /></div>
+        <div className="applogo"><AwareMark size={22} /></div>
         <span className="appname">Aware</span>
         <nav className="topnav">
           {DASHBOARDS.map((d) => (
