@@ -74,7 +74,14 @@ def fetch_signals(dsn: str, user: str, days: int, input_names: set[str]) -> list
             WHERE user_id = %s
               AND occurred_at > now() - make_interval(days => %s)
               AND name = ANY(%s)
-            ORDER BY ingested_at, id
+            -- Tie-break by EVENT time, not by id. A batched producer (Overland posts up to
+            -- 1000 fixes per request) persists a whole batch with near-identical ingested_at,
+            -- and a uuid tiebreak then shuffles the batch's internal order at random. The
+            -- geometry engines are sequential — `stay_window` skips a fix older than its
+            -- cluster's end — so a shuffled batch silently loses about HALF its fixes
+            -- (measured: 30 replayed vs 57 live for one stay). Arrival order still governs
+            -- ACROSS batches, which is what production ordering means.
+            ORDER BY ingested_at, (message->>'timestamp')::bigint, id
             """,
             (user, days, list(input_names)),
         ).fetchall()
