@@ -125,14 +125,12 @@ export const typeLabel = (n: string) => VERBS[n] || RAW_LABEL[n] || titleize(n);
  *  and re-derive (ADR 0007 — a label is frozen at derive time). The weaker drawing therefore
  *  reads as "not named yet", which is an invitation, not an error.
  *
- *  **Drawn as the same capsule at half strength**, plus a muted title. A second treatment was
- *  built and compared on a real day — a dashed ring in the category colour, no transparency —
- *  and dropped: it says "unresolved" in a channel nothing else uses, but it costs more ink per
- *  capsule and a lane of them reads busier than a lane of faded ones. The known cost of what
- *  won is that *faded* also means "below the current altitude" here, so one channel carries two
- *  readings; they compose rather than collide only because the row's opacity (altitude) and the
- *  capsule's (unnamed) are separate elements. If that ambiguity ever bites, the outline
- *  treatment is in git history at the commit that added this. */
+ *  **Drawn hollow**: the same capsule unfilled — transparent, with a dotted ring in the category
+ *  colour — plus a muted title. A half-opacity fill was tried first and rejected on a real day:
+ *  it was too close to a named stay to read as a different kind of claim at a glance, and *faded*
+ *  already means "below the current altitude" on this board, so it made one channel carry two
+ *  readings. Hollow-vs-filled is a channel nothing else uses, and it separates cleanly from the
+ *  row's altitude opacity (different element, different property). */
 export const placeUnknown = (e: AwareEvent) => !!e.message.place && !e.message.place.label;
 export const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 
