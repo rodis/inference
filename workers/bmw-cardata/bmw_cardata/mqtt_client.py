@@ -49,6 +49,7 @@ class MqttSubscriber:
         self._client.on_connect = self._on_connect
         self._client.on_message = self._on_message
         self._client.on_disconnect = self._on_disconnect
+        self._stopping = False         # set by stop(), so a deliberate exit isn't logged as a drop
         self._apply_auth()
 
     def _apply_auth(self) -> None:
@@ -62,8 +63,16 @@ class MqttSubscriber:
         self._client.loop_start()  # background network thread
 
     def stop(self) -> None:
-        self._client.loop_stop()
-        self._client.disconnect()
+        """Disconnect cleanly, THEN stop the network thread — this order matters.
+
+        `disconnect()` only *queues* the DISCONNECT packet; the loop thread writes it. Stopping
+        the loop first (as this did) meant the packet could never be flushed, so every shutdown
+        looked like a dropped socket to BMW's broker even when it was deliberate. Since BMW
+        allows one connection per GCID, that delayed the next pod's connect (ADR 0006).
+        """
+        self._stopping = True
+        self._client.disconnect()      # queues DISCONNECT...
+        self._client.loop_stop()       # ...and this joins the thread that flushes it
 
     def reconnect_with_fresh_token(self) -> None:
         """Called after TokenManager.refresh(): the MQTT password (id_token) changed."""
@@ -82,7 +91,11 @@ class MqttSubscriber:
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None):
         # paho's loop auto-reconnects; log so drops are visible (BMW stream is flaky — ADR 0006).
-        log.warning("mqtt disconnected: %s (auto-reconnect)", reason_code)
+        # A deliberate stop is not a drop, and saying so keeps the deploy logs readable.
+        if self._stopping:
+            log.info("mqtt disconnected cleanly (%s); shutting down", reason_code)
+        else:
+            log.warning("mqtt disconnected: %s (auto-reconnect)", reason_code)
 
     def _on_message(self, client, userdata, msg):
         try:

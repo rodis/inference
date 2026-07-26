@@ -58,7 +58,12 @@ Two hard facts shaped the decision:
    rolling update. `maxSurge` starts the new subscriber while the old one still holds the only
    permitted connection, so they evict each other — surfacing as `mqtt connect failed: Not
    authorized` for ~56s until the old pod dies. The `bmw-cardata` Deployment is therefore pinned
-   to a no-overlap rollout (`maxSurge: 0`) via a kustomize patch; see `deploy/inference/kustomize/base/bmw-cardata/`.)*
+   to a no-overlap rollout (`maxSurge: 0`) via a kustomize patch; see `deploy/inference/kustomize/base/bmw-cardata/`.
+   That bounded the overlap but didn't remove it — the subscriber also had to shut down cleanly.
+   It had NO SIGTERM handler, so Python's default action killed it outright and `stop()` never
+   ran; and `stop()` called `loop_stop()` before `disconnect()`, so the DISCONNECT packet could
+   never be flushed by the thread that writes it. Both fixed 2026-07-25: the broker is now told
+   the session is over instead of having to notice a dead socket.)*
    The MQTT username is the account-level **GCID**, not the per-client
    `client_id`; the topic is `{GCID}/{VIN}`. Two direct subscribers on the same account evict each
    other. So our subscriber and HA's direct subscription are **mutually exclusive** — creating our
