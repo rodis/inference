@@ -29,6 +29,39 @@ Date: 2026-07-18 (scaffold 2026-07-19, deployed + tuned 2026-07-24)
 > The MQTT envelope, broker params (MQTT v3.1.1 / TLS 1.3 / `{gcid}/+`), the portal
 > **"Configure Stream"** per-descriptor gotcha, and the refresh-token-rotation → Neon-persistence
 > fix are all captured in [[project-bmw-cardata-onboarding]].
+>
+> **Addendum (2026-07-26) — half the container was never being read.** Reviewing the whole BMW
+> surface rather than the door alone: the container subscribes to **8** descriptors, the mapper
+> handled **4**, and Neon has ever seen **1**. Those two gaps are different failures.
+> `isMoving`/ignition/deep-sleep are genuinely dead on this vehicle (above). But
+> `vehicle.cabin.door.lock.status`, `vehicle.vehicle.travelledDistance` and
+> `…currentLocation.latitude/longitude` were **subscribed and silently discarded** — the mapper
+> matched four descriptor ids and `continue`d past everything else with no log, and the one path
+> that would have revealed them (`BMW_DEBUG_LOG_ALL`, whole envelopes) was never enabled in
+> production. So we could not distinguish "the car never sends it" from "we never looked". Two
+> changes follow:
+>
+> 1. **A permanent stream inventory.** Unmapped descriptors are logged once per id per process,
+>    with their value, *before* the baseline check (so a descriptor seen exactly once still shows
+>    up). One drive now enumerates the stream, at a cost of a handful of log lines.
+> 2. **`vehicle.cabin.door.lock.status` mapped → `car_locked` / `car_unlocked`**, emitted but in
+>    **no weight map** — data first, weights after a replay. It is worth the speculative wiring
+>    because it is **directional**, and non-directionality is the binding constraint on this whole
+>    lane: the driver door fires at entry *and* exit (hence weight 4 in `got_into_the_car`, after
+>    the phantom it opened at 5), and the phone's `car_lock_state_change` has the same defect —
+>    it's the reason for the accepted [door open/close disambiguation] fragility. A car-native
+>    lock *state* would be the first signal that is both phone-independent and knows which way it
+>    went. `SELECTIVE_LOCKED` and friends are deliberately left unmapped and logged rather than
+>    guessed at.
+>
+> Still unmapped, and deliberately: the odometer and GPS pair. Both are **numeric snapshots, not
+> edges**, so they don't belong in this boolean mapper — they are capability/enrichment material
+> (trip distance; a park-location `place` for trip endpoints; a phone-independent
+> `arrived_home_by_car`). The odometer additionally gives *ground truth* for the junk-trip
+> problem: a 0–110s phantom covers ~0 km, which adjudicates trip quality directly instead of by
+> duration heuristic (the failure mode that made the first door validation wrong — see the
+> Correction above). Worth adding to the container later: tailgate (loading/unloading — the "did a
+> shop" shape), passenger door ("not alone"), fuel level (a jump + a stay = refuelled).
 
 > Builds on [`0005-session-gated-derivation.md`](0005-session-gated-derivation.md): the same
 > `got_into_the_car` (`weighted_window`) / `got_out_the_car` (`session_gated_window`) →
@@ -252,6 +285,11 @@ on change when driving).
    `customer.streaming-cardata.bmwgroup.com:9000`, MQTT v3.1.1, TLS 1.3 min, topic `{gcid}/+`,
    password = id_token. Remaining: capture a real *driving* message to lock the payload envelope
    (`mapper._iter_updates`) — 0 messages arrive while the car is parked/asleep.
-2. Which engine descriptor (`isActive` vs `isIgnitionOn`) is red-light-stable — confirm on a drive.
+2. ~~Which engine descriptor (`isActive` vs `isIgnitionOn`) is red-light-stable~~ — moot: neither
+   streams on this vehicle (Outcome banner).
 3. Final weight/threshold numbers, tuned against a replay of real fused streams (as ADR 0005 was).
-4. Refresh-token rotation persistence for unattended >2-week runs (see the subscriber README).
+4. ✅ Refresh-token rotation persistence — done (Neon `bmw_cardata_tokens`).
+5. **Does `vehicle.cabin.door.lock.status` actually arrive?** The `UNMAPPED` inventory + the
+   speculative `car_locked`/`car_unlocked` mapping (Addendum) answer this on the next drive. If it
+   does, it's the first *directional* car-native signal and the next weight-map change; if it
+   doesn't, the door remains the only car-native signal this vehicle gives us.

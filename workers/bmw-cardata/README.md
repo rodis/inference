@@ -29,16 +29,44 @@ required**, and we add a producer, not a Kafka topic (stays under the Aiven 5-to
 
 ## Signals emitted (ADR 0006 — asymmetric)
 
-| descriptor (HA name)              | edge         | canonical signal          | role |
-|-----------------------------------|--------------|---------------------------|------|
-| `vehicle_motion_state` (isMoving) | false→true   | `car_started_moving`      | trip **start** anchor (self-sufficient) |
-| `vehicle_motion_state`            | true→false   | `car_stopped_moving`      | weak end corroborator (red-light unsafe alone) |
-| `door_state_front_driver`         | →open        | `car_driver_door_opened`  | end disambiguator (motion-off + door-open = parked) |
-| `vehicle_deep_sleep_mode`         | →true        | `car_deep_sleep`          | slow, certain park backstop |
+| descriptor                                | edge            | canonical signal          | role | seen live? |
+|-------------------------------------------|-----------------|---------------------------|------|------------|
+| `vehicle.cabin.door.row1.driver.isOpen`   | →open           | `car_driver_door_opened`  | non-directional corroborator, in both weight maps (4 / 5) | ✅ ~94%/trip |
+| `vehicle.cabin.door.lock.status`          | →UNLOCKED       | `car_unlocked`            | **directional** entry cue — observation only, **no weight yet** | ❓ |
+| `vehicle.cabin.door.lock.status`          | →SECURED        | `car_locked`              | **directional** exit cue — observation only, **no weight yet** | ❓ |
+| `vehicle.isMoving`                        | false→true      | `car_started_moving`      | intended start anchor | ❌ never streams on this X1 |
+| `vehicle.isMoving`                        | true→false      | `car_stopped_moving`      | weak end corroborator | ❌ never |
+| `vehicle.drivetrain.engine.isActive`      | →on / →off      | `car_ignition_on` / `_off`| intended end anchor | ❌ never |
+| `vehicle.vehicle.deepSleepModeActive`     | →true           | `car_deep_sleep`          | slow park backstop | ❌ never |
 
 First observation of each descriptor sets a baseline **silently**; only genuine
 transitions emit (so a parked car's initial state doesn't mint phantom events on the
 hourly reconnect).
+
+`car_locked`/`car_unlocked` are emitted into `raw_sensors` but appear in **no** weight map:
+they persist to Neon for analysis, and the runtime ignores names no engine consumes. Direction
+is why they matter — every car-native signal we have today (and the phone's
+`car_lock_state_change`) fires at entry *and* exit, which is what caps the door at weight 4.
+Weight them only after a replay (`scripts/trip_eval.py`), as ADR 0005/0006 did.
+
+## Stream inventory (unmapped descriptors)
+
+The mapper logs every descriptor it does **not** turn into a signal, once per descriptor per
+process, with its value:
+
+```
+UNMAPPED descriptor in stream: vehicle.vehicle.travelledDistance = 48213
+```
+
+This exists because the silent `continue` it replaced made "the car never sends it"
+indistinguishable from "we never looked" — the container subscribes to odometer and GPS
+lat/lon, which were being dropped on the floor, and `BMW_DEBUG_LOG_ALL` (whole envelopes, off
+by default) had never been enabled in production. Inventory runs *before* the baseline check,
+so a descriptor that appears exactly once still shows up. One drive now enumerates the stream:
+
+```bash
+kubectl -n inference logs deploy/bmw-cardata | grep UNMAPPED
+```
 
 ## Config (env; `workers/.env` locally, ConfigMap/Secret in K8s)
 
@@ -55,6 +83,7 @@ hourly reconnect).
 | `BMW_TOPIC_TEMPLATE`   |    | `{gcid}/+` | ✅ confirmed (wildcard, all VINs on the gcid) |
 | `BMW_INGEST_PATH`      |    | `/sensors/bmw` | |
 | `BMW_REFRESH_MARGIN_SECONDS` | | `300` | refresh id_token this long before expiry |
+| `BMW_DEBUG_LOG_ALL`    |    | off | log every raw envelope. Rarely needed now — the permanent `UNMAPPED` inventory (above) covers the "what else is in the stream" question without the noise |
 
 ## Run locally
 
@@ -84,9 +113,20 @@ it in `deploy/inference/kustomize/base/kustomization.yml`.
 2. ✅ **Descriptor ids** (`mapper.DESCRIPTOR_*`) — CONFIRMED against the live container +
    telematicData snapshot (`vehicle.isMoving`, `…engine.isActive`, `…door.row1.driver.isOpen`,
    `…deepSleepModeActive`). Which engine descriptor is red-light-stable still needs a live drive.
-3. **Refresh-token rotation persistence** — if BMW rotates the refresh token on each
-   refresh, a pod restart falls back to the (now stale) env value. Persist the rotated
-   token (write back to a Secret / mounted file) before this runs unattended for >2 weeks.
-4. **Weights** — once real signals flow, add `car_started_moving` (weight ≥ threshold) to
-   `events/got_into_the_car.yml` and the park-confirm to `events/got_out_the_car.yml`, then
-   tune against a replay (ADR 0006).
+3. ✅ **Refresh-token rotation persistence** — BMW rotates on every refresh; the rotated token
+   is persisted to Neon (`bmw_cardata_tokens`, see `token_store.py`), so restarts resume.
+   Consequence: **don't refresh this token out of band** (e.g. to poke the REST API) — the
+   running pod prefers its in-memory copy and would fail its next hourly refresh.
+4. **Weights** — the motion/ignition anchors this planned for never stream (see the ADR 0006
+   Outcome banner), so `car_driver_door_opened` at 4/5 is what shipped. Next candidate is
+   `car_locked`/`car_unlocked` **if** the inventory shows the lock descriptor arriving: it is the
+   only car-native signal that is directional. Tune with `scripts/trip_eval.py`, not a count delta.
+5. **What else is in the stream** — the container also subscribes to `travelledDistance`
+   (odometer → trip *distance*, and ground truth for adjudicating junk trips) and
+   `currentLocation.latitude/longitude` (a park-location snapshot → the `place` capability for
+   trip endpoints, and a phone-independent `arrived_home_by_car`). Neither is mapped; both are
+   numeric, so they want a capability/enrichment path rather than the boolean edge machinery
+   here. Confirm they actually arrive via the `UNMAPPED` inventory first.
+6. **Container expansion** — not subscribed today, cheap to add: **tailgate** (loading/unloading
+   → the "did a shop" shape a phone can't see), **passenger door row 1** ("not driving alone"),
+   and **fuel level** if exposed (a level jump + a stay = refuelled).
