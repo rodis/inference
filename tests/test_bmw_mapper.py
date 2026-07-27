@@ -196,52 +196,40 @@ def test_fuel_level_is_a_reading(mapper):
     assert _extra(emitted, mapper_mod.SIG_FUEL)["fuel_level"] == 18
 
 
-# --- GPS fusion --------------------------------------------------------------------------
+# --- GPS: one event per component, deliberately NOT fused ---------------------------------
 
-def test_half_a_coordinate_emits_nothing(mapper):
-    assert mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LAT, 47.1715, ts=1785060000)) == []
-
-
-def test_lat_and_lon_fuse_into_one_event(mapper):
-    """One car_location per batch, not one per component — a lat alone locates nothing."""
-    mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LAT, 47.1715, ts=1785060000))
-    emitted = mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LON, 8.5163, ts=1785060001))
-    assert _names(emitted) == [mapper_mod.SIG_LOCATION]
-    extra = _extra(emitted, mapper_mod.SIG_LOCATION)
-    assert (extra["lat"], extra["lon"]) == (47.1715, 8.5163)
+def test_each_gps_component_is_its_own_event(mapper):
+    """Pairing is a derivation decision; doing it here would leave nothing to re-derive from."""
+    assert _names(mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LAT, 47.1715))) == [
+        mapper_mod.SIG_GPS_LAT
+    ]
+    assert _names(mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LON, 8.5163))) == [
+        mapper_mod.SIG_GPS_LON
+    ]
 
 
-def test_a_fresh_lat_does_not_pair_with_the_previous_parks_lon(mapper):
-    """The window is the whole point: pairing across batches would invent a location."""
-    mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LAT, 47.1715, ts=1785060000))
-    mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LON, 8.5163, ts=1785060001))
-    # Hours later the car parks elsewhere and latitude arrives first.
-    assert mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LAT, 47.4000, ts=1785070000)) == []
-    assert _names(
-        mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LON, 8.6000, ts=1785070001))
-    ) == [mapper_mod.SIG_LOCATION]
+def test_a_lone_latitude_is_still_recorded(mapper):
+    """It locates nothing on its own, but discarding it would hide a real asymmetry:
+    the whole point of persisting GPS is measuring whether the components arrive together."""
+    emitted = mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LAT, 47.1715))
+    assert _extra(emitted, mapper_mod.SIG_GPS_LAT)["latitude"] == 47.1715
 
 
-def test_an_unmoved_car_reports_no_new_location(mapper):
-    """A reconnect re-sends the same point; that is not a move."""
+def test_late_altitude_is_kept_not_dropped(mapper):
+    """On this car altitude arrives ~4 min after lat/lon — a pairing window discarded it."""
     mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LAT, 47.1715, ts=1785060000))
     mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LON, 8.5163, ts=1785060001))
-    mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LAT, 47.1715, ts=1785060100))
-    assert mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LON, 8.5163, ts=1785060101)) == []
+    emitted = mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_ALT, 423, ts=1785060240))
+    assert _extra(emitted, mapper_mod.SIG_GPS_ALT)["altitude"] == 423
 
 
-def test_altitude_rides_along_when_it_belongs_to_the_same_batch(mapper):
-    mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_ALT, 423, ts=1785060000))
+def test_an_unmoved_car_re_reports_nothing(mapper):
+    """A reconnect re-sends the same coordinates; de-duplication still applies per component."""
     mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LAT, 47.1715, ts=1785060000))
-    emitted = mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LON, 8.5163, ts=1785060001))
-    assert _extra(emitted, mapper_mod.SIG_LOCATION)["altitude"] == 423
-
-
-def test_stale_altitude_is_left_out_rather_than_attached(mapper):
-    mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_ALT, 423, ts=1785060000))
-    mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LAT, 47.4000, ts=1785070000))
-    emitted = mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LON, 8.6000, ts=1785070001))
-    assert "altitude" not in _extra(emitted, mapper_mod.SIG_LOCATION)
+    assert mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LAT, 47.1715, ts=1785060600)) == []
+    assert _names(mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LAT, 47.4000))) == [
+        mapper_mod.SIG_GPS_LAT
+    ]
 
 
 # --- the catch-all: nothing is discarded any more -----------------------------------------

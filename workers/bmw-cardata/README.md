@@ -51,7 +51,9 @@ unrecoverable within days. It is now persisted too:
 | descriptor | canonical signal | payload |
 |---|---|---|
 | `vehicle.vehicle.travelledDistance` | `car_odometer` | `{odometer_km}` |
-| `…currentLocation.latitude` + `.longitude` (+ `.altitude`) | `car_location` | `{lat, lon, altitude?}` |
+| `…currentLocation.latitude` | `car_gps_latitude` | `{latitude}` |
+| `…currentLocation.longitude` | `car_gps_longitude` | `{longitude}` |
+| `…currentLocation.altitude` | `car_gps_altitude` | `{altitude}` |
 | `vehicle.drivetrain.fuelSystem.level` | `car_fuel_level` | `{fuel_level}` |
 | *anything else that changes* | `car_state_change` | `{descriptor, value}` |
 
@@ -69,11 +71,26 @@ because a retained "door closed" must not mint a phantom on every reconnect. A *
 guard against, so the first observation is emitted and repeats are de-duplicated instead.
 Reversed, you would either lose the first reading or emit one per reconnect.
 
-**GPS is fused, not three events.** Latitude, longitude and altitude arrive as separate
-descriptors in separate messages ~250ms apart, and a latitude without a longitude locates
-nothing. A point is emitted only when lat and lon carry timestamps within 10s of each
-other — which also yields exactly one event per batch rather than one per component, since
-a fresh latitude finds the *previous* park's longitude outside the window.
+**GPS is deliberately NOT fused** — one event per component. A first cut paired lat/lon
+into a single `car_location` inside a 10s window; that was reversed, and the reasoning is
+worth keeping because it generalises to anything else added here.
+
+A latitude without a longitude is useless to a *consumer*, which makes pairing tempting.
+But this is a **producer**, and pairing here is a derivation decision whose inputs never
+reach Neon. That breaks the invariant the pipeline rests on — derived events are a *cache*,
+raw signals are the *source of truth*, and [`scripts/rederive.py`](../../scripts/rederive.py)
+rebuilds the former from the latter. A window baked in at ingest is unreplayable: if 10s is
+wrong there is nothing to re-derive from, and tuning it needs exactly the components the
+fusion threw away.
+
+It was lossy in practice too. Altitude arrives **~4 minutes** after lat/lon on this car, so
+it fell outside the window and was dropped entirely. And it would have corrupted the one
+measurement this mapping exists to make: if lat and lon update at different rates, fusing
+them hides it.
+
+So the rule for this mapper is **one descriptor in, one event out**. Anything wanting a
+point joins the components downstream, where the window is visible, tunable and
+re-derivable.
 
 All of these are **observation-only**: no engine consumes these names, so deploying them
 cannot change any derivation. `car_odometer` is the prerequisite for a junk-trip veto — a
@@ -82,7 +99,7 @@ a heuristic weight.
 
 ⚠️ **Cadence is unmeasured.** Whether `travelledDistance` and the GPS point update *during*
 a drive or only in the park/wake batch is exactly what mapping them will reveal. If GPS
-turns out to stream continuously, `car_location` volume could be much higher than the
+turns out to stream continuously, GPS event volume could be much higher than the
 handful/day the park-only model predicts — worth a look at the first day's rows.
 
 `car_locked`/`car_unlocked` are emitted into `raw_sensors` but appear in **no** weight map:
@@ -114,7 +131,7 @@ kubectl -n inference logs deploy/bmw-cardata | grep 'descriptor in stream'
 **Read once per process, so this is the stream's _vocabulary_, not its per-trip cadence.** The
 first message after connect is a full state dump, so nearly every id below was logged from that
 rather than from driving. Per-trip cadence is now answerable from Neon instead — query the
-`car_state_change` / `car_odometer` / `car_location` rows by `occurred_at`.
+`car_state_change` / `car_odometer` / `car_gps_*` rows by `occurred_at`.
 
 ### First inventory (2026-07-27, one drive) — 24 descriptors
 

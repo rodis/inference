@@ -17,9 +17,9 @@ above became events, so everything else the car streams — odometer, GPS, fuel,
 alarm — existed solely in a *rotating* pod log and was unrecoverable within days. Three
 additions close that:
 
-  - odometer   → car_odometer     {odometer_km}
-  - GPS lat+lon→ car_location     {lat, lon, altitude?}   ← FUSED, see below
-  - fuel level → car_fuel_level   {fuel_level}
+  - odometer   → car_odometer       {odometer_km}
+  - GPS lat / lon / alt → car_gps_latitude / _longitude / _altitude  (one each, NOT fused)
+  - fuel level → car_fuel_level     {fuel_level}
   - anything else that CHANGES → car_state_change {descriptor, value}
 
 The catch-all is deliberate: it captures the whole stream for one event name instead of
@@ -35,13 +35,22 @@ opposite — the value IS the fact, there is no phantom to guard against, so the
 observation is emitted and repeats are de-duplicated instead. Getting this backwards would
 either lose the first reading or spam an event per reconnect.
 
-**GPS is fused, not three events.** Latitude, longitude and altitude arrive as separate
-descriptors in separate messages ~250ms apart, and a latitude without a longitude is
-useless. They are paired into one `car_location`: a point is emitted only when lat and lon
-carry timestamps within `_GPS_PAIR_WINDOW_S` of each other, which also means exactly one
-event per batch rather than one per component (when latitude arrives, the retained
-longitude is from the *previous* park and falls outside the window, so only the second
-component of a pair completes it).
+**GPS is deliberately NOT fused** (decided 2026-07-27, reversing a first cut that paired
+lat/lon into one `car_location` inside a 10s window). A latitude without a longitude is
+useless to a *consumer*, which makes pairing tempting here — but this is a producer, and
+pairing here is a derivation decision whose inputs would never reach Neon.
+
+That breaks the invariant the whole pipeline rests on: derived events are a **cache**, raw
+signals are the **source of truth**, and `scripts/rederive.py` can rebuild the former from
+the latter. A pairing window baked in at ingest is unreplayable — if 10s turns out to be
+wrong there is nothing to re-derive from, and tuning it would need exactly the raw
+components the fusion discarded. It was also quietly lossy: altitude arrives ~4 minutes
+after lat/lon on this car, so it fell outside the window and was dropped on the floor. And
+it would have corrupted the one measurement the odometer/GPS mapping exists to make — if
+lat and lon update at different rates, fusing them hides it.
+
+So each component is its own event, and anything that wants a point joins them downstream,
+where the window is a visible, tunable, re-derivable choice.
 
 **Unmapped descriptors are logged, not silently dropped** (2026-07-26). The container
 subscribes to more than this maps (lock status, odometer, GPS lat/lon), and because the
@@ -131,17 +140,6 @@ _EDGE_DESCRIPTORS = frozenset(
     }
 )
 
-# Numeric readings, keyed to the payload field each one lands in.
-_READING_FIELDS = {
-    DESCRIPTOR_ODOMETER: "odometer_km",
-    DESCRIPTOR_FUEL: "fuel_level",
-}
-_GPS_DESCRIPTORS = frozenset({DESCRIPTOR_GPS_LAT, DESCRIPTOR_GPS_LON, DESCRIPTOR_GPS_ALT})
-
-# Latitude and longitude arrive in separate messages; only pair readings this close together,
-# so a fresh latitude never pairs with the previous park's longitude.
-_GPS_PAIR_WINDOW_S = 10
-
 # Canonical signal names (must match the weights maps in events/got_into|got_out once fused)
 SIG_STARTED = "car_started_moving"
 SIG_STOPPED = "car_stopped_moving"
@@ -153,8 +151,19 @@ SIG_LOCKED = "car_locked"                # directional exit cue (observation onl
 SIG_UNLOCKED = "car_unlocked"            # directional entry cue (observation only — no weight yet)
 SIG_ODOMETER = "car_odometer"            # km reading; consecutive deltas prove a drive happened
 SIG_FUEL = "car_fuel_level"
-SIG_LOCATION = "car_location"            # fused lat/lon — the car-native park position
+SIG_GPS_LAT = "car_gps_latitude"         # ONE event per component — deliberately not fused
+SIG_GPS_LON = "car_gps_longitude"
+SIG_GPS_ALT = "car_gps_altitude"
 SIG_STATE_CHANGE = "car_state_change"    # catch-all {descriptor, value} for the rest of the stream
+
+# Numeric readings → (signal name, payload field). One descriptor in, one event out.
+_READINGS = {
+    DESCRIPTOR_ODOMETER: (SIG_ODOMETER, "odometer_km"),
+    DESCRIPTOR_FUEL: (SIG_FUEL, "fuel_level"),
+    DESCRIPTOR_GPS_LAT: (SIG_GPS_LAT, "latitude"),
+    DESCRIPTOR_GPS_LON: (SIG_GPS_LON, "longitude"),
+    DESCRIPTOR_GPS_ALT: (SIG_GPS_ALT, "altitude"),
+}
 
 
 def _as_bool(value) -> bool | None:
@@ -228,9 +237,6 @@ class Mapper:
     def __init__(self) -> None:
         self._last: dict[str, object] = {}
         self._seen: set[str] = set()
-        # (value, ts) per GPS component, pending fusion into one car_location.
-        self._gps: dict[str, tuple[float, int]] = {}
-        self._last_point: tuple[float, float] | None = None
 
     def _note_descriptor(self, descriptor: str, value) -> None:
         """Log each descriptor's first appearance — ONCE per descriptor per process.
@@ -256,10 +262,8 @@ class Mapper:
 
             if descriptor in _EDGE_DESCRIPTORS:
                 out.extend(self._edge(descriptor, value, ts))
-            elif descriptor in _READING_FIELDS:
+            elif descriptor in _READINGS:
                 out.extend(self._reading(descriptor, value, ts))
-            elif descriptor in _GPS_DESCRIPTORS:
-                out.extend(self._gps_point(descriptor, value, ts))
             else:
                 out.extend(self._state_change(descriptor, value, ts))
         return out
@@ -310,33 +314,8 @@ class Mapper:
         if self._last.get(descriptor) == num:
             return []
         self._last[descriptor] = num
-        name = SIG_ODOMETER if descriptor == DESCRIPTOR_ODOMETER else SIG_FUEL
-        return [(name, ts, {_READING_FIELDS[descriptor]: num, "source_descriptor": descriptor})]
-
-    def _gps_point(self, descriptor: str, value, ts: int) -> list[tuple[str, int, dict]]:
-        """Fuse lat/lon (+altitude) into ONE car_location — see the module docstring."""
-        num = _as_number(value)
-        if num is None:
-            log.info("unreadable value for %s: %r", descriptor, value)
-            return []
-        self._gps[descriptor] = (num, ts)
-
-        lat = self._gps.get(DESCRIPTOR_GPS_LAT)
-        lon = self._gps.get(DESCRIPTOR_GPS_LON)
-        if lat is None or lon is None:
-            return []  # half a coordinate locates nothing
-        if abs(lat[1] - lon[1]) > _GPS_PAIR_WINDOW_S:
-            return []  # different batches — wait for this one's other half
-        point = (lat[0], lon[0])
-        if point == self._last_point:
-            return []  # a re-sent state dump, not a move
-        self._last_point = point
-
-        extra = {"lat": lat[0], "lon": lon[0], "source_descriptor": _NAV}
-        alt = self._gps.get(DESCRIPTOR_GPS_ALT)
-        if alt is not None and abs(alt[1] - max(lat[1], lon[1])) <= _GPS_PAIR_WINDOW_S:
-            extra["altitude"] = alt[0]
-        return [(SIG_LOCATION, max(lat[1], lon[1]), extra)]
+        name, field = _READINGS[descriptor]
+        return [(name, ts, {field: num, "source_descriptor": descriptor})]
 
     def _state_change(self, descriptor: str, value, ts: int) -> list[tuple[str, int, dict]]:
         """Everything else that CHANGES → one generic event carrying descriptor + value.
