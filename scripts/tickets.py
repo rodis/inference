@@ -126,7 +126,8 @@ query { viewer { projectsV2(first: 20) { nodes { id title url
     ... on ProjectV2SingleSelectField { id name options { id name } }
   } }
   items(first: 100) { nodes { id
-    content { ... on Issue { number title state url labels(first: 10) { nodes { name } } } }
+    content { ... on Issue { number title state url comments { totalCount }
+      labels(first: 10) { nodes { name } } } }
     fieldValues(first: 12) { nodes {
       ... on ProjectV2ItemFieldSingleSelectValue {
         name field { ... on ProjectV2FieldCommon { name } } }
@@ -155,6 +156,7 @@ def load_board() -> dict:
                 "title": content["title"],
                 "state": content["state"],
                 "url": content["url"],
+                "comments": (content.get("comments") or {}).get("totalCount", 0),
                 "fields": fields,
             }
         return {
@@ -215,11 +217,22 @@ def cmd_list(args: argparse.Namespace) -> None:
         tags = "/".join(
             filter(None, (it["fields"].get("Area"), it["fields"].get("Kind")))
         )
-        print(f"  #{number:<3} [{tags}] {it['title']}")
+        # Flag discussion: a comment often carries the answer to a question the body
+        # only poses, so it must be obvious there is more to read than the body.
+        n = it.get("comments", 0)
+        discussion = f"  ({n} comment{'s' if n != 1 else ''})" if n else ""
+        print(f"  #{number:<3} [{tags}] {it['title']}{discussion}")
     print(f"\n{len(rows)} ticket(s) — {board['url']}")
 
 
 def cmd_view(args: argparse.Namespace) -> None:
+    """Print a ticket AND its comments.
+
+    Comments are included by default and that is the whole point: a ticket often poses a
+    design question whose answer arrives later, in a comment, from a different session.
+    `gh issue view` shows only a bare `comments: N` count, so reading the body alone would
+    silently miss the answer — the exact failure the board exists to prevent.
+    """
     board = load_board()
     it = board["items"].get(args.number)
     if it:
@@ -229,6 +242,22 @@ def cmd_view(args: argparse.Namespace) -> None:
         )
         print(f"{meta}\n")
     print(gh("issue", "view", str(args.number), "--repo", REPO))
+
+    if args.no_comments:
+        return
+    payload = json.loads(
+        gh("issue", "view", str(args.number), "--repo", REPO, "--json", "comments")
+    )
+    comments = payload.get("comments") or []
+    if not comments:
+        return
+    print(f"\n{'─' * 60}\ncomments ({len(comments)})")
+    for c in comments:
+        who = (c.get("author") or {}).get("login", "unknown")
+        when = (c.get("createdAt") or "")[:10]
+        print(f"\n  ── {who} · {when} ─────────────────────────────")
+        for line in (c.get("body") or "").strip().splitlines():
+            print(f"  {line}")
 
 
 def cmd_new(args: argparse.Namespace) -> None:
@@ -260,6 +289,20 @@ def cmd_new(args: argparse.Namespace) -> None:
             set_field(board, item_id, field_name, value)
 
     print(f"#{meta['number']} {url}")
+
+
+def cmd_comment(args: argparse.Namespace) -> None:
+    """Append a comment — the place to record an answer, a finding, or a decision.
+
+    Prefer this over editing the body: a comment is dated and attributed, so the ticket
+    keeps the order in which things were settled instead of silently rewriting history.
+    """
+    body = args.body or ""
+    if args.body_file:
+        body = Path(args.body_file).read_text()
+    if not body.strip():
+        sys.exit("A comment needs a body — pass --body or --body-file.")
+    print(gh("issue", "comment", str(args.number), "--repo", REPO, "--body", body).strip())
 
 
 def cmd_move(args: argparse.Namespace) -> None:
@@ -295,9 +338,19 @@ def main() -> None:
     p.add_argument("--all", action="store_true", help="include closed tickets")
     p.set_defaults(func=cmd_list)
 
-    p = sub.add_parser("view", help="show one ticket with its board fields")
+    p = sub.add_parser("view", help="show one ticket, its board fields, and its comments")
     p.add_argument("number", type=int)
+    p.add_argument(
+        "--no-comments", action="store_true",
+        help="body only — comments are shown by default because they often carry the answer",
+    )
     p.set_defaults(func=cmd_view)
+
+    p = sub.add_parser("comment", help="append a comment to a ticket")
+    p.add_argument("number", type=int)
+    p.add_argument("--body")
+    p.add_argument("--body-file")
+    p.set_defaults(func=cmd_comment)
 
     p = sub.add_parser("new", help="file a ticket and put it on the board")
     p.add_argument("--title", required=True)
