@@ -24,8 +24,9 @@ Tap any event for a recursive dig-down into its derivation lineage.
 A day has two kinds of thing in it, and one column made them look alike. Each lane is labelled
 with its own header:
 
-- **Activities** (left) — events with a duration, as capsules whose length is how long they
-  lasted. Concurrent activities sit in **sub-columns**, because on a true time scale a 6-hour
+- **Activities** (left) — events with a duration, as capsules whose length tracks how long they
+  lasted (roughly — the scale is elastic, so each card also carries an exactly-proportional
+  **duration bar**; see below). Concurrent activities sit in **sub-columns**, because on a true time scale a 6-hour
   charge genuinely does span a 15-minute trip and the real feed has exactly that. A brief
   overlap does *not* earn one: a stay ends when the fix that broke its cluster arrives, which is
   after the drive away has already started, so a café visit and the trip home overlap by about a
@@ -50,7 +51,7 @@ board — that's the knob for "I care less about this", and it's per-user.
 
 **One shared scale is what makes it work.** `dayLayout` builds a single piecewise-linear
 time→y map for the day and places both lanes on it, so a span's height is just
-`Y(end) − Y(start)` — a capsule is proportional to its duration *because* it sits on the same
+`Y(end) − Y(start)` — a capsule is as long as its duration *because* it sits on the same
 scale as the discs beside it. A card payment made during a trip therefore lands inside that
 trip's vertical range with no alignment maths, and the trip casts a tinted **band** across the
 moments lane to say so (figure/ground, not a tether line per dot, so five payments inside one
@@ -62,9 +63,30 @@ the point of the second lane. The innermost (shortest) container wins, so a long
 claim a payment that fell inside a short trip.
 
 The scale is deliberately "broken": steps are proportional to elapsed minutes but floored so
-labels have room, capped so a lull doesn't run off-screen, and a genuinely quiet stretch
-collapses to a labelled divider. Two consequences: a span crowded with moments grows taller
-than its duration alone implies, and a busy hour therefore gets more room than a dead one.
+labels have room, log-compressed past `MAX_STEP` so a lull doesn't run off-screen (`stepFor`),
+and a genuinely quiet stretch collapses to a labelled divider. Two consequences: a span crowded
+with moments grows taller than its duration alone implies, and a busy hour therefore gets more
+room than a dead one.
+
+**So a capsule is only *roughly* proportional — and the exact answer is horizontal.** The error
+is worst for the longest activity on the board: it absorbs all the compression, while short spans
+are *inflated* by the `MIN_STEP` floor on each of their interior instants. Measured on a real day
+(2026-07-27), px-per-minute ran from 2.5 for a 2h39 café stay to 14.7 for a 3-minute charge, so a
+9× duration difference drew as 2.6×. That is not a bug to tune away: the day held 3 minutes and
+159 minutes at once (50×) and a capsule needs ~44px for its icon, so a linear day would be
+thousands of px tall — one vertical channel cannot carry both legibility and that range. Two
+answers, and both were needed:
+
+- `stepFor` replaced a hard `min(…, MAX_STEP)` clamp, which was **not monotone** (109 minutes and
+  4 hours both drew as exactly 210px, so a long activity could not read as longer than a medium
+  one) and clipped that stay by 138px. A log knee keeps every extra minute worth strictly-positive
+  px forever, so rank always survives; the join is C1, so no kink is visible. The stay went
+  397px → 495px against an ideal 509, for +9% page height.
+- The **duration bar** (`EventBody`) is the card's one exactly-proportional channel: width is
+  `duration / the day's longest activity`, linear, no floor big enough to distort it (only a 2%
+  minimum so a very short event reads as short rather than as missing). Vertical says *when, and
+  roughly how long*; the bar says *exactly how long*. Its denominator is every span of the day,
+  not the visible ones, so bars don't rescale as you change altitude.
 
 **"Quiet" means nothing was happening, not that nothing was reported** (`busy` in `dayLayout`).
 A stretch only collapses if no visible span is in progress across it. Without that test the

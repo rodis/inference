@@ -170,6 +170,13 @@ export const isEverydayPlace = (e: AwareEvent) => e.message.place?.everyday === 
  *  floor on their capsule height (CAP_MIN) so they remain legible; if a noisy type crowds the
  *  lane, the fix is to demote it on the levels board, not to re-file it here. */
 export const isSpan = (e: AwareEvent) => SPAN_EVENTS.has(e.name) && !!e.message.interval;
+/** The longest activity in a set of events — the denominator for an activity card's duration bar
+ *  (`EventBody`). Taken over *every* span in the day rather than only the visible ones, so the
+ *  bars don't rescale under you as you change altitude: the reference is "the longest thing you
+ *  did today", which is a property of the day, not of the current zoom. */
+export const maxSpanSeconds = (events: AwareEvent[]): number =>
+  events.reduce((m, e) => (isSpan(e) ? Math.max(m, intervalOf(e)!.duration_seconds) : m), 0);
+
 /** Which of the day timeline's two lanes an event belongs to: intervals on the left as
  *  capsules, points in time on the right as small discs on their own track. */
 export const laneOf = (e: AwareEvent): "activity" | "moment" => (isSpan(e) ? "activity" : "moment");
@@ -214,12 +221,22 @@ export function humanDur(sec: number): string {
  *  the activity that contains it without any extra alignment maths.
  *
  *  The map is deliberately "broken": a step between two consecutive instants is proportional
- *  to the elapsed minutes (PPM), but floored at MIN_STEP so labels have room, capped at
- *  MAX_STEP so a lull doesn't run off-screen, and a genuinely quiet stretch (over QUIET_MIN,
- *  and with no activity in progress across it — see `busy`) collapses to a short labelled
- *  divider. Two consequences worth knowing: a span crowded with moments grows taller than its
- *  duration alone implies (each interior instant costs at least MIN_STEP), and a busy hour
- *  therefore gets more room than a dead one — which reads correctly even though it isn't linear.
+ *  to the elapsed minutes (PPM), but floored at MIN_STEP so labels have room, *compressed* past
+ *  MAX_STEP so a lull doesn't run off-screen (see `stepFor`), and a genuinely quiet stretch
+ *  (over QUIET_MIN, and with no activity in progress across it — see `busy`) collapses to a
+ *  short labelled divider. Two consequences worth knowing: a span crowded with moments grows
+ *  taller than its duration alone implies (each interior instant costs at least MIN_STEP), and a
+ *  busy hour therefore gets more room than a dead one — which reads correctly even though it
+ *  isn't linear.
+ *
+ *  Because of that, a capsule's *length* is only ever roughly proportional to its duration, and
+ *  the error is worst for the longest activity on the board (it eats the compression, while short
+ *  ones are inflated by the MIN_STEP floor on their interior instants). One vertical channel
+ *  cannot carry both legibility and the feed's real dynamic range — a day holding a 3-minute
+ *  charge and a 2h39 café visit spans 50×, and a capsule needs ~44px for its icon, so a truly
+ *  linear day would be thousands of px tall. Exact proportion is therefore carried *horizontally*
+ *  instead, by the duration bar on each activity card (`EventBody`, scaled to the day's longest
+ *  activity): vertical says **when** and roughly how long, horizontal says **exactly** how long.
  *
  *  **Lanes.** `laneOf` puts intervals left and points right. Concurrent spans are packed into
  *  sub-columns (greedy, by start) rather than interlocked with a notch: on a true time scale a
@@ -238,7 +255,8 @@ export function humanDur(sec: number): string {
 const VIS_EPS = 0.06;
 const PPM = 3.2;            // px per minute between consecutive instants
 const MIN_STEP = 34;        // …floored, so two close events still have label room
-const MAX_STEP = 210;       // …and capped, so one long stretch doesn't dominate
+const MAX_STEP = 210;       // …and compressed past here, so one long stretch doesn't dominate
+const KNEE = 150;           // how gently: px of compressed growth per e-fold past MAX_STEP
 const QUIET_MIN = 50;       // a gap wider than this (minutes) collapses to a divider
 const GAP_H = 56;           // height of a collapsed-gap divider
 const CAP_MIN = 44;         // shortest a duration capsule can be (its icon must fit)
@@ -248,6 +266,24 @@ const HANDOFF = 300;        // an overlap this short (seconds) is a boundary, no
 const CAP_GAP = 3;          // hairline between two capsules stacked in one sub-column
 const LINK_MIN = 8;         // shorter than this, a connector is a smudge — draw nothing
 const PAD_BOTTOM = 56;
+
+/** Px for a stretch of `dm` minutes: linear at PPM, then log-compressed past MAX_STEP.
+ *
+ *  This used to be a hard `min(MAX_STEP, …)` clamp, which is **not monotone** — a 109-minute
+ *  stretch and a 4-hour one both rendered as exactly 210px, so a long activity could not read as
+ *  longer than a medium one. Worse, it hit the *longest* thing on the board hardest: a 2h39 café
+ *  visit with two card payments inside it wanted 509px and got 397, because the 109 quiet minutes
+ *  between those payments were clipped by 138px.
+ *
+ *  A logarithm keeps every extra minute worth strictly-positive px forever (rank is preserved, so
+ *  longer always draws taller) while an unbounded lull still can't run away with the page. The
+ *  knee is C1: both sides have slope 1 in px at the join, so there's no visible kink where a
+ *  stretch crosses MAX_STEP. */
+const stepFor = (dm: number): number => {
+  const raw = dm * PPM;
+  if (raw <= MAX_STEP) return Math.max(MIN_STEP, raw);
+  return MAX_STEP + KNEE * Math.log1p((raw - MAX_STEP) / KNEE);
+};
 
 export interface SpanBox { top: number; height: number; col: number }
 /** `weak`: the host is an unnamed place (see `placeUnknown`) — its stripe is drawn fainter, so
@@ -306,7 +342,7 @@ export function dayLayout(
     if (i) {
       const prev = instants[i - 1], dm = (t - prev) / 60;
       if (dm > QUIET_MIN && !busy(prev, t)) { gaps.push({ y: cur + GAP_H / 2, seconds: t - prev }); cur += GAP_H; }
-      else cur += Math.max(MIN_STEP, Math.min(MAX_STEP, dm * PPM));
+      else cur += stepFor(dm);
     }
     Yat.set(t, cur);
   });

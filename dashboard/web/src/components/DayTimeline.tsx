@@ -1,6 +1,6 @@
 import type { AwareEvent } from "../types";
 import type { DayLayout } from "../view";
-import { catOf, fmtTime, hostOf, humanDur, inkOn, intervalOf, isSpan, labelOf, placeUnknown, startOf } from "../view";
+import { catOf, fmtTime, hostOf, humanDur, inkOn, intervalOf, isSpan, labelOf, maxSpanSeconds, placeUnknown, startOf } from "../view";
 import EventBody from "./EventBody";
 
 interface Props {
@@ -36,6 +36,8 @@ export default function DayTimeline({ events, layout, onSelect, revealOf }: Prop
 
   const activities = events.filter(isSpan).sort((a, b) => startOf(a) - startOf(b));
   const moments = events.filter((e) => !isSpan(e)).sort((a, b) => a.epoch - b.epoch);
+  // Over every activity of the day, not just the revealed ones — see `maxSpanSeconds`.
+  const durMax = maxSpanSeconds(events);
 
   return (
     /* --capcols lives on the wrapper so the lane headers and the lanes derive the same
@@ -44,7 +46,9 @@ export default function DayTimeline({ events, layout, onSelect, revealOf }: Prop
       <div className="dt-head">
         <div>
           <span className="lh-title">Activities</span>
-          <span className="lh-sub">intervals · capsule ∝ duration</span>
+          {/* Not "capsule ∝ duration": the vertical scale is elastic on purpose, so the capsule is
+              only roughly proportional and the bar is the honest channel (see EventBody). */}
+          <span className="lh-sub">intervals · bar ∝ duration</span>
         </div>
         <div>
           <span className="lh-title">Moments</span>
@@ -103,7 +107,7 @@ export default function DayTimeline({ events, layout, onSelect, revealOf }: Prop
               </div>
             </div>
             <button className="dt-body" onClick={() => onSelect(e)} tabIndex={r < HIT_EPS ? -1 : undefined}>
-              <EventBody event={e} />
+              <EventBody event={e} durMax={durMax} />
             </button>
           </div>
         );

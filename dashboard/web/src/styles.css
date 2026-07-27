@@ -207,6 +207,17 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 
 .ev-meta { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-top: 3px; }
 .ev-meta .dur { color: var(--accent); font-weight: 600; }
+/* line 3, activities only: duration as a share of the day's longest one (see EventBody).
+   The card's one exactly-proportional channel — the capsule beside it can't be, because the
+   vertical scale is elastic by design. Deliberately in --accent, the same colour as the `.dur`
+   text right above it, so the bar reads as a restatement of that number rather than as a fourth
+   thing to decode; and deliberately narrow (max-width) — past ~220px the eye compares lengths
+   worse, not better, and a full-width bar would read as a progress meter. */
+.ev-bar { margin-top: 5px; height: 4px; max-width: 220px; border-radius: 3px; background: var(--track); overflow: hidden; }
+.ev-bar > i { display: block; height: 100%; border-radius: 3px; background: var(--accent); transition: width 0.4s cubic-bezier(.22,1,.36,1); }
+/* An unnamed place is drawn hollow throughout (see `placeUnknown`) — its bar states the same
+   confidence: the duration is still true, so the length is unchanged, only the fill is muted. */
+.dt-act.unnamed .ev-bar > i { background: var(--muted-2); }
 /* line 1: name + its classification (kind word, L/D chips) all on one row */
 .ev-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .ev-title { font-family: var(--rounded); font-weight: 650; font-size: 15px; letter-spacing: -0.01em; }

@@ -213,6 +213,22 @@ check("no divider lands inside an activity's capsule",
 check("a 96-minute stay is taller than a 19-minute trip", stayBox.height > tripBox.height,
   `stay ${stayBox.height} vs trip ${tripBox.height}`);
 
+// A stretch past MAX_STEP used to be *clamped*, which is not monotone: 109 minutes and 4 hours
+// both drew as exactly 210px, so the longest activity of the day could not read as the longest —
+// and the clip cost a real 2h39 café stay 138px of its 509 (2026-07-27). `stepFor` log-compresses
+// instead, so every extra minute is still worth strictly-positive px. Measured on a lone span,
+// which has no interior instants and therefore renders exactly one step.
+const soloHeight = (from: string, to: string) => {
+  const one = prepare([ev("stay", "derived", to, { span: [from, to], place: { label: "solo" } })] as unknown as AwareEvent[]);
+  return dayLayout(one.all, () => 1, (nm) => catOf(nm).c).spans.get(one.all[0].id)!.height;
+};
+const h109 = soloHeight("00:00", "01:49"), h240 = soloHeight("00:00", "04:00");
+check("a stretch past MAX_STEP is compressed, not clipped", h109 > 210, `${Math.round(h109)}px`);
+check("longer always draws taller — the scale stays monotone", h240 > h109 + 20,
+  `109min ${Math.round(h109)}px vs 240min ${Math.round(h240)}px`);
+check("…but compressed: 2.2× the minutes is well under 2.2× the px", h240 < h109 * 1.6,
+  `ratio ${(h240 / h109).toFixed(2)}`);
+
 // A second sub-column is earned by genuine concurrency only. A stay ends when the fix that broke
 // its cluster arrives — after the drive away has begun — so the café visit and the trip home
 // overlap by a minute. That's a handoff: one lane, capsules stacked, not two columns reading as
@@ -281,6 +297,30 @@ check("the lane divider is drawn", dt.includes("dt-rule"));
 check("both lanes are named in a header", dt.includes(">Activities<") && dt.includes(">Moments<"));
 check("the header shares the lanes' boundary variable", dt.includes("--capcols"));
 check("the trip shows its duration", dt.includes("19 min"));
+
+// The duration bar is the card's one *exactly* proportional channel, and the reason it exists is
+// that the capsule beside it is not: the vertical scale is floored for legibility and compressed
+// past MAX_STEP, so px-per-minute varied ~6× across a real day (2026-07-27) and hit the LONGEST
+// activity hardest — a 9× duration difference drew as 2.6×. Horizontal space has no such
+// constraint, so it can be linear. Asserted numerically because a bar that renders but is scaled
+// wrong looks entirely plausible on a screenshot.
+const barW = [...dt.matchAll(/class="ev-bar"[^>]*>\s*<i style="width:\s*([\d.]+)%/g)].map((m) => +m[1]);
+check("every activity card carries a duration bar — and only they do",
+  barW.length === 8, `${barW.length} bars vs 8 capsules`);
+check("the day's longest activity fills its bar", Math.max(...barW) === 100, `max ${Math.max(...barW)}%`);
+// 96 minutes against the 6-hour charge that is the day's longest — 26%, and the capsule ratio for
+// the same pair is nothing like it.
+const stayPct = Math.round((96 * 60 / E("e10").message.interval!.duration_seconds) * 100);
+check("a 96-minute stay reads as its true share of the day's longest",
+  barW.some((w) => Math.abs(w - stayPct) < 1), `expected ~${stayPct}%, got ${barW.join(",")}`);
+// A floor for *presence*, not proportion: 60s of 6h is 0.28% and would round to a sub-pixel
+// sliver, reading as "no bar" — i.e. as missing data rather than as a short event. Same bargain as
+// CAP_MIN on the capsule, which is why the exact figure stays in text right above it.
+check("a 60-second span still shows a sliver rather than nothing", Math.min(...barW) === 2,
+  `min ${Math.min(...barW)}%`);
+// It restates the duration text, so it must not also claim to be interactive or announce itself
+// twice to a screen reader.
+check("the bar is decorative to assistive tech", dt.includes('class="ev-bar" aria-hidden="true"'));
 check("a payment shows its amount", dt.includes("CHF 6.20"));
 // "no host" appears exactly on the moments the layout found no container for — here the
 // orphan payment and the junk charge that fell out of the activity lane. A hosted moment says
