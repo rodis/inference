@@ -63,10 +63,20 @@ the point of the second lane. The innermost (shortest) container wins, so a long
 claim a payment that fell inside a short trip.
 
 The scale is deliberately "broken": steps are proportional to elapsed minutes but floored so
-labels have room, log-compressed past `MAX_STEP` so a lull doesn't run off-screen (`stepFor`),
+labels have room, log-compressed past `MAX_STEP` so a lull doesn't run off-screen (`compress`),
 and a genuinely quiet stretch collapses to a labelled divider. Two consequences: a span crowded
 with moments grows taller than its duration alone implies, and a busy hour therefore gets more
 room than a dead one.
+
+**Each activity is charged for its dwell once** (`dwell`), not once per stretch. This is the
+difference between a capsule sized by its *duration* and one sized by its *interruptions*: out past
+the knee `compress` is nearly flat, so if every stretch pays its own concave price, three stretches
+each pay almost the full one. The same 159 minutes then cost 314px when two card payments chopped
+them into three and 166px when undisturbed — a café visit drawn tall because of where the card got
+tapped, which tells a reader nothing. With one budget per span the later stretches pay only the
+curve's tail, so the same stay draws 216px. A stretch under several spans is priced by the most
+generous claim on it, so a nested activity still gets its own room (a 15-minute trip inside a
+6-hour charge is charged against the trip's fresh budget, not squeezed into the charge's tail).
 
 **So a capsule is only *roughly* proportional — and the exact answer is horizontal.** The error
 is worst for the longest activity on the board: it absorbs all the compression, while short spans
@@ -77,11 +87,19 @@ are *inflated* by the `MIN_STEP` floor on each of their interior instants. Measu
 thousands of px tall — one vertical channel cannot carry both legibility and that range. Two
 answers, and both were needed:
 
-- `stepFor` replaced a hard `min(…, MAX_STEP)` clamp, which was **not monotone** (109 minutes and
+- `compress` replaced a hard `min(…, MAX_STEP)` clamp, which was **not monotone** (109 minutes and
   4 hours both drew as exactly 210px, so a long activity could not read as longer than a medium
-  one) and clipped that stay by 138px. A log knee keeps every extra minute worth strictly-positive
-  px forever, so rank always survives; the join is C1, so no kink is visible. The stay went
-  397px → 495px against an ideal 509, for +9% page height.
+  one). A log knee keeps every extra minute worth strictly-positive px forever, so rank always
+  survives; the join is C1, so no kink is visible.
+- The knee is tuned *tight* (96/24), and how tight is a decision the bar pays for. It was first
+  widened to 210/150 to stop that stay being clipped at all — correct while the capsule was the
+  only duration channel, but it drew the stay 495px on a 1185px page, which reads as one café visit
+  eating the day. Once the bar states duration exactly, the capsule doesn't need to buy it: with
+  the dwell budget above, the same stay is 216px on a 905px page — *shorter* than the 1087px the
+  hard clamp produced, while still the tallest activity on the board by 1.4×. The floor on
+  compression is a **rank** one, not an aesthetic one: at 48/24 a 96-minute quiet stay drew shorter
+  than a 19-minute busy trip, because `MIN_STEP` is charged per interior instant and doesn't care
+  about elapsed time. `render-check` holds that line.
 - The **duration bar** (`EventBody`) is the card's one exactly-proportional channel: width is
   `duration / the day's longest activity`, linear, no floor big enough to distort it (only a 2%
   minimum so a very short event reads as short rather than as missing). Vertical says *when, and

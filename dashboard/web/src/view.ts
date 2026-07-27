@@ -255,8 +255,8 @@ export function humanDur(sec: number): string {
 const VIS_EPS = 0.06;
 const PPM = 3.2;            // px per minute between consecutive instants
 const MIN_STEP = 34;        // …floored, so two close events still have label room
-const MAX_STEP = 210;       // …and compressed past here, so one long stretch doesn't dominate
-const KNEE = 150;           // how gently: px of compressed growth per e-fold past MAX_STEP
+const MAX_STEP = 96;        // …and compressed past here (30 min at PPM), so a lull can't dominate
+const KNEE = 24;            // how gently: px of compressed growth per e-fold past MAX_STEP
 const QUIET_MIN = 50;       // a gap wider than this (minutes) collapses to a divider
 const GAP_H = 56;           // height of a collapsed-gap divider
 const CAP_MIN = 44;         // shortest a duration capsule can be (its icon must fit)
@@ -267,23 +267,27 @@ const CAP_GAP = 3;          // hairline between two capsules stacked in one sub-
 const LINK_MIN = 8;         // shorter than this, a connector is a smudge — draw nothing
 const PAD_BOTTOM = 56;
 
-/** Px for a stretch of `dm` minutes: linear at PPM, then log-compressed past MAX_STEP.
+/** The px curve: `rawPx` (= elapsed minutes × PPM) linear up to MAX_STEP, log-compressed past it.
+ *  Concave and strictly increasing, which is what the two rules below both lean on.
  *
- *  This used to be a hard `min(MAX_STEP, …)` clamp, which is **not monotone** — a 109-minute
- *  stretch and a 4-hour one both rendered as exactly 210px, so a long activity could not read as
- *  longer than a medium one. Worse, it hit the *longest* thing on the board hardest: a 2h39 café
- *  visit with two card payments inside it wanted 509px and got 397, because the 109 quiet minutes
- *  between those payments were clipped by 138px.
+ *  **Rank must survive.** This used to be a hard `min(MAX_STEP, …)` clamp, which is not monotone —
+ *  a 109-minute stretch and a 4-hour one drew as exactly the same px, so a long activity could not
+ *  read as longer than a medium one. A logarithm keeps every extra minute worth strictly-positive
+ *  px forever, so longer always draws taller. The knee is C1 (both sides have slope 1 in px at the
+ *  join), so no kink is visible where a stretch crosses MAX_STEP.
  *
- *  A logarithm keeps every extra minute worth strictly-positive px forever (rank is preserved, so
- *  longer always draws taller) while an unbounded lull still can't run away with the page. The
- *  knee is C1: both sides have slope 1 in px at the join, so there's no visible kink where a
- *  stretch crosses MAX_STEP. */
-const stepFor = (dm: number): number => {
-  const raw = dm * PPM;
-  if (raw <= MAX_STEP) return Math.max(MIN_STEP, raw);
-  return MAX_STEP + KNEE * Math.log1p((raw - MAX_STEP) / KNEE);
-};
+ *  **But the capsule is not the duration channel.** MAX_STEP is deliberately low — 30 minutes at
+ *  PPM — because a span's exact duration is stated twice already, in text and in its horizontal
+ *  duration bar (`EventBody`). The vertical extent's remaining jobs are cheap: show that the
+ *  activity persisted, contain the moments that fell inside it, and rank it against its neighbours.
+ *  None of those needs px proportional to a lull. It was tuned the wrong way once — widened to
+ *  210/150 to stop a 2h39 café visit being clipped, back when the capsule *was* the only duration
+ *  channel, which drew that one stay 495px on a 1185px page. The floor on compression is a rank
+ *  one, not an aesthetic one: at 48/24 a 96-minute *quiet* stay drew shorter than a 19-minute
+ *  *busy* trip (see `render-check`), because MIN_STEP is charged per interior instant and doesn't
+ *  care about elapsed time. 96/24 clears that with margin. */
+const compress = (rawPx: number): number =>
+  rawPx <= MAX_STEP ? rawPx : MAX_STEP + KNEE * Math.log1p((rawPx - MAX_STEP) / KNEE);
 
 export interface SpanBox { top: number; height: number; col: number }
 /** `weak`: the host is an unnamed place (see `placeUnknown`) — its stripe is drawn fainter, so
@@ -326,23 +330,50 @@ export function dayLayout(
   const visSpans = vis.filter(isSpan).sort((a, b) => startOf(a) - startOf(b) || endOf(b) - endOf(a));
   const instants = [...new Set(vis.flatMap((e) => [startOf(e), endOf(e)]))].sort((a, b) => a - b);
 
-  /** Was anything going on across this stretch? A span whose interval overlaps it — and since
-   *  every span boundary is itself an instant, an overlap here means the span covers the whole
-   *  stretch. This is what keeps a *long, quiet activity* off the collapse path: an hour and a
-   *  half at a café produces no location fixes at all (ADR 0007 — the reason `stay` clusters
-   *  rather than fences), so the stay has zero interior instants and would otherwise collapse
-   *  its own duration to a divider labelled "1h 36m quiet", drawn on top of its own capsule.
-   *  Collapsing it also crushed the capsule to CAP_MIN-ish, hiding the fact that the drive home
-   *  starts *before* the stay ends. */
-  const busy = (a: number, b: number) => visSpans.some((s) => startOf(s) < b && endOf(s) > a);
+  /** What was going on across this stretch: the spans whose interval overlaps it — and since every
+   *  span boundary is itself an instant, an overlap here means the span covers the *whole* stretch.
+   *
+   *  Used for two things. It keeps a *long, quiet activity* off the collapse path: an hour and a
+   *  half at a café produces no location fixes at all (ADR 0007 — the reason `stay` clusters rather
+   *  than fences), so the stay has zero interior instants and would otherwise collapse its own
+   *  duration to a divider labelled "1h 36m quiet", drawn on top of its own capsule (which also
+   *  crushed the capsule to CAP_MIN-ish, hiding that the drive home starts *before* the stay ends).
+   *  And it's what lets each activity be charged for its dwell **once** — see below. */
+  const covering = (a: number, b: number) => visSpans.filter((s) => startOf(s) < b && endOf(s) > a);
+
+  // How much raw px each span has already been charged for time inside it. One budget per
+  // activity, spent down across that activity's stretches — NOT a fresh price per stretch.
+  //
+  // Pricing each stretch on its own made a span's height depend on **how many pieces its interior
+  // moments chopped it into**, which is meaningless to a reader: because `compress` is nearly flat
+  // out here, three stretches each pay almost the full concave price, so the same 159 minutes cost
+  // 314px chopped by two card payments and 166px unchopped. A 2h39 café visit was tall because of
+  // where the card got tapped. Charging the *span* means the second and third stretch pay only the
+  // margin — the curve's tail, a few px — and the capsule ends up the size its duration earns
+  // (216px) rather than the size its interruptions earn.
+  //
+  // A stretch under several spans is priced by the most generous claim on it, so a nested activity
+  // still gets its own room: a 15-minute trip inside a 6-hour charge is charged against the trip's
+  // fresh budget, not squeezed into the tail of the charge's. An *uncovered* stretch has no budget
+  // to draw on and simply pays the curve.
+  const dwell = new Map<string, number>();
 
   const Yat = new Map<number, number>();
   let cur = 0;
   instants.forEach((t, i) => {
     if (i) {
-      const prev = instants[i - 1], dm = (t - prev) / 60;
-      if (dm > QUIET_MIN && !busy(prev, t)) { gaps.push({ y: cur + GAP_H / 2, seconds: t - prev }); cur += GAP_H; }
-      else cur += stepFor(dm);
+      const prev = instants[i - 1], dm = (t - prev) / 60, raw = dm * PPM;
+      const inside = covering(prev, t);
+      if (dm > QUIET_MIN && !inside.length) { gaps.push({ y: cur + GAP_H / 2, seconds: t - prev }); cur += GAP_H; }
+      else {
+        let px = inside.length ? 0 : compress(raw);
+        for (const s of inside) {
+          const spent = dwell.get(s.id) ?? 0;
+          px = Math.max(px, compress(spent + raw) - compress(spent));
+          dwell.set(s.id, spent + raw);
+        }
+        cur += Math.max(MIN_STEP, px);
+      }
     }
     Yat.set(t, cur);
   });

@@ -213,21 +213,47 @@ check("no divider lands inside an activity's capsule",
 check("a 96-minute stay is taller than a 19-minute trip", stayBox.height > tripBox.height,
   `stay ${stayBox.height} vs trip ${tripBox.height}`);
 
-// A stretch past MAX_STEP used to be *clamped*, which is not monotone: 109 minutes and 4 hours
-// both drew as exactly 210px, so the longest activity of the day could not read as the longest —
-// and the clip cost a real 2h39 café stay 138px of its 509 (2026-07-27). `stepFor` log-compresses
-// instead, so every extra minute is still worth strictly-positive px. Measured on a lone span,
-// which has no interior instants and therefore renders exactly one step.
+// A stretch past MAX_STEP used to be *clamped*, which is not monotone: two very different lulls
+// drew as identical px, so the longest activity of the day could not read as the longest.
+// `stepFor` log-compresses instead, so every extra minute is worth strictly-positive px forever.
+// Asserted as an ascending chain rather than against a px constant: MAX_STEP/KNEE are a tuning
+// knob and have already moved once (210/150 -> 48/24, when the duration bar took over the job of
+// stating duration), while the *ordering* is the property that must never break.
+// Measured on a lone span, which has no interior instants and so renders exactly one step.
 const soloHeight = (from: string, to: string) => {
   const one = prepare([ev("stay", "derived", to, { span: [from, to], place: { label: "solo" } })] as unknown as AwareEvent[]);
   return dayLayout(one.all, () => 1, (nm) => catOf(nm).c).spans.get(one.all[0].id)!.height;
 };
-const h109 = soloHeight("00:00", "01:49"), h240 = soloHeight("00:00", "04:00");
-check("a stretch past MAX_STEP is compressed, not clipped", h109 > 210, `${Math.round(h109)}px`);
-check("longer always draws taller — the scale stays monotone", h240 > h109 + 20,
-  `109min ${Math.round(h109)}px vs 240min ${Math.round(h240)}px`);
-check("…but compressed: 2.2× the minutes is well under 2.2× the px", h240 < h109 * 1.6,
-  `ratio ${(h240 / h109).toFixed(2)}`);
+const [h109, h240, h480] = [soloHeight("00:00", "01:49"), soloHeight("00:00", "04:00"), soloHeight("00:00", "08:00")];
+const chain = `${Math.round(h109)}/${Math.round(h240)}/${Math.round(h480)}px`;
+check("longer always draws taller — the scale never clips flat", h109 < h240 && h240 < h480, chain);
+// …and it's heavily compressed on purpose, because the capsule is NOT the duration channel (the
+// bar is): 4.4× the minutes buys under 1.5× the px. This is what keeps a 2h39 café visit from
+// turning a 7-hour day into a 1185px page, which is exactly what 210/150 did.
+check("…but 4.4× the minutes buys well under 1.5× the px", h480 < h109 * 1.5,
+  `${chain} — ratio ${(h480 / h109).toFixed(2)}`);
+
+// An activity is charged for its dwell ONCE (`dwell` in dayLayout). Pricing each stretch on its own
+// made a capsule's height depend on how many pieces its interior moments chopped it into — because
+// `compress` is nearly flat out there, every piece paid almost the full concave price, so one real
+// 2h39 café visit drew 314px with two card payments inside it and 166px without. The stay was tall
+// because of where the card got tapped, which tells a reader nothing. Same span, same duration, two
+// interior payments: the difference must be the rows those payments need, not a doubling.
+const ROW_MIN_PX = 34;   // = MIN_STEP / ROW_MIN in view.ts: the vertical room one moment row needs
+const stayHeight = (moments: string[]) => {
+  const rows = [
+    ev("stay", "derived", "13:28", { span: ["10:49", "13:28"], place: { label: "dwell" } }),
+    ...moments.map((m) => ev("credit_card_payment", "raw", m, { amount: 5 })),
+  ];
+  const one = prepare(rows as unknown as AwareEvent[]);
+  const L2 = dayLayout(one.all, () => 1, (nm) => catOf(nm).c);
+  return L2.spans.get(one.all.find(isSpan)!.id)!.height;
+};
+const plain = stayHeight([]), chopped = stayHeight(["10:51", "12:40"]);
+const both = `plain ${Math.round(plain)}px vs chopped ${Math.round(chopped)}px`;
+check("height comes from an activity's duration, not from how its moments chop it",
+  chopped - plain <= 2 * ROW_MIN_PX + 8, both);
+check("…though each interior moment still earns its own row", chopped > plain, both);
 
 // A second sub-column is earned by genuine concurrency only. A stay ends when the fix that broke
 // its cluster arrives — after the drive away has begun — so the café visit and the trip home
