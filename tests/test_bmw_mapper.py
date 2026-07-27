@@ -102,29 +102,36 @@ def test_unrecognized_lock_state_does_not_disturb_the_baseline(mapper):
 
 # --- the stream inventory ---------------------------------------------------------------
 
-def test_unmapped_descriptor_is_logged_with_its_value(mapper, caplog):
-    """The odometer/GPS case: value included, because the value IS the finding."""
+def test_descriptor_is_logged_with_its_value(mapper, caplog):
+    """Value included, because for a numeric descriptor the value IS the finding."""
     with caplog.at_level("INFO"):
-        assert mapper.process(_msg("vehicle.vehicle.travelledDistance", 48213)) == []
-    assert "vehicle.vehicle.travelledDistance" in caplog.text
-    assert "48213" in caplog.text
+        mapper.process(_msg("vehicle.cabin.sunroof.status", "CLOSED"))
+    assert "vehicle.cabin.sunroof.status" in caplog.text
+    assert "CLOSED" in caplog.text
 
 
-def test_unmapped_descriptor_is_logged_once_per_descriptor(mapper, caplog):
+def test_descriptor_is_logged_once_per_descriptor(mapper, caplog):
     """Permanent-on means once per id, not once per message — the stream must stay readable."""
     with caplog.at_level("INFO"):
         for _ in range(5):
-            mapper.process(_msg("vehicle.cabin.window.row1.driver.isOpen", "CLOSED"))
+            mapper.process(_msg("vehicle.cabin.window.row1.driver.status", "CLOSED"))
         mapper.process(_msg("vehicle.body.hood.isOpen", "CLOSED"))
-    unmapped = [r for r in caplog.records if "UNMAPPED" in r.getMessage()]
-    assert len(unmapped) == 2
+    seen = [r for r in caplog.records if "descriptor in stream" in r.getMessage()]
+    assert len(seen) == 2
 
 
-def test_unmapped_descriptor_is_logged_even_when_seen_only_once(mapper, caplog):
+def test_descriptor_is_logged_even_when_seen_only_once(mapper, caplog):
     """Inventory happens before the baseline check, or a once-only descriptor stays invisible."""
     with caplog.at_level("INFO"):
-        mapper.process(_msg("vehicle.drivetrain.fuel.percentage", 61))
-    assert "vehicle.drivetrain.fuel.percentage" in caplog.text
+        mapper.process(_msg("vehicle.body.trunk.isOpen", False))
+    assert "vehicle.body.trunk.isOpen" in caplog.text
+
+
+def test_mapped_but_unchanging_descriptor_is_still_inventoried(mapper, caplog):
+    """How we tell "this X1 never sends isMoving" from "we never looked" — it emits nothing."""
+    with caplog.at_level("INFO"):
+        assert mapper.process(_msg(mapper_mod.DESCRIPTOR_MOTION, "false")) == []
+    assert mapper_mod.DESCRIPTOR_MOTION in caplog.text
 
 
 def test_one_message_can_carry_a_whole_batch(mapper):
@@ -148,4 +155,116 @@ def test_one_message_can_carry_a_whole_batch(mapper):
             ],
         }
     )
-    assert _names(emitted) == [mapper_mod.SIG_DOOR_OPEN, mapper_mod.SIG_UNLOCKED]
+    assert _names(emitted) == [
+        mapper_mod.SIG_DOOR_OPEN,
+        mapper_mod.SIG_UNLOCKED,
+        mapper_mod.SIG_ODOMETER,  # a reading rides along in the same batch
+    ]
+
+
+# --- readings: the value is the fact, so NOT baseline-silent (2026-07-27) ----------------
+
+def _extra(emitted, name):
+    return next(e for n, _ts, e in emitted if n == name)
+
+
+def test_odometer_emits_on_first_observation_with_its_value(mapper):
+    """Unlike an edge, a reading has no phantom to guard against — losing it costs a delta."""
+    emitted = mapper.process(_msg(mapper_mod.DESCRIPTOR_ODOMETER, 24819))
+    assert _names(emitted) == [mapper_mod.SIG_ODOMETER]
+    assert _extra(emitted, mapper_mod.SIG_ODOMETER)["odometer_km"] == 24819
+
+
+def test_repeated_identical_reading_emits_nothing(mapper):
+    """De-duplication, not baseline-silence, is what stops a re-sent state dump spamming."""
+    mapper.process(_msg(mapper_mod.DESCRIPTOR_ODOMETER, 24819))
+    assert mapper.process(_msg(mapper_mod.DESCRIPTOR_ODOMETER, 24819)) == []
+    assert _names(mapper.process(_msg(mapper_mod.DESCRIPTOR_ODOMETER, 24828))) == [
+        mapper_mod.SIG_ODOMETER
+    ]
+
+
+def test_zero_odometer_is_a_reading_not_a_false(mapper):
+    """Guards the _as_bool trap: 0 km must stay a number, not coerce to False and vanish."""
+    emitted = mapper.process(_msg(mapper_mod.DESCRIPTOR_ODOMETER, 0))
+    assert _extra(emitted, mapper_mod.SIG_ODOMETER)["odometer_km"] == 0
+
+
+def test_fuel_level_is_a_reading(mapper):
+    emitted = mapper.process(_msg(mapper_mod.DESCRIPTOR_FUEL, 18))
+    assert _names(emitted) == [mapper_mod.SIG_FUEL]
+    assert _extra(emitted, mapper_mod.SIG_FUEL)["fuel_level"] == 18
+
+
+# --- GPS fusion --------------------------------------------------------------------------
+
+def test_half_a_coordinate_emits_nothing(mapper):
+    assert mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LAT, 47.1715, ts=1785060000)) == []
+
+
+def test_lat_and_lon_fuse_into_one_event(mapper):
+    """One car_location per batch, not one per component — a lat alone locates nothing."""
+    mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LAT, 47.1715, ts=1785060000))
+    emitted = mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LON, 8.5163, ts=1785060001))
+    assert _names(emitted) == [mapper_mod.SIG_LOCATION]
+    extra = _extra(emitted, mapper_mod.SIG_LOCATION)
+    assert (extra["lat"], extra["lon"]) == (47.1715, 8.5163)
+
+
+def test_a_fresh_lat_does_not_pair_with_the_previous_parks_lon(mapper):
+    """The window is the whole point: pairing across batches would invent a location."""
+    mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LAT, 47.1715, ts=1785060000))
+    mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LON, 8.5163, ts=1785060001))
+    # Hours later the car parks elsewhere and latitude arrives first.
+    assert mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LAT, 47.4000, ts=1785070000)) == []
+    assert _names(
+        mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LON, 8.6000, ts=1785070001))
+    ) == [mapper_mod.SIG_LOCATION]
+
+
+def test_an_unmoved_car_reports_no_new_location(mapper):
+    """A reconnect re-sends the same point; that is not a move."""
+    mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LAT, 47.1715, ts=1785060000))
+    mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LON, 8.5163, ts=1785060001))
+    mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LAT, 47.1715, ts=1785060100))
+    assert mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LON, 8.5163, ts=1785060101)) == []
+
+
+def test_altitude_rides_along_when_it_belongs_to_the_same_batch(mapper):
+    mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_ALT, 423, ts=1785060000))
+    mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LAT, 47.1715, ts=1785060000))
+    emitted = mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LON, 8.5163, ts=1785060001))
+    assert _extra(emitted, mapper_mod.SIG_LOCATION)["altitude"] == 423
+
+
+def test_stale_altitude_is_left_out_rather_than_attached(mapper):
+    mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_ALT, 423, ts=1785060000))
+    mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LAT, 47.4000, ts=1785070000))
+    emitted = mapper.process(_msg(mapper_mod.DESCRIPTOR_GPS_LON, 8.6000, ts=1785070001))
+    assert "altitude" not in _extra(emitted, mapper_mod.SIG_LOCATION)
+
+
+# --- the catch-all: nothing is discarded any more -----------------------------------------
+
+def test_unrecognized_descriptor_change_becomes_one_generic_event(mapper):
+    """One event name for the whole tail of the stream, carrying descriptor + value."""
+    mapper.process(_msg("vehicle.cabin.window.row1.driver.status", "CLOSED"))  # baseline
+    emitted = mapper.process(_msg("vehicle.cabin.window.row1.driver.status", "OPEN"))
+    assert _names(emitted) == [mapper_mod.SIG_STATE_CHANGE]
+    assert _extra(emitted, mapper_mod.SIG_STATE_CHANGE) == {
+        "descriptor": "vehicle.cabin.window.row1.driver.status",
+        "value": "OPEN",
+    }
+
+
+def test_the_catch_all_is_baseline_silent(mapper):
+    """Or the full state dump on every reconnect would emit ~20 events."""
+    assert mapper.process(_msg("vehicle.vehicle.antiTheftAlarmSystem.alarm.armStatus", "armed")) == []
+
+
+def test_the_catch_all_does_not_shadow_a_mapped_descriptor(mapper):
+    """A door edge stays a door edge — it must not also surface as a generic state change."""
+    mapper.process(_msg(mapper_mod.DESCRIPTOR_DRIVER_DOOR, "CLOSED"))
+    assert _names(mapper.process(_msg(mapper_mod.DESCRIPTOR_DRIVER_DOOR, "OPEN"))) == [
+        mapper_mod.SIG_DOOR_OPEN
+    ]

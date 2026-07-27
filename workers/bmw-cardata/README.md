@@ -39,9 +39,51 @@ required**, and we add a producer, not a Kafka topic (stays under the Aiven 5-to
 | `vehicle.drivetrain.engine.isActive`      | →on / →off      | `car_ignition_on` / `_off`| intended end anchor | ❌ never |
 | `vehicle.vehicle.deepSleepModeActive`     | →true           | `car_deep_sleep`          | slow park backstop | ❌ never |
 
-First observation of each descriptor sets a baseline **silently**; only genuine
+First observation of an **edge** descriptor sets a baseline **silently**; only genuine
 transitions emit (so a parked car's initial state doesn't mint phantom events on the
-hourly reconnect).
+hourly reconnect). Readings follow the opposite rule — see below.
+
+### Readings and the catch-all (2026-07-27)
+
+Everything else the car streams used to reach only a *rotating* pod log, so it was
+unrecoverable within days. It is now persisted too:
+
+| descriptor | canonical signal | payload |
+|---|---|---|
+| `vehicle.vehicle.travelledDistance` | `car_odometer` | `{odometer_km}` |
+| `…currentLocation.latitude` + `.longitude` (+ `.altitude`) | `car_location` | `{lat, lon, altitude?}` |
+| `vehicle.drivetrain.fuelSystem.level` | `car_fuel_level` | `{fuel_level}` |
+| *anything else that changes* | `car_state_change` | `{descriptor, value}` |
+
+The catch-all is deliberate: one event name for the whole tail of the stream instead of
+fifteen, keeping the name space small while making the history queryable —
+
+```sql
+select message->>'descriptor', message->>'value', occurred_at
+from events where name = 'car_state_change' order by occurred_at;
+```
+
+**Two kinds of descriptor, two rules.** An *edge* (door, lock, motion) is baseline-silent,
+because a retained "door closed" must not mint a phantom on every reconnect. A *reading*
+(odometer, GPS, fuel) is the opposite: the value **is** the fact, there is no phantom to
+guard against, so the first observation is emitted and repeats are de-duplicated instead.
+Reversed, you would either lose the first reading or emit one per reconnect.
+
+**GPS is fused, not three events.** Latitude, longitude and altitude arrive as separate
+descriptors in separate messages ~250ms apart, and a latitude without a longitude locates
+nothing. A point is emitted only when lat and lon carry timestamps within 10s of each
+other — which also yields exactly one event per batch rather than one per component, since
+a fresh latitude finds the *previous* park's longitude outside the window.
+
+All of these are **observation-only**: no engine consumes these names, so deploying them
+cannot change any derivation. `car_odometer` is the prerequisite for a junk-trip veto — a
+trip whose odometer delta is 0 is provably not a trip, which is a physical fact rather than
+a heuristic weight.
+
+⚠️ **Cadence is unmeasured.** Whether `travelledDistance` and the GPS point update *during*
+a drive or only in the park/wake batch is exactly what mapping them will reveal. If GPS
+turns out to stream continuously, `car_location` volume could be much higher than the
+handful/day the park-only model predicts — worth a look at the first day's rows.
 
 `car_locked`/`car_unlocked` are emitted into `raw_sensors` but appear in **no** weight map:
 they persist to Neon for analysis, and the runtime ignores names no engine consumes. Direction
@@ -49,29 +91,30 @@ is why they matter — every car-native signal we have today (and the phone's
 `car_lock_state_change`) fires at entry *and* exit, which is what caps the door at weight 4.
 Weight them only after a replay (`scripts/trip_eval.py`), as ADR 0005/0006 did.
 
-## Stream inventory (unmapped descriptors)
+## Stream inventory
 
-The mapper logs every descriptor it does **not** turn into a signal, once per descriptor per
-process, with its value:
+The mapper logs each descriptor's **first appearance**, once per descriptor per process,
+with its value:
 
 ```
-UNMAPPED descriptor in stream: vehicle.vehicle.travelledDistance = 24809
+descriptor in stream: vehicle.vehicle.travelledDistance = 24809
 ```
 
-This exists because the silent `continue` it replaced made "the car never sends it"
-indistinguishable from "we never looked" — the container subscribes to odometer and GPS
-lat/lon, which were being dropped on the floor, and `BMW_DEBUG_LOG_ALL` (whole envelopes, off
-by default) had never been enabled in production. Inventory runs *before* the baseline check,
-so a descriptor that appears exactly once still shows up.
+It originally existed because the silent `continue` it replaced made "the car never sends
+it" indistinguishable from "we never looked". Now that nothing is discarded, its remaining
+job is narrower but still real: it covers the **mapped-but-never-changing** case, which
+emits no event at all. That is precisely how we can say this X1 never sends `isMoving`
+rather than that we stopped looking. Inventory runs *before* the baseline check, so a
+descriptor appearing exactly once still shows up.
 
 ```bash
-kubectl -n inference logs deploy/bmw-cardata | grep UNMAPPED
+kubectl -n inference logs deploy/bmw-cardata | grep 'descriptor in stream'
 ```
 
 **Read once per process, so this is the stream's _vocabulary_, not its per-trip cadence.** The
 first message after connect is a full state dump, so nearly every id below was logged from that
-rather than from driving. Learning which descriptors actually *change* at entry/exit needs either
-mapping them or a temporary `BMW_DEBUG_LOG_ALL` window.
+rather than from driving. Per-trip cadence is now answerable from Neon instead — query the
+`car_state_change` / `car_odometer` / `car_location` rows by `occurred_at`.
 
 ### First inventory (2026-07-27, one drive) — 24 descriptors
 
@@ -111,7 +154,7 @@ The first is why the `car_locked`/`car_unlocked` mapping shipped 07-26 never fir
 | `BMW_TOPIC_TEMPLATE`   |    | `{gcid}/+` | ✅ confirmed (wildcard, all VINs on the gcid) |
 | `BMW_INGEST_PATH`      |    | `/sensors/bmw` | |
 | `BMW_REFRESH_MARGIN_SECONDS` | | `300` | refresh id_token this long before expiry |
-| `BMW_DEBUG_LOG_ALL`    |    | off | log every raw envelope. Rarely needed now — the permanent `UNMAPPED` inventory (above) covers the "what else is in the stream" question without the noise |
+| `BMW_DEBUG_LOG_ALL`    |    | off | log every raw envelope. Should now be unnecessary — the whole stream persists to Neon (`car_state_change` et al.), which answers both "what else is in the stream" and "how often", without the noise or the log rotation |
 
 ## Run locally
 
