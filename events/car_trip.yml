@@ -7,11 +7,30 @@ enabled: true
 # remembers the open got_into_the_car and emits car_trip when got_out_the_car arrives,
 # with both as lineage (duration is got_out.timestamp - got_into.timestamp). Both inputs
 # are themselves derived; the runtime feeds them back in-process (ADR 0002).
-engine: session_window
+#
+# `validated_session_window` (not plain `session_window`) adds a displacement guardrail:
+# while the session is open it folds the raw `location_ping` stream into a bounding box, and
+# refuses to mint a trip across a span the phone demonstrably did not move over. The
+# detectors on both ends are direction-ambiguous (issue #23), so they can fire on the wrong
+# side of a boundary and hand this engine a time-INVERTED session — 2026-07-27 recorded a
+# 15-minute "drive" across a vet visit that way. Displacement is the one check that needs no
+# tuning, because it is a physical fact rather than a threshold over noisy evidence.
+#
+# Measured over every trip since the Overland lane landed: real trips span 1533-6351m, the
+# phantom spanned 34m. Hence 300m — ~5x under the shortest real trip, ~9x over the phantom.
+# Sparse GPS is NOT treated as evidence of a phantom: below min_fixes, or when the fixes
+# cover less than min_coverage_ratio of the session, the engine abstains and emits the trip.
+# See the engine docstring for why abstain/reject are asymmetric and why extent (not net
+# displacement) is the metric — a drive that returns to its origin is still a drive.
+engine: validated_session_window
 engine_config:
   start_event: got_into_the_car
   end_event: got_out_the_car
   max_duration_seconds: 21600   # 6h — a got_out beyond this won't pair to a stale start
+  min_displacement_m: 300       # below this the entity went nowhere; the session isn't a trip
+  min_fixes: 3                  # fewer accepted fixes than this: abstain, don't reject
+  min_coverage_ratio: 0.5       # fixes must span >= half the session to refute it
+  max_accuracy_m: 100           # a vague fix can't widen the box (mirrors stay.yml)
 
 source_topic: raw_sensors
 sink_topic: high_level_events

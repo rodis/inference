@@ -6,6 +6,7 @@ from inference.engines.geofence import GeofenceEngine
 from inference.engines.session_gated_window import SessionGatedWindowEngine
 from inference.engines.session_window import SessionWindowEngine
 from inference.engines.stay_window import StayWindowEngine
+from inference.engines.validated_session_window import ValidatedSessionWindowEngine
 from inference.engines.weighted_window import WeightedWindowEngine
 
 
@@ -296,3 +297,170 @@ def test_stay_ignores_vague_fixes(state, event):
     assert eng.decide(_fix(event, T + 900, acc=500, **_AWAY), state) is None  # too vague to close it
     d = eng.decide(_fix(event, T + 1200, **_AWAY), state)
     assert d is not None and d.occurred_at == T + 600
+
+
+# --- validated_session_window ---------------------------------------------------
+
+# Mirrors car_trip.yml. _HOME/_NEAR (9.4m apart) stand in for a parked phone jittering;
+# _AWAY is 4025m and _FAR 1007m from _HOME, so both clear min_displacement_m 300.
+_FAR = dict(lat=47.21600, lon=8.57468)
+
+
+def _validated(**over):
+    cfg = {"start_event": "in", "end_event": "out", "max_duration_seconds": 21600,
+           "min_displacement_m": 300, "min_fixes": 3, "min_coverage_ratio": 0.5,
+           "max_accuracy_m": 100}
+    cfg.update(over)
+    return ValidatedSessionWindowEngine(cfg)
+
+
+def test_validated_consumes_the_location_stream_on_top_of_the_pair():
+    eng = _validated()
+    assert eng.input_event_names() == {"in", "out", "location_ping"}
+
+
+def test_validated_accepts_a_trip_that_moved(state, event):
+    eng = _validated()
+    eng.decide(event("in", T, id="S"), state)
+    eng.decide(_fix(event, T + 10), state)
+    eng.decide(_fix(event, T + 300, **_AWAY), state)
+    eng.decide(_fix(event, T + 590, **_AWAY), state)                  # covers 580/600 of the span
+    d = eng.decide(event("out", T + 600, id="E"), state)
+    assert d is not None and d.occurred_at == T + 600
+    # Lineage stays the pair: folding the fixes in would rewrite the interval capability,
+    # which projects the trip's span from the lineage extent.
+    assert [s["message"]["id"] for s in d.sources] == ["S", "E"]
+
+
+def test_validated_rejects_a_stationary_session(state, event):
+    """The real 2026-07-27 phantom: got_out fired on the exit and got_into on the entry, so
+    the session spanned a vet visit the phone was parked through (extent 34m over 918s)."""
+    eng = _validated()
+    eng.decide(event("in", T), state)
+    for i, off in enumerate((10, 300, 600, 900)):
+        eng.decide(_fix(event, T + off, **(_NEAR if i % 2 else _HOME)), state)
+    assert eng.decide(event("out", T + 918), state) is None
+
+
+def test_validated_abstains_below_min_fixes(state, event):
+    """The 2026-07-24 trip had exactly one fix. Sparse GPS is absence of evidence, not
+    evidence of a phantom — so the trip is emitted."""
+    eng = _validated()
+    eng.decide(event("in", T), state)
+    eng.decide(_fix(event, T + 300), state)                           # 1 fix < min_fixes 3
+    assert eng.decide(event("out", T + 600), state) is not None
+
+
+def test_validated_abstains_when_fixes_do_not_cover_the_session(state, event):
+    """Overland batches; a stationary burst at the start says nothing about the other 90%."""
+    eng = _validated()
+    eng.decide(event("in", T), state)
+    for off in (10, 20, 30):
+        eng.decide(_fix(event, T + off), state)                       # coverage 20/3600 << 0.5
+    assert eng.decide(event("out", T + 3600), state) is not None
+
+
+def test_validated_ignores_fixes_outside_a_session(state, event):
+    """Fixes between trips must not accumulate, or the next session inherits a stale box."""
+    eng = _validated()
+    eng.decide(_fix(event, T, **_AWAY), state)                        # no open session
+    eng.decide(_fix(event, T + 10, **_FAR), state)
+    eng.decide(event("in", T + 20), state)
+    for off in (30, 300, 600):
+        eng.decide(_fix(event, T + off), state)                       # stationary, 3 fixes
+    assert eng.decide(event("out", T + 620), state) is None           # the earlier spread is gone
+
+
+def test_validated_vague_fix_cannot_fake_displacement(state, event):
+    """Guards the ACCEPT side: a fix too vague to place must not widen the box."""
+    eng = _validated()
+    eng.decide(event("in", T), state)
+    for off in (10, 300, 600):
+        eng.decide(_fix(event, T + off), state)
+    eng.decide(_fix(event, T + 610, acc=500, **_AWAY), state)         # 4km away but acc 500
+    assert eng.decide(event("out", T + 620), state) is None
+
+
+def test_validated_implausible_jump_cannot_fake_displacement(state, event):
+    """The motivating real fix reported acc 5 while sitting 700m off — reported accuracy is
+    not a safety net, so the speed guard has to catch it too."""
+    eng = _validated()
+    eng.decide(event("in", T), state)
+    for off in (10, 300, 600):
+        eng.decide(_fix(event, T + off), state)
+    eng.decide(_fix(event, T + 601, acc=5, **_AWAY), state)           # 4km in 1s
+    assert eng.decide(event("out", T + 620), state) is None
+
+
+def test_validated_accepts_an_out_and_back_drive(state, event):
+    """Extent, not net displacement: a drive that returns to its origin is still a drive."""
+    eng = _validated()
+    eng.decide(event("in", T), state)
+    eng.decide(_fix(event, T + 10), state)
+    eng.decide(_fix(event, T + 300, **_FAR), state)                   # 1007m out
+    eng.decide(_fix(event, T + 590), state)                           # and back home
+    assert eng.decide(event("out", T + 600), state) is not None
+
+
+def test_validated_rejection_still_consumes_the_session(state, event):
+    """A refused trip must not leave the start open, or the next `out` pairs to it."""
+    eng = _validated()
+    eng.decide(event("in", T), state)
+    for off in (10, 300, 600):
+        eng.decide(_fix(event, T + off), state)
+    assert eng.decide(event("out", T + 620), state) is None
+    assert eng.decide(event("out", T + 700), state) is None           # no start left to pair
+
+
+def test_validated_track_resets_between_sessions(state, event):
+    """A real trip followed by a stationary one: the second must not inherit the first's box."""
+    eng = _validated()
+    eng.decide(event("in", T), state)
+    eng.decide(_fix(event, T + 10), state)
+    eng.decide(_fix(event, T + 300, **_AWAY), state)
+    eng.decide(_fix(event, T + 590, **_AWAY), state)
+    assert eng.decide(event("out", T + 600), state) is not None       # moved 4km: accepted
+    eng.decide(event("in", T + 1000), state)
+    for off in (1010, 1300, 1600):
+        eng.decide(_fix(event, T + off, **_HOME), state)
+    assert eng.decide(event("out", T + 1620), state) is None          # stationary: rejected
+
+
+def test_validated_stale_start_does_not_leak_its_track(state, event):
+    """A start that never gets a timely end is dropped by the base engine; its fixes must go
+    with it, or they would be validated against the *next* session."""
+    eng = _validated(max_duration_seconds=100)
+    eng.decide(event("in", T), state)
+    eng.decide(_fix(event, T + 10, **_AWAY), state)
+    eng.decide(_fix(event, T + 20, **_FAR), state)
+    eng.decide(_fix(event, T + 30, **_AWAY), state)
+    assert eng.decide(event("out", T + 500), state) is None           # stale: 500 > 100
+    eng.decide(event("in", T + 1000), state)
+    for off in (1010, 1300, 1600):
+        eng.decide(_fix(event, T + off), state)
+    assert eng.decide(event("out", T + 1620), state) is None          # judged on its OWN fixes
+
+
+def test_validated_ignores_a_fix_that_predates_the_session(state, event):
+    """Routing order is ARRIVAL order, not event order, so a batched producer delivers old
+    fixes mid-session. Caught in replay (2026-07-19 13:20): one fix from 11:26 pushed n past
+    min_fixes AND stretched coverage to 9.23, suppressing a real trip on a box that actually
+    measured 2h of sitting at home."""
+    eng = _validated()
+    eng.decide(event("in", T), state)
+    eng.decide(_fix(event, T - 7200), state)                          # arrives now, dated 2h ago
+    eng.decide(_fix(event, T + 10), state)
+    eng.decide(_fix(event, T + 590), state)
+    # Only 2 in-session fixes remain -> abstain, not reject.
+    assert eng.decide(event("out", T + 600), state) is not None
+
+
+def test_validated_coverage_is_a_true_fraction_of_the_session(state, event):
+    """With the clamp, f0 can't precede the session, so coverage <= 1 and the guard means
+    what it says. A stale fix must not make a 20s stationary burst look like full coverage."""
+    eng = _validated()
+    eng.decide(event("in", T), state)
+    eng.decide(_fix(event, T - 3600), state)                          # dropped
+    for off in (10, 20, 30):
+        eng.decide(_fix(event, T + off), state)                       # 3 fixes, coverage 20/3600
+    assert eng.decide(event("out", T + 3600), state) is not None       # abstains on coverage
