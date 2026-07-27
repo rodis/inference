@@ -32,8 +32,8 @@ required**, and we add a producer, not a Kafka topic (stays under the Aiven 5-to
 | descriptor                                | edge            | canonical signal          | role | seen live? |
 |-------------------------------------------|-----------------|---------------------------|------|------------|
 | `vehicle.cabin.door.row1.driver.isOpen`   | →open           | `car_driver_door_opened`  | non-directional corroborator, in both weight maps (4 / 5) | ✅ ~94%/trip |
-| `vehicle.cabin.door.lock.status`          | →UNLOCKED       | `car_unlocked`            | **directional** entry cue — observation only, **no weight yet** | ❓ |
-| `vehicle.cabin.door.lock.status`          | →SECURED        | `car_locked`              | **directional** exit cue — observation only, **no weight yet** | ❓ |
+| `vehicle.cabin.door.status`               | →UNLOCKED       | `car_unlocked`            | **directional** entry cue — observation only, **no weight yet** | ❓ id corrected 07-27, awaiting a drive |
+| `vehicle.cabin.door.status`               | →SECURED        | `car_locked`              | **directional** exit cue — observation only, **no weight yet** | ❓ same |
 | `vehicle.isMoving`                        | false→true      | `car_started_moving`      | intended start anchor | ❌ never streams on this X1 |
 | `vehicle.isMoving`                        | true→false      | `car_stopped_moving`      | weak end corroborator | ❌ never |
 | `vehicle.drivetrain.engine.isActive`      | →on / →off      | `car_ignition_on` / `_off`| intended end anchor | ❌ never |
@@ -55,18 +55,46 @@ The mapper logs every descriptor it does **not** turn into a signal, once per de
 process, with its value:
 
 ```
-UNMAPPED descriptor in stream: vehicle.vehicle.travelledDistance = 48213
+UNMAPPED descriptor in stream: vehicle.vehicle.travelledDistance = 24809
 ```
 
 This exists because the silent `continue` it replaced made "the car never sends it"
 indistinguishable from "we never looked" — the container subscribes to odometer and GPS
 lat/lon, which were being dropped on the floor, and `BMW_DEBUG_LOG_ALL` (whole envelopes, off
 by default) had never been enabled in production. Inventory runs *before* the baseline check,
-so a descriptor that appears exactly once still shows up. One drive now enumerates the stream:
+so a descriptor that appears exactly once still shows up.
 
 ```bash
 kubectl -n inference logs deploy/bmw-cardata | grep UNMAPPED
 ```
+
+**Read once per process, so this is the stream's _vocabulary_, not its per-trip cadence.** The
+first message after connect is a full state dump, so nearly every id below was logged from that
+rather than from driving. Learning which descriptors actually *change* at entry/exit needs either
+mapping them or a temporary `BMW_DEBUG_LOG_ALL` window.
+
+### First inventory (2026-07-27, one drive) — 24 descriptors
+
+The container is **much** larger than the 8 ADR 0006 recorded. Grouped by what they'd be good for:
+
+| descriptor | value seen | why it matters |
+|---|---|---|
+| `vehicle.vehicle.travelledDistance` | `24809` | odometer → trip **distance**; also ground truth for junk-trip adjudication (a phantom covers ~0 km) |
+| `…navigation.currentLocation.latitude` / `.longitude` / `.altitude` | `47.207…` / `8.5747…` / `663` | car-native park location → `place` on trip endpoints, phone-independent `arrived_home_by_car` |
+| `vehicle.drivetrain.fuelSystem.level` | `18` | **not previously known to exist** — a level *jump* + a stay = refuelled |
+| `vehicle.cabin.door.status` | `'SECURED'` | the central lock — the **directional** signal (now mapped) |
+| `vehicle.body.trunk.isOpen`, `vehicle.body.trunk.door.isOpen` | `False` | loading/unloading → the "did a shop" shape |
+| `…door.row1.passenger.isOpen`, `…row2.driver`, `…row2.passenger` | `False` | "not driving alone" |
+| `vehicle.body.hood.isOpen` | `False` | maintenance, not trips |
+| `…window.row{1,2}.{driver,passenger}.status`, `…sunroof.status`, `…sunroof.tiltStatus` | `'CLOSED'` | low value |
+| `…antiTheftAlarmSystem.alarm.armStatus`, `.alarm.isOn` | `'doorsOnly'`, `False` | arm status tracks lock, so partly redundant with the lock |
+| `…preConditioning.activity`, `.remainingTime`, `.isRemoteEngineStartAllowed` | `'INACTIVE'`, `0`, `False` | climate; no trip value on a petrol car |
+| `vehicle.vehicle.timeSetting` | `'utc'` | config, not telemetry |
+
+Two ADR **descriptor ids were wrong** (transcribed from the kvanbiesen source, never verified
+against the live stream): the lock is `vehicle.cabin.door.status`, not `…door.lock.status`, and GPS
+lives under `vehicle.cabin.infotainment.navigation.currentLocation.*`, not `vehicle.currentLocation.*`.
+The first is why the `car_locked`/`car_unlocked` mapping shipped 07-26 never fired.
 
 ## Config (env; `workers/.env` locally, ConfigMap/Secret in K8s)
 
@@ -121,12 +149,18 @@ it in `deploy/inference/kustomize/base/kustomization.yml`.
    Outcome banner), so `car_driver_door_opened` at 4/5 is what shipped. Next candidate is
    `car_locked`/`car_unlocked` **if** the inventory shows the lock descriptor arriving: it is the
    only car-native signal that is directional. Tune with `scripts/trip_eval.py`, not a count delta.
-5. **What else is in the stream** — the container also subscribes to `travelledDistance`
-   (odometer → trip *distance*, and ground truth for adjudicating junk trips) and
-   `currentLocation.latitude/longitude` (a park-location snapshot → the `place` capability for
-   trip endpoints, and a phone-independent `arrived_home_by_car`). Neither is mapped; both are
-   numeric, so they want a capability/enrichment path rather than the boolean edge machinery
-   here. Confirm they actually arrive via the `UNMAPPED` inventory first.
-6. **Container expansion** — not subscribed today, cheap to add: **tailgate** (loading/unloading
-   → the "did a shop" shape a phone can't see), **passenger door row 1** ("not driving alone"),
-   and **fuel level** if exposed (a level jump + a stay = refuelled).
+5. **What else is in the stream** — ✅ answered by the 07-27 inventory above. Odometer and GPS do
+   arrive; both are numeric snapshots, so they want a capability/enrichment path, not the boolean
+   edge machinery here (the blocker is that a capability deriver only sees its event's *lineage*,
+   which a passive reading isn't part of — see the ADR 0006 addendum).
+6. ~~**Container expansion**~~ — not needed: trunk, all four doors and **fuel level** turn out to
+   already be subscribed. Nothing to add; just map what's there.
+7. **`{lock, door} = 10` fires `got_out_the_car` at ENTRY** (found 07-27). Both are
+   non-directional and both sit at 5 in `got_out`, so an entry unlock + door-open hits the
+   threshold with no gate. Observed 4× since the door was added on 07-24. Harmless *so far* only
+   because each real arrival landed outside the 600s cooldown — on a sub-10-minute drive the
+   phantom's cooldown would swallow the real arrival and leave the trip open. This is the exact
+   mirror of the entry-side phantom that ADR 0005 rev 2026-07-24 fixed by demoting both ambiguous
+   signals to 4 in `got_into_the_car`; the same pair on the exit side was left at 5. Adjudicate
+   with `scripts/trip_eval.py` before changing a weight — a count delta is what hid this class
+   the first time.

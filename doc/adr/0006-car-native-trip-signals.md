@@ -54,6 +54,42 @@ Date: 2026-07-18 (scaffold 2026-07-19, deployed + tuned 2026-07-24)
 >    went. `SELECTIVE_LOCKED` and friends are deliberately left unmapped and logged rather than
 >    guessed at.
 >
+> **First inventory (2026-07-27, one drive).** It paid for itself immediately, and mostly by
+> contradicting this ADR. **24** unmapped descriptors — the container is far larger than the 8
+> recorded above — and **two of the ids recorded here were wrong**, transcribed from the
+> kvanbiesen source and never checked against the live stream: the central lock is
+> `vehicle.cabin.door.status` (`"SECURED"`), *not* `…door.lock.status`, and GPS lives under
+> `vehicle.cabin.infotainment.navigation.currentLocation.*`, *not* `vehicle.currentLocation.*`.
+> The first is why the `car_locked`/`car_unlocked` mapping added the previous day never fired —
+> it was watching an id this car does not have. Fixed 07-27; the full descriptor table lives in
+> the [subscriber README](../../workers/bmw-cardata/README.md).
+>
+> Confirmed arriving: odometer (`travelledDistance`), GPS lat/lon/altitude, **fuel level**
+> (`vehicle.drivetrain.fuelSystem.level` — not previously known to exist, and a level *jump* + a
+> stay = refuelled), the trunk, all four doors, windows, sunroof, alarm arm-status, preconditioning.
+> So the "container expansion" idea below is moot: tailgate, passenger doors and fuel are already
+> subscribed. Nothing to add — just map what's already there.
+>
+> **Caveat on the inventory's resolution.** Once-per-process gives the stream's *vocabulary*, not
+> its per-trip cadence: the first message after connect is a full state dump, so nearly every id
+> was logged from that rather than from driving. Which descriptors actually *change* at entry/exit
+> still needs mapping them (or a temporary `BMW_DEBUG_LOG_ALL` window).
+>
+> **Unrelated bug the same drive exposed — `{lock, door} = 10` fires `got_out_the_car` at ENTRY.**
+> `car_lock_state_change` (5) + `car_driver_door_opened` (5) hits `got_out`'s threshold of 10 with
+> no gate, and *both are non-directional*, so an entry unlock followed by the entry door-open
+> fires an exit. Live on 2026-07-27: `got_out_the_car` at 08:33:04 from exactly that pair, 17s
+> **before** the `got_into_the_car` for the same entry. Observed 4× since the door joined the map
+> on 07-24. It has been harmless so far only by luck — each real arrival happened to fall outside
+> the phantom's 600s cooldown (today's drive was 14m23s). On a **sub-10-minute drive the cooldown
+> would swallow the real arrival**, leaving the trip open until something stale closed it or
+> `max_open_seconds` expired: the same failure shape as the window_seconds bug fixed 2026-07-25.
+> This is the precise mirror of the *entry*-side phantom that ADR 0005 rev 2026-07-24 fixed by
+> demoting both ambiguous signals to 4 in `got_into_the_car` — the identical pair on the exit side
+> was left at 5, so the fix only covered half the symmetry. Not changed here: a weight change is
+> exactly what `scripts/trip_eval.py` exists to adjudicate (junk trips / drives missed), and
+> reasoning from 4 observations is how the door's first validation went wrong.
+>
 > Still unmapped, and deliberately: the odometer and GPS pair. Both are **numeric snapshots, not
 > edges**, so they don't belong in this boolean mapper — they are capability/enrichment material
 > (trip distance; a park-location `place` for trip endpoints; a phone-independent
@@ -289,7 +325,13 @@ on change when driving).
    streams on this vehicle (Outcome banner).
 3. Final weight/threshold numbers, tuned against a replay of real fused streams (as ADR 0005 was).
 4. ✅ Refresh-token rotation persistence — done (Neon `bmw_cardata_tokens`).
-5. **Does `vehicle.cabin.door.lock.status` actually arrive?** The `UNMAPPED` inventory + the
-   speculative `car_locked`/`car_unlocked` mapping (Addendum) answer this on the next drive. If it
-   does, it's the first *directional* car-native signal and the next weight-map change; if it
-   doesn't, the door remains the only car-native signal this vehicle gives us.
+5. **Does the central lock produce usable edges?** ✅ the descriptor exists and arrives
+   (`vehicle.cabin.door.status = "SECURED"`), but the 07-26 mapping watched a wrong id, so no
+   `car_locked`/`car_unlocked` has been emitted yet. Fixed 07-27 — **awaiting the next drive**,
+   which also has to confirm the value vocabulary (only `SECURED` observed so far; `UNLOCKED` is
+   assumed, and anything else is logged rather than guessed). If it works, it's the first
+   *directional* car-native signal and the next weight-map change.
+6. **Fix `{lock, door} = 10` firing `got_out_the_car` at entry** (see the Addendum). Tune with
+   `scripts/trip_eval.py` over real history, not from the 4 observed cases.
+7. **A `distance` capability from the odometer** — needs the lineage-visibility question answered
+   first: a passive reading isn't a contributor, so no deriver can see it today.

@@ -20,6 +20,14 @@ path that would have shown them (`BMW_DEBUG_LOG_ALL`) has never been on in produ
 single drive inventories the whole stream. Cheap and permanent (once per id, not per
 message), unlike the whole-envelope debug flag.
 
+It paid for itself on the first drive (2026-07-27): **24** unmapped descriptors — the
+container is far larger than the 8 ADR 0006 documented — including odometer, GPS, fuel
+level, trunk, all four doors, windows and alarm. It also caught two **wrong descriptor
+ids** in the ADR (lock and GPS), which is why the lock mapping shipped 07-26 never fired.
+Note what this log can and cannot tell you: once-per-process gives you the stream's
+*vocabulary*, not which descriptors change *per trip* — the first message after connect is
+a full state dump, so most ids are logged from that, not from driving.
+
 `car_locked`/`car_unlocked` are emitted but deliberately in **no** weight map yet: they
 land in `raw_sensors` → Neon for analysis, and the runtime ignores names no engine
 consumes. The reason they matter is direction. Every car-native signal we have is
@@ -60,7 +68,13 @@ DESCRIPTOR_MOTION = "vehicle.isMoving"                              # "Vehicle M
 DESCRIPTOR_IGNITION = "vehicle.drivetrain.engine.isActive"         # "Vehicle ignition state"
 DESCRIPTOR_DRIVER_DOOR = "vehicle.cabin.door.row1.driver.isOpen"   # "Door state (front driver)"
 DESCRIPTOR_DEEP_SLEEP = "vehicle.vehicle.deepSleepModeActive"      # "Vehicle deep sleep mode"
-DESCRIPTOR_LOCK = "vehicle.cabin.door.lock.status"                 # "Door lock state" (SECURED/…)
+# The central lock. NOTE the id: `vehicle.cabin.door.lock.status` (transcribed into ADR 0006 from
+# the kvanbiesen source) does NOT exist on this car — the live stream carries
+# `vehicle.cabin.door.status = "SECURED"`, confirmed from the 2026-07-27 inventory. Read as a LOCK
+# state, not a door-open aggregate: the four `…door.rowN.*.isOpen` descriptors already cover
+# open/closed, and this one's vocabulary is SECURED-style. Unrecognized values emit nothing and are
+# logged (`_lock_is_secured`), so if that reading is wrong we find out instead of minting nonsense.
+DESCRIPTOR_LOCK = "vehicle.cabin.door.status"
 
 # Everything else in the stream is inventoried by _note_unmapped rather than dropped.
 _MAPPED_DESCRIPTORS = frozenset(
