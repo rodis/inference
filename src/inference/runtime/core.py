@@ -158,7 +158,7 @@ class Router:
         exposed on the port so an adapter depends only on `Router`, never a bare function.
 
         Keys on `user_id`, which Vector stamps on every sensor event at ingest (rejecting
-        events without one) and which derived events carry too (stamped in `to_event`). If
+        events without one) and which derived events carry too (stamped in `route`). If
         it's ever missing we bucket under an explicit sentinel and warn — deliberately NOT
         under `source_app`: that would silently fragment one entity's state across two keys
         and, once multi-user, collapse different users into the shared producer bucket. A

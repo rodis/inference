@@ -324,6 +324,6 @@ declared `requires` checked centrally (not self-decided). Engine method renamed 
    generic `event_lineage` edge table; Vector `kafka` source → `postgres` sink. Switch the engine to
    emit a full typed `Envelope` and make Vector pass-through.
 
-When each phase lands, update the normative docs ([`architecture.md`](../architecture.md),
-[`invariants.md`](../invariants.md), [`classes.md`](../classes.md)) to match — per the
+When each phase lands, update the normative docs (`architecture.md`,
+[`invariants.md`](../invariants.md), `classes.md`) to match — per the
 "update docs alongside behavior" rule in [`CLAUDE.md`](../../CLAUDE.md).

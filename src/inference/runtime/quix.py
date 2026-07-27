@@ -9,7 +9,7 @@ per-entity `State` into the core's pure functions. It replaces the thread-per-ev
   * no Redis — per-entity state lives in partition-local Quix `State` (RocksDB +
     changelog), single-writer-per-key by construction;
   * no Vector emit hop — the full `high_level_events` record is minted by the core
-    (`to_event`) and produced straight to Kafka via `to_topic()` (Vector stays the
+    (`core.Shaper`) and produced straight to Kafka via `to_topic()` (Vector stays the
     ingest gateway + Neon persister);
   * recursive derivation (ADR 0002) is resolved IN-PROCESS by `core.Router`, not
     re-consumed from Kafka, so the runtime consumes only external source topics.

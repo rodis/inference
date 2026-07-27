@@ -15,8 +15,8 @@ Date: 2026-06-19
 > → emit, the engine/transport split) and [`0002-recursive-derivation.md`](0002-recursive-derivation.md)
 > (entailment vs correlation, the no-cycles constraint). Sections describing the runtime are
 > **target-state**; nothing here is implemented yet. The normative docs
-> ([`architecture.md`](../architecture.md), [`invariants.md`](../invariants.md),
-> [`classes.md`](../classes.md), [`CLAUDE.md`](../../CLAUDE.md)) are updated when each phase lands.
+> (`architecture.md`, [`invariants.md`](../invariants.md),
+> `classes.md`, [`CLAUDE.md`](../../CLAUDE.md)) are updated when each phase lands.
 
 ---
 
@@ -29,7 +29,7 @@ events cheaply. The current structure makes that expensive because two things bi
 1. **Identity is the directory.** `WORKER_NAME = Path(__file__).parent.name` ([worker `main.py`](../../workers/car_door_opened/main.py))
    — an event *is* a source tree. The emitted `event_name`, Redis keys, consumer group, image name,
    and Vector path all derive from the folder.
-2. **Deployment is per-event.** One process = one engine = one pod (see [`architecture.md`](../architecture.md)).
+2. **Deployment is per-event.** One process = one engine = one pod (see `architecture.md`).
    An event *is* a Deployment.
 
 So "create an event" today means: new `workers/<name>/` dir + `main.py` + `Dockerfile` + a

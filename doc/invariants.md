@@ -1,151 +1,266 @@
-# Inference Worker — Invariants
+# Invariants
 
-> **⚠️ PARTIALLY STALE (pre-Quix).** Several rules here (Redis-key identity, engine-owned Redis,
-> transport adapters, single-writer-via-Lua) targeted the threaded runtime, **superseded by
-> [ADR 0004](adr/0004-scaling-model.md)**. Under the Quix runtime, single-writer-per-key is structural
-> (partition ownership, no Lua), state is Quix `State` (no Redis), and there is one shared consumer group
-> (not one per event). The *identity* rule (definition `name` = emitted `event_name`) still holds. Awaits
-> reconciliation; read ADR 0004 + [`quix.py`](../src/inference/runtime/quix.py) for current truth.
+Design rules that must hold across the codebase. This is the **normative checklist** — short,
+checkable claims with the reason attached. The explanation of how any of it works lives in
+[`core.md`](core.md); the reasoning behind the architecture lives in the [ADRs](adr/).
 
-Design rules that must hold across the entire codebase. When adding new engines, observers, or transport adapters, verify these still hold.
+Use this when reviewing a change to `src/`. If a rule here is wrong, fix the rule in the same commit
+as the code — a stale invariant is worse than no invariant.
 
----
-
-## Payload Structure
-
-**`message` contains data. Everything outside `message` is metadata.**
-
-The inbound schema is enforced by the pydantic `Envelope` model in `src/inference/events/envelope.py`. Vector wraps every event in this shape before publishing to Kafka:
-
-```python
-Envelope(
-    event_name="...",          # metadata — routing/filtering hint
-    source_app="shortcut",    # metadata
-    source_type="http_server",# metadata — Vector source type
-    timestamp=datetime(...),  # metadata — wall-clock time of Vector ingestion
-    envelope_id=UUID(...),    # metadata — stable per-event id, minted by Vector at ingest
-    message={...},            # data — the original event body (untyped dict)
-)
-```
-
-`message` is a typed `MessageBase` (resolved from `event_name` via `MESSAGE_REGISTRY`, falling back to `OpaqueMessage` for unregistered types). Its canonical data fields:
-- `event_name: str` — canonical event identifier
-- `timestamp: int` — Unix integer, used for windowing
-
-Engines must read `event_name` and `timestamp` from `payload.message` (attribute access), never from the envelope-level fields. Envelope-level `event_name` and `timestamp` are transport/routing metadata only.
-
-**Derived events are valid contributors (recursive derivation, ADR 0002).** A derived event emitted to `high_level_events` must itself satisfy this contract so a downstream worker can consume it as a contributor — in particular it must carry `message.timestamp` (the window key). `finalize()` sets `timestamp = int(occurred_at)` on every derived event for this reason. A worker derives from another derived event simply by listing `high_level_events` in its `source_topics` (e.g. `got_into_the_car` ← `car_door_opened` + `device_connected_to_power`). The graph must stay a DAG (no cycles) — the engine's `event_name` gatekeeper prevents a handler from re-deriving its own output even when it consumes the topic it emits to.
-
-**`envelope_id`:** minted by Vector's `enrich_sensor` transform (`uuid_v4()`) for sensor events at ingest — the stable identity used for lineage (`derived_from` joins on it) and, later, persistence. The model carries a `default_factory` fallback so an event without one still parses, but Vector's id is authoritative.
-
-**Capabilities are nominal.** Cross-cutting traits are capability **mixins** (`GeoLocated`, `Derived`); a concrete registered message inherits them. Detection is `isinstance(msg, GeoLocated)` against the mixin — **not** the `@runtime_checkable` Protocol (`OpaqueMessage` with `extra="allow"` would structurally false-match a stray `location` key). `Envelope.message` is typed `SerializeAsAny[MessageBase]` — `SerializeAsAny` is required so subclass fields survive `model_dump_json` (the engine round-trips contributors through Redis).
+> Rewritten 2026-07-27 for the Quix runtime. The pre-Quix rules (Redis-key identity, engine-owned
+> Redis, transport adapters, single-writer-via-Lua, the ordered enricher chain, per-event consumer
+> groups) are gone with the code they governed — read them in git history alongside
+> `architecture.md` and `classes.md`.
 
 ---
 
-## Engine Contract
+## 1. The core is import-clean
 
-**`decide()` accepts an `Envelope` and returns a `DerivedDraft | None`. The engine decides and assembles the core; it does not shape the message.**
+**[`runtime/core.py`](../src/inference/runtime/core.py) and everything it imports must not import
+`quixstreams`, or any other transport or state backend.**
 
-- `None` → no inference triggered; transport commits and moves on
-- `DerivedDraft` → inference triggered. The draft carries only the **core** (`event_name`, `confidence_score`, `occurred_at`) plus the **contributors** (the source events, with their full bodies). The engine does *not* build `sources`/`evidence`/`location` or any capability-specific shape.
+*Why:* it makes the derivation graph portable and drivable without a broker. This is not
+aspirational — five adapters already depend on it (production, the test suite, `backtest.py`,
+`trip_eval.py`, `rederive.py`), and it is what lets a weight-map change be evaluated against real
+history before it ships.
 
-`InferenceEngine` is a swappable Protocol — `WeightedWindowEngine` is one implementation; others (e.g. a Bayesian engine) may follow. The gatekeeper, time window, weights, cooldown lock, and Redis are implementation details of `WeightedWindowEngine`, never part of the engine Protocol or of `DerivedDraft`. The engine has no reference to the Kafka producer, consumer, observer, or emitter.
+*How to apply:* transport and database access live in `runtime/quix.py`, `runtime/regions.py`, and
+`runtime/places.py` only. In the latter two, `import psycopg` goes **inside the function**, so the
+in-memory paths need no driver present. CI enforces the rule by installing the package with
+`pip install -e . --no-deps` — a stray transport import fails the build.
 
-See `doc/adr/0001-message-shaping-pipeline.md` for the design rationale and the future-state target.
+## 2. `message` is data; everything outside it is metadata
 
----
+**Engines and consumers read event data from `message`. The wrapper (`name`, `source_app`,
+`source_type`) is routing and provenance metadata only.**
 
-## Enrichment Pipeline
+*Why:* one envelope shape across every topic, whether the event was minted by Vector at ingest or by
+the runtime's `Shaper`. A consumer parses one shape.
 
-**The message is shaped by an ordered chain of enrichers, not by the engine.**
+*How to apply:* read `message.name` and `message.timestamp`, never the wrapper's. `source_type` is
+metadata that the persister drops — nothing may depend on it reaching Neon.
 
-After the engine returns a `DerivedDraft`, the worker runs it through an `EnrichmentPipeline` — an ordered list of `Enricher`s (`enrich(draft) -> draft`) configured per-worker in `main.py` next to `RULES` (the list sets availability + order + config). Each enricher:
+## 3. Identity is the definition `name`
 
-- owns exactly **one** capability and **declares applicability** via `requires: type | None` (the capability mixin a contributor's message must be an instance of, or `None` = always). The **pipeline** evaluates `requires` centrally (`requires is None or any(isinstance(c.message, requires) for c in contributors)`) and only calls `enrich` when it applies — the enricher never self-decides whether to run;
-- is **pure**: returns a new draft via `model_copy(update=...)`, never mutates the input;
-- is judged on the **contributors** (a derived event gains a capability only if its contributors support it).
+**A definition's `name` is the emitted `message.name`, the sink-routing key, and the prefix its
+per-entity state is scoped under. The emitted `message.inference_type` is the *engine type*, not the
+name.**
 
-The pipeline is **best-effort**: by the time it runs, the engine has already decided to fire (possibly with irreversible side effects), so a raising enricher is logged and skipped — the event is still emitted, partially enriched. `finalize()` then merges the core + accreted capability fields into the transport dict; the Emitter still receives a `dict`, which Vector re-wraps into an `Envelope` for `high_level_events`.
+*Why:* one string is the source of truth for identity, so routing, state and output can never
+disagree about what an event is.
 
-**Contributor data:** because enrichers shape the derived event from its contributors, the engine must supply the contributing source events as full `Envelope`s in the draft (`DerivedDraft.contributors: tuple[Envelope, ...]`), not a flattened subset. *How* it retains them is engine-private (`WeightedWindowEngine` keeps the full envelopes in a Redis HASH pruned alongside its ZSET).
+*How to apply:* `snake_case`, matching the filename. Never derive identity from a directory name, a
+consumer group, or an engine class.
 
----
+## 4. There is exactly one event-time
 
-## Engine-Owned Infrastructure
+**`message.timestamp` is the only event-time. "When the system handled it" is the DB-set
+`ingested_at` column.**
 
-**Engines own their storage and connection dependencies. The worker layer never plumbs them through.**
+*Why:* two timestamps that mean almost the same thing get used interchangeably and then diverge.
 
-If an engine needs Redis, Postgres, or any other backend, it resolves that connection itself (typically via a helper in the engine module that reads env vars). `config.py` exposes only the infrastructure that the wiring layer needs directly — Kafka, SSL certs, Vector. Engine-internal config (e.g. `REDIS_*` env vars) is read by the engine itself and never appears in `config.py` or in `main.py`.
+*How to apply:* an engine's `Decision.occurred_at` must be the moment the pattern *completed* — the
+latest contributing signal, or the last fix inside a cluster. This keeps lineage **monotonic**: a
+derived event's timestamp is ≥ every contributor's. Never stamp a derived event earlier than its own
+evidence.
 
-**Why:** Different engines may use different backends. Forcing every backend through `config.py` and `main.py` creates a leaky abstraction where the worker has to know each engine's internal implementation. Swapping engines should be a localized change to the worker's import + instantiation lines — not a ripple through shared config.
+## 5. Entity key = partition key = state-ownership unit
 
-**How to apply:** A worker constructing an engine should never pass connection config (`redis_config=...`, `db_url=...`, etc.). It passes only the engine's *logical* config — rules, thresholds, weights. For testability, engine `__init__` may accept an optional override (`redis_config: dict | None = None`); production code passes nothing.
+**`Router.key_for` (today: `message.user_id`) is simultaneously the window aggregation unit, the
+Kafka partition key, and the state key.**
 
----
+*Why:* co-location makes single-writer-per-key **structural**. No lock, no atomic script, no Redis —
+partition ownership is the guarantee (ADR 0004).
 
-## Transport Contract
+*How to apply:* the adapter shards with `group_by(router.key_for)` and nothing else. A missing key
+buckets under the explicit `_no_user_id` sentinel with a warning — **never** a plausible-looking
+fallback like `source_app`, which would silently fragment one entity's state and, once multi-user,
+merge different people.
 
-**The transport layer is unaware of Redis or any engine internals.**
+## 6. Exactly one external source topic
 
-`KafkaStreamHandler` receives a consumer, an engine, an observer, and an emitter. It does not know how the engine works — only that `process()` returns a result or `None`. It does not know where the emitter sends results — only that `emit()` accepts a dict.
+**The runtime consumes one external topic; recursion is resolved in-process.**
 
----
+*Why:* Quix `concat()` of multiple sources with `auto_offset_reset=latest` consumes zero messages
+(bisected in-cluster, ADR 0004). In-process recursion is also lower-latency and cheaper in topics.
 
-## Commit Strategy
+*How to apply:* `RoutingPlan.from_definitions` raises if `declared_sources - sink_topics` isn't
+exactly one. A genuinely separate feed is merged at **ingest**, in Vector, not by adding a source.
 
-**Offsets are committed manually after every message, including errors.**
+## 7. One shared keyed router, definitions as data
 
-`enable.auto.commit=False`. The handler commits after:
-- Successful processing (with or without an inference trigger)
-- JSON decode errors (skip-and-move-on)
-- Engine exceptions (skip-and-move-on)
+**All definitions run through one `Router` on one pipeline in one consumer group — not a branch,
+consumer, or process per definition.**
 
-A message is never retried indefinitely. If a message cannot be processed, it is logged and skipped.
+*Why:* the Aiven free tier caps user topics at 5. A per-definition branch mints a changelog *and* a
+repartition topic each; the shared router costs 1 repartition + 1 changelog regardless of definition
+count.
 
----
+*How to apply:* adding an event is a YAML file. If you find yourself adding a stateful operator or a
+second `group_by`, count the topics it will mint first.
 
-## Cooldown Lock Atomicity
+## 8. Detection and shaping are separate stages
 
-**The cooldown lock must be set atomically.**
+**`Router.route` decides *that* an event fires and mints its identity. `Shaper.shape` decides what
+data it carries. Neither does the other's job.**
 
-`SET NX EX` (atomic) is used instead of a separate `EXISTS` + `SETEX`. This prevents two concurrent engine instances from both passing the threshold check and both emitting a duplicate inference within the same cooldown window.
+*Why:* it lets the inference logic and the data model evolve independently — adding the `place`
+capability changed no engine and no routing code.
 
----
+*How to apply:* `route` must not touch lineage, capabilities, or the wrapper. `shape` must not touch
+state, engines, or routing. An engine returns a `Decision` and shapes nothing.
 
-## Single-Writer Per Event Key
+## 9. Recursion carries the clean envelope
 
-**Each event's Redis state has exactly one writer. An event scales to `replicas > 1` only after its engine's decide-path is made atomic.**
+**The event re-enqueued for in-process recursion is the bare envelope. The `sources` sidecar goes to
+the `Shaper` only.**
 
-`WeightedWindowEngine` derives all its keys from the event `name` alone — `inference:<name>:buffer` (ZSET), `inference:<name>:contributors` (HASH), `inference:<name>:lock`. There is no per-pod or per-partition component, so **every consumer of the same event resolves to the same keys**. For a *global* correlation window this is correct and intended: state must be centralized, or partitioning the source topics across consumers would fragment the window and drop co-occurrences whose contributors landed on different partitions. The shared ZSET is the right design — the constraint is on *concurrent access* to it, not on sharing it.
+*Why:* engines store the events they consume in window state. If a recursed event carried its
+sources, each hop would nest the previous hop's full bodies — state and changelog would fatten
+geometrically down a chain.
 
-The hazard is that `decide()` is only **partially** atomic:
+*How to apply:* a derived event, as seen by a downstream engine, carries only `id`, `name`,
+`inference_type`, `user_id`, `timestamp`. **No engine or capability deriver may depend on an upstream
+derived event's lineage or capabilities** — those exist only on the record produced to Kafka.
 
-- The opening pipeline (`zadd` + `hset` + `zremrangebyscore` + `zrange`) runs as one `MULTI`/`EXEC` (redis-py `transaction=True` default) — atomic. ✅
-- The **HASH prune that follows is not transactional**: it computes `stale = hkeys() - survivors` against the ZRANGE snapshot it captured a moment earlier, then `hdel`s the difference. A second writer that `ZADD`s + `HSET`s a new member *between* the snapshot and the `hkeys()` call will have its live member treated as stale and its body deleted — the ZSET keeps the member, the HASH loses its body, and a later `hmget` at fire time silently drops that contributor. Concurrency-only, silent data loss.
+## 10. The derivation graph is a DAG
 
-The cooldown `SET NX EX` (see above) *does* hold under concurrency, so the worst case is a lost/partial contributor body, **not** a double-fire.
+**No definition may consume what it produces, directly or transitively.**
 
-**Why it's safe today:** the current topology runs exactly one handler per event in one process, with no replicas in practice — so there is never a second concurrent writer and the non-atomic prune is fine. This is a load-bearing assumption that was previously unstated.
+*Why:* recursion walks a queue with no cycle detection. The guarantee comes from the definitions.
 
-**How to apply:**
-- Treat "one consumer per event key" as an invariant of the engine as written. Single-replica-per-event is the safe default.
-- Before setting `replicas > 1` for any event (i.e. intra-event throughput scaling via Kafka partition fan-out), the engine's whole read-modify-decide-prune cycle must first be made atomic — fold it into a single server-side `EVAL` (Lua) script, or guard it with a short per-key lock. Once atomic, replicas scale that event's throughput correctly because the shared ZSET is exactly the state they should share.
-- Event-level horizontal scaling (one Deployment per event / per shard) and intra-event scaling (`replicas > 1` for a hot event) are **separate axes**. The first needs no engine change; the second is gated on this atomicity fix.
+*How to apply:* a name absent from the consumers index is terminal and stops the cascade. Check the
+graph in [`core.md` §5](core.md#5-recursion-without-kafka) before wiring a new derived contributor.
 
----
+## 11. The engine parses its own config
 
-## Configuration Source
+**The runtime never knows an `engine_config` schema.**
 
-**Shared infra config lives in `config.py`. Per-event config lives in `events/<name>.yml`. Engine-internal infra lives in the engine module.**
+*Why:* it is what makes a strategy swappable — a new engine is a class plus a registry decorator,
+with no change to the runtime.
 
-> Under ADR 0003 an event is data, not a directory: each `events/<name>.yml` is an `EventDefinition` and the generic runtime loads them all. This section reflects that; the old per-`workers/<name>/main.py` identity rule (`WORKER_NAME = Path(__file__).parent.name`) is retired.
+*How to apply:* parse and default `engine_config` in the engine's `__init__`. Framework code
+(`core.py`, `quix.py`, `definition.py`) must never name a concrete engine or one of its config keys.
 
-- `config.py` holds only the cluster-shared infrastructure that the wiring layer touches directly: Kafka bootstrap servers, SSL cert paths, Vector base URL. Sourced from env vars / K8s Secrets and identical across all events.
-- Each `events/<name>.yml` declares its own config: `engine` + `engine_config` (threshold, window, weights, …), `source_topics`, `sink_topic`, `event_domain`, `enrichers`. Event-specific, no meaningful shared default.
-- The event's identity must be derived from the definition's `name` field, never declared piecemeal. It is the single source of truth; this prevents drift across the data and infra layers. Two forms:
-  - `name` (snake_case) — **data layer**: `RULES["name"]`, Redis keys, emitted `inference_type`, Vector URL path (`{domain}/{name}/{sink}`), logger names.
-  - `slug = name.replace("_", "-")` (kebab-case) — **infra layer**: Kafka consumer group ID (`inference-<slug>-v1`), and any other external-naming boundary that rejects underscores.
-- Engines and enrichers are resolved from the definition's string keys via the registries in `runtime/registry.py`; concrete implementations self-register, so the runtime/framework names none of them.
-- Engine-internal infra (Redis connection, future Postgres connection, etc.) lives in the engine module — see **Engine-Owned Infrastructure**. It must not appear in `config.py` or the runtime/wiring.
+## 12. Engines carry full source bodies; the shaper projects them
 
-The runtime `main.py` is only wiring — it does not contain logic. The `events/*.yml` definitions are the per-event ConfigMap-equivalent (and in ADR 0003 Phase 2 literally become a ConfigMap).
+**`Decision.sources` holds the whole source event records. `derived_from` is a projection of them;
+capabilities are derived from them.**
+
+*Why:* a capability deriver needs message fields the lineage projection doesn't carry (`place` needs
+`lat`/`lon`; a future `amount` will need `amount`). Keeping full bodies in the `Decision` is what
+lets the data-model layer own derivation with zero engine coupling.
+
+*How to apply:* stash the full event dict in state, not a trimmed subset. Values must be
+JSON-serializable — Quix `State` round-trips through the changelog.
+
+## 13. Capabilities scale by addition
+
+**A capability is a registered pure function `(sources) -> fragment of InferredEvent fields`. Adding
+one changes no engine, no router, and no shaper.**
+
+*Why:* the enricher chain of ADR 0001 without the ordering. Presence of the field *is* the
+capability.
+
+*How to apply:* enum member + model + `InferredEvent` field + `@register_capability` deriver +
+`capabilities:` in a definition + regenerate the contract. `Shaper` must never name a capability; it
+runs whatever the definition declared. A deriver that finds nothing to say returns `{}` — it must
+never fabricate data.
+
+## 14. Reference data is injected by the composition root
+
+**The core never reads a database. `build_runtime` loads reference data and hands it in.**
+
+*Why:* it is what keeps rule 1 true while still letting places and regions be editable data rather
+than code.
+
+*How to apply:* load in a `runtime/` module with lazy psycopg, install with an explicit `set_*`
+function (see `set_place_book`), keep the consumer a pure function of (evidence, reference data).
+Both reads are **best-effort**: a Neon blip degrades to "no region events" or "no labels", never a
+crash.
+
+## 15. Presentation is not in the data model
+
+**`InferredEvent` carries no `role`, no span/point/hidden, no colour, no label priority.**
+
+*Why:* how to surface an event is one consumer's view decision, not a fact about the event.
+`car_trip` and `phone_is_charging` both carry `interval`; only the dashboard decides one is drawn as
+a span.
+
+*How to apply:* if a field answers "how should this look?", it belongs in the dashboard. If it
+answers "what happened?", it belongs here. Reference data *about a place* (`everyday`) is a fact;
+whether to draw it is not.
+
+## 16. No cross-hop confidence scalar
+
+**An engine's `score` is detection-local: logged when it fires, never emitted.**
+
+*Why:* trust is declared per consumer, in the weight map — the same signal is not equally
+trustworthy to every derivation. A scalar riding on the event was redundant *and* never comparable
+across engines (see [`event.py`](../src/inference/event.py)).
+
+*How to apply:* don't reintroduce `confidence_score`. If a downstream derivation needs to discount a
+contributor, that is a weight in *its* map.
+
+## 17. Configuration lives at exactly one altitude
+
+| Kind | Home |
+|---|---|
+| Infra / env (broker, group, state dir, DSN) | `runtime/config.py`, read lazily |
+| Per-event logic (engine, thresholds, weights, capabilities) | `events/<name>.yml` |
+| Engine-internal defaults | the engine's `__init__` |
+| Places and regions | Neon `regions` rows |
+
+*Why:* forcing per-event or engine-internal knowledge through shared config creates a leaky
+abstraction where the runtime has to know each engine's internals.
+
+## 18. Configuration errors are fatal; data errors degrade; event errors isolate
+
+**Anything wrong with the declared configuration fails at startup, before traffic. Anything wrong
+with external reference data degrades. Anything wrong with a single event is contained.**
+
+*Why:* a fleet that silently isn't doing what you declared is worse than one that refuses to start.
+
+*How to apply:* unknown engine, bad geofence direction, no definitions, wrong source-topic count →
+raise. Neon unreachable → log and continue. Malformed YAML → skip that definition. Bad event → return
+`None`/`[]`. See the full table in [`core.md` §14](core.md#14-failure-modes).
+
+## 19. Derived events are a cache; raw signals are the truth
+
+**Anything derived can be rebuilt from retained raws. Nothing derived is a system of record.**
+
+*Why:* a stream processor derives forward only, and some facts are frozen at mint time (a `place`
+label). Without replay, a definition change can only ever improve the future.
+
+*How to apply:* keep raw events. Change a definition, then replay: `backtest.py` for *what* changed,
+`trip_eval.py` for whether it got *better*, `rederive.py` to rebuild history. Never tune a weight map
+on a count delta.
+
+## 20. State is ephemeral by design
+
+**Per-entity state is partition-local RocksDB on an `emptyDir`, recovered from the Kafka changelog.**
+
+*Why:* K8s is elastic disposable compute; everything durable lives in Aiven or Neon. It also means a
+restart is cheap, which is what makes "region edits apply on next start" acceptable.
+
+*How to apply:* never assume state survives a reschedule, and never put anything in it that can't be
+rebuilt. **Every `state.set` is a Kafka record** — think about write frequency in a `decide` that runs
+on a location stream (see `geofence`'s write-only-on-change).
+
+## 21. The contract is generated, never hand-written
+
+**`event.py` → `contracts/inferred_event.schema.json` → `dashboard/web/src/generated/events.ts`.**
+
+*Why:* one source of truth for a shape shared across two languages.
+
+*How to apply:* after changing `event.py`, run `scripts/emit_event_schema.py` and `npm run
+gen:types`, and commit both. CI regenerates and fails on drift at each hop.
+
+## 22. Documentation is updated with the behaviour it describes
+
+**A change to `src/` that invalidates a claim in `core.md`, this file, or an ADR fixes it in the same
+commit.**
+
+*Why:* this repo's docs are load-bearing — they are the design record and the onboarding path for the
+next session. The three docs deleted in 2026-07 spent months carrying "⚠️ STALE" banners because
+this rule wasn't followed.

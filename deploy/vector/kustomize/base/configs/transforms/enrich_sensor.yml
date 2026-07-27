@@ -24,7 +24,7 @@ source: |
   # Drop the http_server source's ingest `timestamp` (emit-time): it was ~the same
   # instant as the DB-set ingested_at column, which is the authoritative system time.
   # Keeps the wrapper {name, source_app, source_type, message} consistent with derived
-  # events (the runtime's to_event emits no produce-time stamp either). Event-time
+  # events (the runtime's Shaper emits no produce-time stamp either). Event-time
   # lives in message.timestamp.
   del(.timestamp)
 

@@ -149,6 +149,6 @@ When entailment rules proliferate, that is the trigger to actually spec the mult
 ---
 
 When this moves past draft, update the normative docs
-([`architecture.md`](../architecture.md), [`invariants.md`](../invariants.md),
-[`classes.md`](../classes.md)) per the "update docs alongside behavior" rule in
+(`architecture.md`, [`invariants.md`](../invariants.md),
+`classes.md`) per the "update docs alongside behavior" rule in
 [`CLAUDE.md`](../../CLAUDE.md).

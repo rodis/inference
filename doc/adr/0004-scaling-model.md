@@ -228,6 +228,10 @@ of those are the *value* of the system (the derivation DAG + output shape) and o
   output shaping (`to_event`), and the pure definition→topology planning (`RoutingPlan`, one
   value object built from the definitions). **INVARIANT: this module must not import `quixstreams`** (or any
   transport/state backend).
+  > *Later refinement (2026-07):* `to_event` was split into a distinct `Shaper` stage mounted after
+  > the router — detection and output shaping are now two `apply` steps, which is what let
+  > capabilities be derived from full source bodies. The rule and the split argued here are
+  > unchanged; see [`core.md` §4](../core.md#4-detection-vs-shaping) for the current shape.
 - [`inference.runtime.quix`](../../src/inference/runtime/quix.py) — the **Quix/Kafka adapter**
   and composition root: builds the `Application`, wires the one keyed pipeline, and injects the
   source events + per-entity `State` into the core.
@@ -356,6 +360,6 @@ Three ports, each with swappable adapters; the core (hexagon interior) depends o
 
 ---
 
-When this moves past draft, update [`architecture.md`](../architecture.md) and
+When this moves past draft, update `architecture.md` and
 [`invariants.md`](../invariants.md) (especially the identity rule, which this directly reframes) per the
 "update docs alongside behavior" rule in [`CLAUDE.md`](../../CLAUDE.md).
