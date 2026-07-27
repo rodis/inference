@@ -285,7 +285,7 @@ but this is what unblocks one). Formalize additional ports only when a second re
     |  Quix State          [prod]  |          |  inference.engines  (registry)         |
     |    RocksDB + changelog       |          |    weighted_window                     |
     |  dict{}              [test]  |          |    decaying_window                     |
-    |    in-memory StateStore      |          |    naive_bayes_window                  |
+    |    in-memory StateStore      |          |    session_gated_window                |
     +------------------------------+          |    session_window                      |
       DRIVEN ADAPTERS (state)                 +----------------------------------------+
                                                 STRATEGY ADAPTERS (engines)

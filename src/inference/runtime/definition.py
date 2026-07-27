@@ -25,7 +25,7 @@ class EventDefinition(BaseModel):
 
     name: str                       # identity — snake_case; emitted event name + state scope (inference_type is the engine type)
     enabled: bool = True            # skip-load toggle for quick experiments
-    engine: str                     # engine type: weighted_window | decaying_window | naive_bayes_window
+    engine: str                     # engine type: weighted_window | decaying_window | session_window | ... (see inference.engines registry)
     engine_config: dict = {}        # engine-specific (threshold, window_seconds, cooldown_seconds, weights)
     source_topic: str               # external topic the raw contributors arrive on (one per ADR 0004)
     sink_topic: str                 # where the derived event is produced

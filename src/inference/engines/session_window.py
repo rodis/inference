@@ -6,7 +6,7 @@ it doesn't sum/score contributors: it remembers the open start in per-entity sta
 emits when the matching end arrives, carrying both as lineage. A start that never gets
 an end within `max_duration_seconds` is discarded (no stale pairing).
 
-This is a deliberately different strategy from weighted/decaying/bayes (which keep the
+This is a deliberately different strategy from weighted/decaying (which keep the
 *earliest* sighting per contributor and never reset after firing, so they'd mis-pair
 sequential trips). The runtime resolves the recursion in-process: a fired
 `got_into_the_car` / `got_out_the_car` is re-routed here, and per-entity Quix `State`

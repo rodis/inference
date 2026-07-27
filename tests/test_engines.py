@@ -3,7 +3,6 @@ each engine now carries the FULL source event bodies on the Decision (not {id,ts
 
 from inference.engines.decaying_window import DecayingWindowEngine
 from inference.engines.geofence import GeofenceEngine
-from inference.engines.naive_bayes_window import NaiveBayesWindowEngine
 from inference.engines.session_gated_window import SessionGatedWindowEngine
 from inference.engines.session_window import SessionWindowEngine
 from inference.engines.stay_window import StayWindowEngine
@@ -64,25 +63,6 @@ def test_decaying_suppresses_when_signals_far_apart(state, event):
     eng.decide(event("a", 100), state)
     # a is 4 half-lives stale at t=300 -> 6*0.0625 + 6 (fresh b) = 6.375 < 10
     assert eng.decide(event("b", 300), state) is None
-
-
-# --- naive_bayes_window ---------------------------------------------------------
-
-def test_bayes_posterior_crosses_threshold(state, event):
-    eng = NaiveBayesWindowEngine(
-        {"prior": 0.1, "threshold": 0.8, "window_seconds": 600, "cooldown_seconds": 0,
-         "signals": {"a": {"lr": 20}, "b": {"lr": 20}}})
-    eng.decide(event("a", 100), state)
-    d = eng.decide(event("b", 110), state)
-    assert d is not None and d.score >= 0.8
-
-
-def test_bayes_lr_below_one_is_evidence_against(state, event):
-    eng = NaiveBayesWindowEngine(
-        {"prior": 0.5, "threshold": 0.9, "window_seconds": 600, "cooldown_seconds": 0,
-         "signals": {"a": {"lr": 5}, "b": {"lr": 0.01}}})
-    eng.decide(event("a", 100), state)
-    assert eng.decide(event("b", 110), state) is None               # lr<1 pulls posterior back down
 
 
 # --- session_window -------------------------------------------------------------

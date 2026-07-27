@@ -25,7 +25,7 @@ plus an open session can cross the threshold that two signals cross on their own
 - `gate_weight < threshold`, and scoring only runs when a windowed signal arrives, so the
   gate can never fire on its own — at least one real signal is always required.
 
-Contrast with the other engines: weighted/decaying/bayes keep the *earliest* sighting per
+Contrast with the other engines: weighted/decaying keep the *earliest* sighting per
 contributor and never reset after firing (so they'd mis-pair sequential sessions — the
 reason session_window is a separate strategy). This engine keeps the *latest* sighting
 (fresh signals aren't shadowed by stale ones) and resets its window + gate on every fire.

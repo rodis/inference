@@ -167,6 +167,13 @@ adding that coupling.
   threshold (9 < 10), so neither false-closes an open trip.
 - **`naive_bayes_window` is now unused** — `car_door_closed` was its only consumer. The engine stays
   registered (a valid strategy in the toolbox); nothing references it.
+  > **Update 2026-07-27: removed.** Keeping it as "a valid strategy in the toolbox" stopped paying for
+  > itself once `confidence_score` left the data model (ADR 0002's update): the engine's one
+  > distinguishing feature was emitting a *calibrated posterior* instead of an arbitrary sum, which
+  > only mattered while that score was published for downstream consumers. Now scores are
+  > detection-local, so it was an unused engine whose selling point no longer applied — and a
+  > registered engine is not free (it's live code the tests and every reader carry). Recoverable from
+  > git history if a definition ever wants log-odds scoring.
 - **Dashboard leftovers:** `car_door_opened`/`car_door_closed` still appear in dashboard legend/level
   config (`view.ts`, `logical_levels.json`, compare defaults) — harmless (no data), cleaned
   separately in the dashboard component.
