@@ -13,7 +13,7 @@ those are shaping concerns that stay in the core/adapter.
 
 The model has two parts, kept apart on purpose (see the design discussion):
 
-- **envelope** — the fields every derived event has (id, lineage, entity, time, confidence);
+- **envelope** — the fields every derived event has (id, lineage, entity, time);
 - **capabilities** — optional structured facts an event *may* carry (today: `interval`).
   Presence == the capability. A capability being present commits a consumer to nothing —
   it is a latent affordance, not a behavior. Sniffable structurally (`event.interval`).
@@ -23,6 +23,17 @@ decision — how one consumer chooses to surface an event — not an intrinsic f
 event, so it lives in the consumer (the dashboard), never in this data model. A capability
 (e.g. `interval`) is data; how to render it is presentation. `car_trip` and
 `phone_is_charging` both carry `interval`; only the dashboard decides one is drawn as a span.
+
+Also deliberately absent: a **confidence score** (removed; resolves ADR 0002's open question).
+It existed for weighted composition across derivation hops — a derived event carrying how sure
+we were, so a downstream engine could discount it. That never happened, because trust ended up
+declared *per consumer* instead: a weight map says how much *this* derivation trusts a given
+signal, and it should, since the same signal is not equally trustworthy to every consumer (the
+direction-ambiguous car lock is worth 6 to one derivation and nothing to another). With trust in
+the consumer's config, a scalar riding on the event is redundant — and it was never comparable
+anyway: engines emitted unbounded definition-local weight sums, hardcoded 1.0s, and (in one case)
+a count of GPS fixes under one name. An engine's score survives where it is meaningful: local to
+detection, logged when it fires (`Decision.score`), never part of this model.
 
 Import-clean: pure Pydantic, no transport/state backend, so the transport-agnostic core
 (`inference.runtime.core`) can build it without violating its no-`quixstreams` invariant.
@@ -130,7 +141,6 @@ class InferredEvent(BaseModel):
     inference_type: str              # the engine *type* that produced it (e.g. "session_window")
     user_id: str                     # the entity the pipeline partitions on
     timestamp: int                   # canonical event-time; for a SPAN this equals interval.ended_at
-    confidence_score: float
     derived_from: list[Contributor]
 
     # --- capabilities (present == has the capability) -------------------------

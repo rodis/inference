@@ -9,7 +9,7 @@ from inference.event import Contributor, InferredEvent, Interval
 def _evt(**over):
     base = dict(
         id="i", name="car_trip", inference_type="session_window",
-        user_id="u", timestamp=10, confidence_score=1.0, derived_from=[],
+        user_id="u", timestamp=10, derived_from=[],
     )
     base.update(over)
     return InferredEvent(**base)
@@ -38,7 +38,10 @@ def test_derived_from_is_projected_shape():
     assert e.model_dump(mode="json")["derived_from"] == [{"id": "a", "name": "x", "timestamp": 1}]
 
 
-def test_extra_fields_forbidden():
-    # `role` was removed from the data model — an unknown field must be rejected, not silently kept.
+@pytest.mark.parametrize("field", ["role", "confidence_score"])
+def test_removed_fields_forbidden(field):
+    # Both were removed from the data model (`role` = presentation, `confidence_score` = a
+    # cross-hop confidence scalar nothing composed). Strictness must reject them outright,
+    # so neither can drift back in via a stray kwarg.
     with pytest.raises(ValidationError):
-        _evt(role="span")
+        _evt(**{field: "span" if field == "role" else 1.0})

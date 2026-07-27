@@ -5,7 +5,6 @@ export type Name = string;
 export type InferenceType = string;
 export type UserId = string;
 export type Timestamp = number;
-export type ConfidenceScore = number;
 export type Id1 = string;
 export type Name1 = string;
 export type Timestamp1 = number;
@@ -33,7 +32,6 @@ export interface InferredEvent {
   inference_type: InferenceType;
   user_id: UserId;
   timestamp: Timestamp;
-  confidence_score: ConfidenceScore;
   derived_from: DerivedFrom;
   interval?: Interval | null;
   place?: Place | null;

@@ -136,10 +136,6 @@
       "title": "Timestamp",
       "type": "integer"
     },
-    "confidence_score": {
-      "title": "Confidence Score",
-      "type": "number"
-    },
     "derived_from": {
       "items": {
         "$ref": "#/$defs/Contributor"
@@ -176,7 +172,6 @@
     "inference_type",
     "user_id",
     "timestamp",
-    "confidence_score",
     "derived_from"
   ],
   "title": "InferredEvent",

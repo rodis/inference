@@ -13,6 +13,20 @@ Date: 2026-06-17 (update: 2026-06-20)
 > self-derivation) but not yet statically enforced; the stateless **entailment** tier below remains
 > design-only.
 
+> **Update 2026-07-27 — confidence composition is resolved by removal.** The open question below
+> ("does the core stay `confidence_score`") is closed: the field is **gone** from the data model
+> (`inference.event.InferredEvent`). Composition never happened, and the reason is structural rather
+> than unfinished work — **trust ended up declared per consumer, not carried per event.** A weight map
+> states how much *this* derivation trusts a given signal, which is the correct place for it, because
+> the same signal is not equally trustworthy to every consumer: the direction-ambiguous car lock is
+> worth 6 to `got_out_the_car` and nothing elsewhere. With trust in the consumer's config, a scalar
+> riding along on the event has no job. It was also never a shared scale — engines emitted unbounded
+> definition-local weight sums, hardcoded `1.0`s, and (in `stay_window`) a *count of GPS fixes*, all
+> under one name, so "compounding uncertainty across hops" had nothing well-defined to compound.
+> An engine's score survives where it means something: local to detection and logged when the event
+> fires (`Decision.score`), never emitted. Note this un-resolves nothing about **cycle prevention**,
+> which remains open.
+
 > A stub to capture the model and the decision boundary. It builds on
 > [`0001-message-shaping-pipeline.md`](0001-message-shaping-pipeline.md) (decide → enrich → emit,
 > `derived_from` lineage, the deferred multi-handler runtime). Sections below are **target/exploratory**;
@@ -109,8 +123,11 @@ When entailment rules proliferate, that is the trigger to actually spec the mult
 
 - **Cycle prevention** — static validation of the topic/derivation graph, or a runtime hop-count /
   lineage-depth guard? Where does the DAG constraint get enforced?
-- **Confidence composition across hops** — does the core stay `confidence_score`, or move to a minimal
-  core with engine-specific metrics in `fields` (per ADR 0001's cross-engine-core question)?
+- ~~**Confidence composition across hops** — does the core stay `confidence_score`, or move to a minimal
+  core with engine-specific metrics in `fields` (per ADR 0001's cross-engine-core question)?~~
+  **Resolved 2026-07-27 (see update banner): neither — the field is removed.** Per-consumer weight maps
+  are where trust belongs, so a cross-hop confidence scalar is redundant; the engine-local score stays
+  in `Decision` for logging only.
 - **Materialization default** — is "inline until a second consumer" the right bias, or should entailed
   facts that are *obviously* reusable (e.g. `car_engine_started`) be materialized eagerly?
 - **Lineage for inlined entailments** — if an entailment is inlined and never emitted, its

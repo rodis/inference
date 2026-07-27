@@ -81,7 +81,7 @@ def test_shape_projects_lineage_and_derives_declared_capability(definition):
     shaper = Shaper(RoutingPlan.from_definitions([d]))
     item = {
         "message": {"id": "T", "name": "car_trip", "inference_type": "session_window",
-                    "user_id": "u", "timestamp": 1600, "confidence_score": 1.0},
+                    "user_id": "u", "timestamp": 1600},
         "sources": [
             {"message": {"id": "S", "name": "in", "timestamp": 1000, "extra": "drop-me"}},
             {"message": {"id": "E", "name": "out", "timestamp": 1600}},
@@ -106,7 +106,7 @@ def test_shape_without_capability_has_null_interval(definition):
     shaper = Shaper(RoutingPlan.from_definitions([d]))
     item = {
         "message": {"id": "D", "name": "door", "inference_type": "weighted_window",
-                    "user_id": "u", "timestamp": 5, "confidence_score": 10.0},
+                    "user_id": "u", "timestamp": 5},
         "sources": [{"message": {"id": "x", "name": "x", "timestamp": 5}}],
     }
     assert shaper.shape(item)["message"]["interval"] is None

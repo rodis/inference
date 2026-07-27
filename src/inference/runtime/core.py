@@ -194,7 +194,7 @@ class Router:
         cascade a DAG: a terminal event matches no consumer and stops.
 
         This is *detection only* — it mints the event's identity envelope (id/name/type/
-        entity/time/score) and carries its `sources` (the full events the engine used)
+        entity/time) and carries its `sources` (the full events the engine used)
         forward for the downstream `Shaper`. It does NOT touch presentation or capabilities:
         no `role`, no `derived_from`, no `interval`. That keeps routing ignorant of output
         shaping and, crucially, the event re-enqueued for recursion is the *clean* envelope
@@ -221,7 +221,6 @@ class Router:
                         "inference_type": c.engine.name,
                         "user_id": user_id,
                         "timestamp": int(decision.occurred_at),   # canonical event-time; == interval.ended_at for spans
-                        "confidence_score": decision.score,
                     }}
                     out.append({**base, "sources": list(decision.sources)})   # sidecar consumed by the Shaper
                     queue.append(base)                                        # clean envelope drives recursion
@@ -266,7 +265,6 @@ class Shaper:
             inference_type=envelope["inference_type"],
             user_id=envelope["user_id"],
             timestamp=envelope["timestamp"],
-            confidence_score=envelope["confidence_score"],
             derived_from=[_lineage(s) for s in sources],
             **fragments,
         )

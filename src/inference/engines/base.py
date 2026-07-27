@@ -17,8 +17,14 @@ class Decision:
     """An engine's verdict that a derived event should fire.
 
     The runtime turns this into the emitted message (and stamps the entity key), so
-    engines only *decide* — they don't shape envelopes/lineage/capabilities. `score` is
-    the engine's confidence metric.
+    engines only *decide* — they don't shape envelopes/lineage/capabilities.
+
+    `score` is **detection-local and not emitted**: it is whatever quantity this engine
+    thresholds on, so its scale is the engine's own (a weight sum here, a constant there, a
+    fix count elsewhere) and it is not comparable across engines. The runtime logs it when the
+    event fires — invaluable when tuning a weight map ("fired at 12 against a threshold of 10")
+    — but it does not reach the data model. It used to, as `confidence_score`; see
+    `inference.event` for why a cross-hop confidence scalar was the wrong shape.
 
     `sources` are the **full source event records** the engine used (the whole bodies as
     consumed, not a trimmed projection). The shaping stage derives everything downstream

@@ -60,7 +60,6 @@ export default function EventModal({ event, byId, levelOf, derivLevel, defaultOf
   const back = () => setTrail((t) => (t.length > 1 ? t.slice(0, -1) : t));
 
   const kids = (e.message.derived_from || []).map((p) => byId[p.id]).filter(Boolean) as AwareEvent[];
-  const conf = e.message.confidence_score;
   const dl = derivLevel(e);
   const lv = levelOf(e.name);
   const cat = catOf(e.name);
@@ -95,7 +94,6 @@ export default function EventModal({ event, byId, levelOf, derivLevel, defaultOf
                   ↓ {hiddenBeneath} below
                 </span>
               )}
-              {conf != null ? <span className="conf">confidence {conf}</span> : null}
             </div>
           </div>
         </div>
