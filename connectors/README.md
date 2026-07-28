@@ -59,15 +59,23 @@ If a mapping needs more than a Set node, it is semantics and belongs in
 ## Building one with the n8n MCP
 
 Workflows are authored through **n8n's official instance-level MCP server** — first-party, 25
-tools, registered in [`.mcp.json`](../.mcp.json) as an HTTP server:
-
-```
-POST https://<n8n-host>/mcp-server/http
-```
+tools, at `POST https://<n8n-host>/mcp-server/http`.
 
 Enable it once in n8n at **Settings → Instance-level MCP**, then mint a token on the **Access
 Token** tab. Note this is a **different credential from the REST API key** — the API key returns
-401 here. Credentials follow the same split as every other MCP server in this repo:
+401 here.
+
+> ⚠️ **It must be reached through the `mcp-remote` stdio bridge, not as a `type: "http"` server**
+> (which is how [`.mcp.json`](../.mcp.json) configures it). n8n's MCP server is **POST-only**:
+> `GET /mcp-server/http` returns **404**, so there is no server→client SSE stream. Claude Code's
+> native HTTP transport requires that stream and treats its absence as fatal — it connects
+> successfully, reports `hasTools: true`, then immediately drops with
+> `Failed to open SSE stream: Not Found` and exposes **zero tools**. `mcp-remote` hits the same
+> 404, logs it, and correctly carries on over POST. (Per the MCP spec the GET stream is optional
+> and a server declining it should answer **405**; n8n answering 404 is likely why the strict
+> client gives up.)
+
+Credentials follow the same split as every other MCP server in this repo:
 
 | File | Committed? | Holds |
 |---|---|---|

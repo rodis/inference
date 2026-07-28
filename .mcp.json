@@ -22,11 +22,16 @@
       "url": "https://mcp.neon.tech/mcp"
     },
     "n8n": {
-      "type": "http",
-      "url": "${N8N_API_URL}/mcp-server/http",
-      "headers": {
-        "Authorization": "Bearer ${N8N_MCP_TOKEN}"
-      }
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "${N8N_API_URL}/mcp-server/http",
+        "--header",
+        "Authorization: Bearer ${N8N_MCP_TOKEN}",
+        "--transport",
+        "http-only"
+      ]
     }
   }
 }

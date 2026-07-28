@@ -1,0 +1,8 @@
+# #23: retire BOTH phone peripherals (charger + CarPlay) from both maps, replacing them with
+# the directional WiFi edge + the BMW door. Thresholds unchanged.
+# entry: wifi 6 + lock 4 + door 4 = 14 max; wifi+one ambiguous = 10 < 11 (needs all three)
+# exit:  wifi 6 + gate 4 = 10 fires; lock 5 + door 5 = 10 fires
+got_into_the_car:
+  weights: {car_lock_state_change: 4, car_driver_door_opened: 4, car_wifi_connected: 6}
+got_out_the_car:
+  weights: {car_lock_state_change: 5, car_driver_door_opened: 5, car_wifi_disconnected: 6}

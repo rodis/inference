@@ -1,0 +1,7 @@
+# As retire_peripherals_both but entry threshold 10, so the DIRECTIONAL wifi edge plus ONE
+# ambiguous corroborator is enough (wifi+door=10, wifi+lock=10) rather than requiring all three.
+got_into_the_car:
+  threshold: 10
+  weights: {car_lock_state_change: 4, car_driver_door_opened: 4, car_wifi_connected: 6}
+got_out_the_car:
+  weights: {car_lock_state_change: 5, car_driver_door_opened: 5, car_wifi_disconnected: 6}
