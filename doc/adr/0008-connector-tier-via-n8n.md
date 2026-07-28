@@ -120,7 +120,23 @@ could not match that per-source cheaply. Gmail simply is not such a source.
 
 **Known wrinkle:** n8n's community reports the Gmail Trigger *missing* messages at 1-minute
 polling. Combined with ingest being at-most-once and acknowledging on receipt, completeness
-is measured rather than assumed.
+is measured rather than assumed. A second, sharper one: the trigger's `readStatus` defaults to
+**`unread`**, silently dropping any message read before the next poll — that default is a
+completeness hole, not a preference, and is plausibly part of the reputation above.
+
+**It does NOT insulate us from Google's OAuth lifecycle, which is where this claim was too
+generous.** "n8n already holds working Gmail credentials" was taken as given; on first use the
+credential failed with `invalid_grant`, and its record showed no successful token refresh since
+2026-03-23 — roughly four months dead, with the workflow that depends on it showing zero
+executions. The likely cause is the OAuth **consent screen sitting in "Testing"**, where Google
+expires refresh tokens after **7 days**. That is a property of the Google Cloud OAuth *client*,
+not of the client library, so n8n cannot help: it removes the refresh *loop* we would have
+written, not the consent-screen configuration we would have had to get right anyway. What n8n
+genuinely saves on a source like Gmail is the poller, the cursor and the state table — a smaller
+list than first claimed.
+
+The lesson generalises past OAuth: **a credential's existence is not its validity.** Test a
+connector's auth before treating it as a reason to prefer one design over another.
 
 **True Gmail push is a deliberate Stage 3.** `users.watch` + Cloud Pub/Sub → an n8n Webhook
 node gives seconds. It costs the GCP project and OAuth setup n8n was chosen to avoid, plus a
