@@ -11,9 +11,20 @@
  * the connector tier — there is no rederive.py for ingestion, because the raw signal is what
  * rederive replays FROM.
  *
- * Run it, confirm the rows in Neon, then ARCHIVE it (archive_workflow). It is deliberately not
- * published: a scheduled backfill would re-post the same mail every run, and while a duplicate is
- * non-fatal by design (see below), it is still noise in the timeline.
+ * KEEP IT, unpublished. (An earlier note here said to archive it after one use; that was wrong —
+ * labelling more history is a recurring act, not a one-time one, so this stays the tool for it.)
+ * Unpublished means it can only ever run when a human runs it, which is the safety property that
+ * matters; publishing it would re-post the same mail on every trigger.
+ *
+ * ⚠️ RE-RUNNING over mail already ingested WILL duplicate those rows. Duplicates are non-fatal by
+ * design (uuid PK, no deterministic id — see below) and `connector_eval.py` surfaces them via
+ * `upstream_id`, but they are still noise on the timeline. So before a re-run, bound it: set
+ * `filters.receivedAfter` to the newest already-ingested mail —
+ *
+ *     select max(occurred_at) from events
+ *      where source_app = 'gmail' and name = 'email_labeled_parking';
+ *
+ * — and only newly-labelled older mail outside that range needs a full pass.
  *
  * ⚠️ The mapping below is a COPY of the live connector's. Keep the two in sync, or archive this
  * file once the backfill is done. Duplication is tolerable only because this is single-use.
