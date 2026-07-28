@@ -71,6 +71,7 @@ NON_CONNECTORS = ("inference", "owntracks", "overland", "shortcut", "bmw", "back
 
 PIPELINE_LAG_BUDGET = 10.0   # seconds; ~3x the measured 3.3s baseline before it's worth a look
 STALE_HOURS = 24.0           # newest event older than this = the connector may be dead
+TRIGGER_LAG_CEILING = 900.0  # 15x n8n's 60s poll floor; past this something is wrong
 
 # One statement, because every metric is an aggregate over the same filtered rows and a second
 # pass would let the window shift under us (Neon is live).
@@ -84,6 +85,10 @@ WITH rows AS (
            occurred_at,
            ingested_at,
            EXTRACT(EPOCH FROM ingested_at - occurred_at) AS e2e,
+           -- A backfilled row is HISTORY replayed on demand: its occurred_at is weeks old while
+           -- n8n_polled_at is "just now", so its trigger lag measures when the backfill was run,
+           -- not how quickly the connector notices mail. Left in the counts, out of the latency.
+           COALESCE((message->>'backfill')::boolean, false) AS is_backfill,
            CASE WHEN jsonb_typeof(message->'n8n_polled_at') = 'number'
                 THEN (message->>'n8n_polled_at')::bigint - EXTRACT(EPOCH FROM occurred_at)
            END AS trigger_lag,
@@ -102,22 +107,23 @@ SELECT source_app,
        max(ingested_at)                                  AS last_seen,
        EXTRACT(EPOCH FROM now() - max(ingested_at)) / 3600.0 AS age_hours,
 
-       percentile_cont(0.5)  WITHIN GROUP (ORDER BY e2e)  AS e2e_p50,
-       percentile_cont(0.95) WITHIN GROUP (ORDER BY e2e)  AS e2e_p95,
-       max(e2e)                                          AS e2e_max,
+       percentile_cont(0.5)  WITHIN GROUP (ORDER BY e2e) FILTER (WHERE NOT is_backfill)  AS e2e_p50,
+       percentile_cont(0.95) WITHIN GROUP (ORDER BY e2e) FILTER (WHERE NOT is_backfill)  AS e2e_p95,
+       max(e2e) FILTER (WHERE NOT is_backfill)           AS e2e_max,
 
-       count(trigger_lag)                                AS n_stamped,
+       count(trigger_lag) FILTER (WHERE NOT is_backfill) AS n_stamped,
+       count(*) FILTER (WHERE is_backfill)               AS n_backfill,
        percentile_cont(0.5)  WITHIN GROUP (ORDER BY trigger_lag)
-           FILTER (WHERE trigger_lag IS NOT NULL)        AS trig_p50,
+           FILTER (WHERE trigger_lag IS NOT NULL AND NOT is_backfill)        AS trig_p50,
        percentile_cont(0.95) WITHIN GROUP (ORDER BY trigger_lag)
-           FILTER (WHERE trigger_lag IS NOT NULL)        AS trig_p95,
-       max(trigger_lag)                                  AS trig_max,
+           FILTER (WHERE trigger_lag IS NOT NULL AND NOT is_backfill)        AS trig_p95,
+       max(trigger_lag) FILTER (WHERE NOT is_backfill)    AS trig_max,
 
        percentile_cont(0.5)  WITHIN GROUP (ORDER BY pipeline_lag)
-           FILTER (WHERE pipeline_lag IS NOT NULL)       AS pipe_p50,
+           FILTER (WHERE pipeline_lag IS NOT NULL AND NOT is_backfill)       AS pipe_p50,
        percentile_cont(0.95) WITHIN GROUP (ORDER BY pipeline_lag)
-           FILTER (WHERE pipeline_lag IS NOT NULL)       AS pipe_p95,
-       max(pipeline_lag)                                 AS pipe_max,
+           FILTER (WHERE pipeline_lag IS NOT NULL AND NOT is_backfill)       AS pipe_p95,
+       max(pipeline_lag) FILTER (WHERE NOT is_backfill)   AS pipe_max,
 
        count(*) FILTER (WHERE jsonb_typeof(message->'timestamp') <> 'number') AS ts_not_number,
        -- Scoped to raw: a DERIVED event carries inference_type by design, so an unscoped check
@@ -150,9 +156,24 @@ HAVING count(*) > 1
 """
 
 
-def _n(v, unit: str = "s", width: int = 7) -> str:
-    """Format a possibly-NULL numeric so a missing measurement reads as absent, not as zero."""
-    return f"{'—':>{width}}" if v is None else f"{float(v):>{width}.1f}{unit}"
+def _n(v, unit: str = "", width: int = 9) -> str:
+    """Format a possibly-NULL duration in seconds, compactly and in scale-appropriate units.
+
+    A fixed "%.1f seconds" is unusable here: a backfilled row can carry a lag of 10^6 seconds,
+    which overruns its column and silently runs into the next one (it did). Units keep every
+    magnitude legible in the same width.
+    """
+    if v is None:
+        return f"{'—':>{width}}"
+    s = float(v)
+    a = abs(s)
+    if a < 600:
+        out = f"{s:.1f}s"
+    elif a < 86_400:
+        out = f"{s / 60:.0f}m"
+    else:
+        out = f"{s / 86_400:.1f}d"
+    return f"{out:>{width}}"
 
 
 def report(dsn: str, days: int, source: str | None, users: list[str],
@@ -190,16 +211,26 @@ def report(dsn: str, days: int, source: str | None, users: list[str],
         if age > STALE_HOURS:
             problems.append(f"{r['source_app']}: no events for {age:.1f}h — connector may be dead")
 
-    print("\n--- latency split (needs `n8n_polled_at`; trigger lag is the connector's, pipeline is ours) ---")
+    n_bf = sum(r["n_backfill"] or 0 for r in rows)
+    print("\n--- latency split (needs `n8n_polled_at`; trigger lag is the connector's, pipeline is ours)"
+          + (f"\n    {n_bf} backfilled row(s) EXCLUDED — their lag is when the backfill ran, not connector latency" if n_bf else "")
+          + " ---")
     print(f"{'source_app':<14}{'stamped':>9}   "
           f"{'trig p50':>10}{'p95':>10}   {'pipe p50':>10}{'p95':>10}{'max':>10}")
     print("-" * 76)
     for r in rows:
-        stamped = f"{r['n_stamped']}/{r['n']}"
+        live = r["n"] - (r["n_backfill"] or 0)
+        stamped = f"{r['n_stamped']}/{live}"
         print(f"{r['source_app']:<14}{stamped:>9}   "
               f"{_n(r['trig_p50'], '', 10)}{_n(r['trig_p95'], '', 10)}   "
               f"{_n(r['pipe_p50'], '', 10)}{_n(r['pipe_p95'], '', 10)}{_n(r['pipe_max'], '', 10)}")
-        if not r["n_stamped"]:
+        if live == 0:
+            # Distinguish "nothing live to measure yet" from "the stamp is missing". Blaming a
+            # missing field when every row was simply excluded as backfill sends you looking for
+            # a bug in the mapping that isn't there.
+            problems.append(f"{r['source_app']}: {r['n_backfill']} backfilled row(s) but no LIVE "
+                            "capture yet — latency is unmeasured, not good")
+        elif not r["n_stamped"]:
             problems.append(f"{r['source_app']}: no `n8n_polled_at` — trigger lag is unattributable")
         elif r["pipe_p50"] is not None and float(r["pipe_p50"]) < 0:
             # Pipeline lag cannot be negative — the row is persisted AFTER it was fetched. So a
@@ -210,6 +241,11 @@ def report(dsn: str, days: int, source: str | None, users: list[str],
             problems.append(
                 f"{r['source_app']}: pipeline lag p50 is NEGATIVE ({float(r['pipe_p50']):.1f}s) — "
                 "`n8n_polled_at` is in the future. Check it is epoch SECONDS, not Date.now() ms")
+        elif r["trig_p95"] is not None and float(r["trig_p95"]) > TRIGGER_LAG_CEILING:
+            problems.append(
+                f"{r['source_app']}: trigger lag p95 {float(r['trig_p95']) / 60:.0f}min — far past any "
+                f"poll floor. Either the source is delivering late, or these are backfilled rows "
+                f"missing the `backfill: true` marker")
         elif r["pipe_p95"] is not None and float(r["pipe_p95"]) > PIPELINE_LAG_BUDGET:
             problems.append(f"{r['source_app']}: pipeline lag p95 "
                             f"{float(r['pipe_p95']):.1f}s > {PIPELINE_LAG_BUDGET}s budget (ours to fix)")
