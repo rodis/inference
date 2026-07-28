@@ -115,7 +115,25 @@ n8n also ships a native instance-level MCP server (public preview since April 20
 switching to if the community server proves limiting — it would be an `{"type": "http", "url":
 …}` entry instead, like the `neon` one.
 
-## Checking one is healthy
+## Folders — created by API, assigned by hand
+
+Connector workflows live in the n8n folder **`Aware connectors`** (project: personal), so they
+sit apart from the invoicing workflows sharing the instance.
+
+Creating a folder is scriptable; **putting a workflow in one is not.** Verified 2026-07-28:
+
+| Attempt | Result |
+|---|---|
+| `POST /api/v1/projects/{projectId}/folders` | ✅ **201** — folders can be created |
+| `PUT /api/v1/workflows/{id}` with `parentFolderId` | ❌ 400 `must NOT have additional properties` |
+| `PATCH /api/v1/workflows/{id}` | ❌ 405 method not allowed |
+| `PUT /api/v1/workflows/{id}/transfer` | ❌ 400 — cross-*project* only; rejects same-project before it looks at the folder |
+| MCP `create_workflow_from_code` with `folderId` | ⚠️ accepted, then **silently ignored** — created at root |
+| `/rest/*` internal API | ❌ 401 — needs a browser session, not an API key |
+
+So a new connector workflow lands at the project root and has to be **dragged into the folder in
+the UI**. Two seconds by hand, and not worth more automation effort than that — but worth writing
+down, because the MCP `folderId` parameter looks like it works and does not.
 
 ```bash
 NEON_DATABASE_URL=... uv run python scripts/connector_eval.py --days 7
