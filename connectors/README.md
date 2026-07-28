@@ -42,17 +42,36 @@ If a mapping needs more than a Set node, it is semantics and belongs in
 ## Building one with the n8n MCP
 
 An `n8n` MCP server is registered in [`.mcp.json`](../.mcp.json) so workflows can be authored
-and inspected from here rather than clicked together by hand. It reads two env vars, following
-the same `${VAR}` convention as the other servers in that file:
+and inspected from here rather than clicked together by hand. Credentials follow the same split
+as every other MCP server in this repo:
 
-```bash
-export N8N_API_URL='https://<your-n8n-host>'
-export N8N_API_KEY='<n8n API key>'     # n8n: Settings → API → create key
+| File | Committed? | Holds |
+|---|---|---|
+| [`.mcp.json`](../.mcp.json) | **yes** | the server *definition*, with `${N8N_API_URL}` / `${N8N_API_KEY}` placeholders |
+| `.claude/settings.local.json` | **no** — gitignored | the *values*, in its `env` block, plus `n8n` in `enabledMcpjsonServers` |
+
+Claude Code injects that `env` block into the process environment, which is what the `${…}`
+placeholders expand from. So the values go here, alongside the existing `AIVEN_TOKEN` and
+`GH_BACKLOG_TOKEN`:
+
+```jsonc
+// .claude/settings.local.json  (gitignored — never commit this file)
+{
+  "env": {
+    "N8N_API_URL": "https://<your-n8n-host>",
+    "N8N_API_KEY": "<key from n8n: Settings → API>"
+  },
+  "enabledMcpjsonServers": ["redis", "aiven", "neon", "n8n"]
+}
 ```
 
-Both are **optional** — node search, templates and documentation work without them; they are
-needed only to create, deploy or test workflows in the instance. Restart Claude Code after
-setting them.
+**Not Doppler, and not a K8s secret** — those serve the cluster, and this MCP server is a local
+developer tool that never runs in a pod. Restart Claude Code after editing.
+
+Both vars are **optional**: node search, templates and documentation work without them; they are
+needed only to create, deploy or test workflows in the instance. The `env` block takes literal
+strings only — no command substitution — so if you would rather not keep an API key on disk,
+export the two vars from your shell profile via `op read` instead and leave them out of the file.
 
 n8n also ships a native instance-level MCP server (public preview since April 2026). Worth
 switching to if the community server proves limiting — it would be an `{"type": "http", "url":
