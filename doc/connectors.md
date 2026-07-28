@@ -164,8 +164,11 @@ produced exactly this — a failure entirely inside n8n, nothing at Vector, no r
 
 ## 6 · Adding a connector
 
-1. Build the workflow in n8n: **Trigger → Set → HTTP Request**, posting to
-   `/sensors/<app>`. Keep it three nodes.
+1. Build the workflow: **Trigger → Set → HTTP Request**, posting to `/sensors/<app>`. Keep it
+   three nodes. Author it as `@n8n/workflow-sdk` code and push it in with `validate_workflow` →
+   `create_workflow_from_code`, passing **`projectId` and `folderId`** so it lands in the
+   `Aware connectors` folder — an existing workflow cannot be moved into a folder via the API,
+   only created into one. See [`connectors/README.md`](../connectors/README.md).
 2. Verify the first event in SQL (`jsonb_typeof(message->'timestamp') = 'number'`,
    `event_class = 'raw'`, `occurred_at` = the source's event time, not the poll time).
 3. **Export the workflow JSON and commit it** to [`connectors/n8n/`](../connectors/) — a

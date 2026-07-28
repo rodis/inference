@@ -115,25 +115,37 @@ n8n also ships a native instance-level MCP server (public preview since April 20
 switching to if the community server proves limiting — it would be an `{"type": "http", "url":
 …}` entry instead, like the `neon` one.
 
-## Folders — created by API, assigned by hand
+## Folders
 
-Connector workflows live in the n8n folder **`Aware connectors`** (project: personal), so they
-sit apart from the invoicing workflows sharing the instance.
+Connector workflows live in the n8n folder **`Aware connectors`** (personal project
+`vQjVt54oDJ8L5EFs`, folder `WldaOCB1AqgQMUHm`), so they sit apart from the invoicing workflows
+sharing the instance.
 
-Creating a folder is scriptable; **putting a workflow in one is not.** Verified 2026-07-28:
+> **Always pass `projectId` AND `folderId` to `create_workflow_from_code`.** A new workflow then
+> lands in the folder directly — no manual tidying. Omit them and it goes to the project root.
 
-| Attempt | Result |
+Verified 2026-07-28:
+
+| Operation | How |
 |---|---|
-| `POST /api/v1/projects/{projectId}/folders` | ✅ **201** — folders can be created |
-| `PUT /api/v1/workflows/{id}` with `parentFolderId` | ❌ 400 `must NOT have additional properties` |
-| `PATCH /api/v1/workflows/{id}` | ❌ 405 method not allowed |
-| `PUT /api/v1/workflows/{id}/transfer` | ❌ 400 — cross-*project* only; rejects same-project before it looks at the folder |
-| MCP `create_workflow_from_code` with `folderId` | ⚠️ accepted, then **silently ignored** — created at root |
-| `/rest/*` internal API | ❌ 401 — needs a browser session, not an API key |
+| Create a folder | ✅ `POST /api/v1/projects/{projectId}/folders` → 201 |
+| Create a workflow **into** a folder | ✅ MCP `create_workflow_from_code` with `projectId` + `folderId` |
+| **Move** an existing workflow | ❌ not possible via API — see below. Drag it in the UI |
+| Read which folder a workflow is in | ❌ not exposed anywhere |
 
-So a new connector workflow lands at the project root and has to be **dragged into the folder in
-the UI**. Two seconds by hand, and not worth more automation effort than that — but worth writing
-down, because the MCP `folderId` parameter looks like it works and does not.
+Moving is the gap. `PUT /api/v1/workflows/{id}` rejects `parentFolderId` (400, *must NOT have
+additional properties*), `PATCH` is 405, and `PUT /workflows/{id}/transfer` handles
+cross-*project* moves only — it rejects a same-project call before it ever looks at the folder.
+The `/rest/*` internal API needs a browser session, not an API key. Curiously a workflow's
+`scopes` do include `workflow:move`, so it is a real operation, just not surfaced publicly.
+
+> ⚠️ **Folder membership is invisible to every API surface here** — no `parentFolderId` field on
+> `GET /api/v1/workflows`, no `?parentFolderId=` filter (400, unknown query parameter), and
+> nothing in MCP `search_workflows` / `get_workflow_details`. So placement **cannot be verified
+> programmatically**; the n8n UI is the only authority. This is worth knowing before you conclude
+> anything: an earlier pass here read `w.get('parentFolderId') is None` as "the folder was
+> ignored", when the key is simply absent for *every* workflow, including ones sitting in
+> folders. Absence of the field is not absence of the folder.
 
 ```bash
 NEON_DATABASE_URL=... uv run python scripts/connector_eval.py --days 7
