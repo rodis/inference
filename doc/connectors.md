@@ -153,7 +153,14 @@ Two calibration facts, measured 2026-07-28 on the real lane:
 
 **Freshness is the risk that matters.** n8n being down produces *silence*, and silence is
 indistinguishable from "nothing happened at the source." There is no alerting in this repo
-yet, so this is a query you have to run rather than something that pages you.
+yet, so this is a query you have to run rather than something that pages you. First real
+instance, on day one: a Gmail credential whose refresh token had been dead for four months
+produced exactly this — a failure entirely inside n8n, nothing at Vector, no row in Neon.
+
+> ⚠️ **Counting for the completeness check: count what the API returns, not what the UI shows.**
+> Gmail's UI labels a **conversation**; the API returns **messages**. Labelling 12 conversations
+> put **15** rows in Neon — not a duplicate bug (all 15 had distinct `upstream_id`s), just two
+> different units. Compare message counts on both sides or the loss rate is meaningless.
 
 ## 6 · Adding a connector
 

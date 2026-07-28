@@ -88,8 +88,12 @@ const CANONICAL_BODY =
   // stall persistence for unrelated sources. A duplicate must be visible, not fatal.
   ' "upstream_id": {{ JSON.stringify($json.id) }},' +
   ' "gmail_thread_id": {{ JSON.stringify($json.threadId) }},' +
-  ' "from": {{ JSON.stringify($json.from) }},' +
-  ' "from_domain": {{ JSON.stringify(String($json.from || "").split("@").pop().replace(/[>\\s]/g, "").toLowerCase()) }},' +
+  // `from` is a mailparser OBJECT, not a string: {html, text, value:[{name,address}]}. The
+  // first version of this stringified it and shipped "[objectobject]" as from_domain to 15
+  // rows — a reminder to look at what a node actually emits before mapping it.
+  ' "from": {{ JSON.stringify(((($json.from || {}).value || [{}])[0] || {}).address || "") }},' +
+  ' "from_name": {{ JSON.stringify(((($json.from || {}).value || [{}])[0] || {}).name || "") }},' +
+  ' "from_domain": {{ JSON.stringify(String(((($json.from || {}).value || [{}])[0] || {}).address || "").split("@").pop().toLowerCase()) }},' +
   ' "subject": {{ JSON.stringify($json.subject) }},' +
   // A bounded preview, NOT the body. Whole bodies would breach the ~1 MiB nginx ingress and
   // Kafka ceilings, and would sit in Neon JSONB forever. upstream_id is enough to re-fetch the

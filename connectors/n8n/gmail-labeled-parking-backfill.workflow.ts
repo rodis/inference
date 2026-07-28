@@ -76,8 +76,12 @@ const CANONICAL_BODY =
   // whole 500-event Neon batch), and connector_eval.py groups on this to surface it.
   ' "upstream_id": {{ JSON.stringify($json.id) }},' +
   ' "gmail_thread_id": {{ JSON.stringify($json.threadId) }},' +
-  ' "from": {{ JSON.stringify($json.from) }},' +
-  ' "from_domain": {{ JSON.stringify(String($json.from || "").split("@").pop().replace(/[>\\s]/g, "").toLowerCase()) }},' +
+  // `from` is a mailparser OBJECT, not a string: {html, text, value:[{name,address}]}. The
+  // first version of this stringified it and shipped "[objectobject]" as from_domain to 15
+  // rows — a reminder to look at what a node actually emits before mapping it.
+  ' "from": {{ JSON.stringify(((($json.from || {}).value || [{}])[0] || {}).address || "") }},' +
+  ' "from_name": {{ JSON.stringify(((($json.from || {}).value || [{}])[0] || {}).name || "") }},' +
+  ' "from_domain": {{ JSON.stringify(String(((($json.from || {}).value || [{}])[0] || {}).address || "").split("@").pop().toLowerCase()) }},' +
   ' "subject": {{ JSON.stringify($json.subject) }},' +
   ' "snippet": {{ JSON.stringify(String($json.text || $json.snippet || "").replace(/\\s+/g, " ").trim().slice(0, 200)) }},' +
   // The one field the live connector does not send: marks these rows as history, not live
