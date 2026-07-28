@@ -1,10 +1,13 @@
 """Engine decide() logic — thresholds, cooldown, windowing, decay, pairing, and that
 each engine now carries the FULL source event bodies on the Decision (not {id,ts})."""
 
+import pytest
+
 from inference.engines.decaying_window import DecayingWindowEngine
 from inference.engines.geofence import GeofenceEngine
 from inference.engines.session_gated_window import SessionGatedWindowEngine
 from inference.engines.session_window import SessionWindowEngine
+from inference.engines.ssid_edge import SsidEdgeEngine
 from inference.engines.stay_window import StayWindowEngine
 from inference.engines.validated_session_window import ValidatedSessionWindowEngine
 from inference.engines.weighted_window import WeightedWindowEngine
@@ -464,3 +467,80 @@ def test_validated_coverage_is_a_true_fraction_of_the_session(state, event):
     for off in (10, 20, 30):
         eng.decide(_fix(event, T + off), state)                       # 3 fixes, coverage 20/3600
     assert eng.decide(event("out", T + 3600), state) is not None       # abstains on coverage
+
+
+# --- ssid_edge ------------------------------------------------------------------
+
+_CAR_SSID = "BMW 73638"
+
+
+def _ssid(direction, **over):
+    cfg = {"ssid": _CAR_SSID, "direction": direction, "field": "wifi", "sources": ["overland"]}
+    cfg.update(over)
+    return SsidEdgeEngine(cfg)
+
+
+def _wifi(t, wifi=None, *, source_app="overland"):
+    """A location_ping envelope. `wifi=None` omits the key entirely — which is what Overland
+    does when off WiFi (it never sends an explicit null), so absent must read as not-joined."""
+    msg = {"id": f"p{t}", "name": "location_ping", "user_id": "u", "timestamp": t}
+    if wifi is not None:
+        msg["wifi"] = wifi
+    return {"name": "location_ping", "source_app": source_app,
+            "source_type": "http_server", "message": msg}
+
+
+def test_ssid_connect_fires_on_join_edge(state):
+    eng = _ssid("connect")
+    assert eng.decide(_wifi(T), state) is None                        # baseline: off WiFi
+    d = eng.decide(_wifi(T + 10, _CAR_SSID), state)
+    assert d is not None and d.occurred_at == T + 10
+    assert eng.decide(_wifi(T + 20, _CAR_SSID), state) is None        # steady state, no refire
+
+
+def test_ssid_disconnect_fires_on_leave_edge(state):
+    eng = _ssid("disconnect")
+    assert eng.decide(_wifi(T, _CAR_SSID), state) is None             # baseline: already joined
+    assert eng.decide(_wifi(T + 10, _CAR_SSID), state) is None
+    d = eng.decide(_wifi(T + 20), state)                              # key absent == off WiFi
+    assert d is not None and d.occurred_at == T + 20
+
+
+def test_ssid_first_observation_is_baseline_silent(state):
+    """A phone already in the car at startup (or after a state reset) must not mint an entry
+    it never crossed — the edge rule the BMW mapper applies to its own edge descriptors."""
+    eng = _ssid("connect")
+    assert eng.decide(_wifi(T, _CAR_SSID), state) is None
+
+
+@pytest.mark.parametrize("direction,fires", [("disconnect", True), ("connect", False)])
+def test_ssid_switch_to_another_network_is_a_disconnect_not_a_connect(state, direction, fires):
+    """Arriving home goes BMW -> house WiFi directly, never via off-WiFi."""
+    eng = _ssid(direction)
+    eng.decide(_wifi(T, _CAR_SSID), state)                            # baseline: in the car
+    assert (eng.decide(_wifi(T + 10, "MikroTik-5BA045"), state) is not None) is fires
+
+
+def test_ssid_ignores_a_producer_that_does_not_report_the_field(state):
+    """OwnTracks also emits location_ping and reports WiFi on no ping. Ungated, one interleaved
+    OwnTracks fix mid-drive reads as off-WiFi and mints a phantom exit."""
+    eng = _ssid("disconnect")
+    eng.decide(_wifi(T, _CAR_SSID), state)                            # baseline: in the car
+    assert eng.decide(_wifi(T + 10, source_app="owntracks"), state) is None
+    assert eng.decide(_wifi(T + 20, _CAR_SSID), state) is None        # state was never corrupted
+    assert eng.decide(_wifi(T + 30), state) is not None               # the real exit still fires
+
+
+def test_ssid_skips_out_of_order_pings(state):
+    """Overland posts batches whose internal order is not guaranteed. Replaying a ping OLDER
+    than the last transition would mint a phantom join at the stale timestamp."""
+    eng = _ssid("connect")
+    eng.decide(_wifi(T, _CAR_SSID), state)                            # baseline: joined
+    assert eng.decide(_wifi(T + 100), state) is None                  # left (not a connect edge)
+    assert eng.decide(_wifi(T + 50, _CAR_SSID), state) is None        # late — must not fire
+
+
+def test_ssid_empty_string_is_off_wifi_not_an_ssid(state):
+    eng = _ssid("disconnect")
+    eng.decide(_wifi(T, _CAR_SSID), state)
+    assert eng.decide(_wifi(T + 10, "   "), state) is not None

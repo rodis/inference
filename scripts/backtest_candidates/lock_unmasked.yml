@@ -1,0 +1,11 @@
+# Issue #3 probe: does the drive-away `car_locked` only look harmless because an entry-side
+# PHANTOM got_out (#4/#2) fires first and its 600s cooldown swallows it?
+# Demote the BMW door to 4 in got_out — that removes the {lock 5 + door 5}=10 phantom-at-entry
+# path (real exits still fire: door+power=9+gate=13, door+carplay-disc=10) — and add car_locked.
+got_out_the_car:
+  weights:
+    device_disconnected_from_carplay: 6
+    car_lock_state_change: 5
+    device_disconnected_from_power: 5
+    car_driver_door_opened: 4
+    car_locked: 5

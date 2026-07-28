@@ -132,10 +132,15 @@ pipeline goes quiet unnoticed. Only worth it if measurement shows 60s is inadequ
 - **Positive:** source N+1 costs a workflow, not a worker. No image, no `values.yml`, no
   Doppler secret, no rollout, no ArgoCD app. Third-party credentials stay in one place.
 - **Positive:** the VRL adapter count is frozen at two.
-- **Negative — connector logic is not deployed from git.** Mitigated by committing each
-  workflow's exported JSON to [`connectors/n8n/`](../../connectors/): not *deployed* from
-  git, but reviewable, diffable and restorable, so a lost instance is a re-import rather than
-  a re-derivation.
+- **Negative — connector logic is not deployed from git, but much less so than assumed.**
+  n8n's official instance-level MCP server authors workflows as **`@n8n/workflow-sdk`
+  TypeScript** (`create_workflow_from_code`, `validate_workflow`, `update_workflow`), so the
+  artifact is *source code*, not an exported JSON blob. Committing that source to
+  [`connectors/n8n/`](../../connectors/) gives real review and meaningful diffs, and makes a
+  lost instance a re-run rather than a re-derivation. What remains outside git is only the
+  *deploy step* — the code still has to be pushed into the instance, and the instance is still
+  the thing actually executing. That is a materially smaller gap than "logic lives in a GUI",
+  and it is the strongest argument for the official MCP server over the community one.
 - **Negative — no scripted historical backfill.** Fetching two years of a label is a manual
   one-off n8n run with a date range, not a `rederive.py`-style replay.
 - **Negative — n8n becomes a new failure domain**, and its failure mode is *silence*, which

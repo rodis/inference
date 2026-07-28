@@ -1,0 +1,7 @@
+# The prize if the WiFi edges hold: drop the direction-ambiguous phone lock entirely.
+# car_lock_state_change is the root of #2's phantom exit-at-entry ({lock,door}=10=threshold);
+# with a directional signal available it may no longer be needed on either side.
+got_into_the_car:
+  weights: {device_connected_to_power: 6, device_connected_to_carplay: 5, car_driver_door_opened: 4, car_wifi_connected: 6}
+got_out_the_car:
+  weights: {device_disconnected_from_carplay: 6, device_disconnected_from_power: 5, car_driver_door_opened: 5, car_wifi_disconnected: 6}

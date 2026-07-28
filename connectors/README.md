@@ -12,20 +12,37 @@ of one file. A lost n8n instance becomes a re-import rather than a re-derivation
 ## Layout
 
 ```
-connectors/n8n/<source>-<what-it-watches>.workflow.json
+connectors/n8n/<source>-<what-it-watches>.workflow.ts     ← preferred: SDK source
+connectors/n8n/<source>-<what-it-watches>.workflow.json    ← fallback: UI export
 ```
 
-e.g. `gmail-labeled-receipts.workflow.json`. One file per workflow; one workflow per thing
+e.g. `gmail-labeled-receipts.workflow.ts`. One file per workflow; one workflow per thing
 watched, so each stays at the three nodes ADR 0008 assumes (Trigger → Set → HTTP Request).
 
-## Exporting
+## Prefer SDK source over a JSON export
 
-In n8n: open the workflow → **⋯ → Download**. Commit the result unchanged.
+n8n's official MCP server authors workflows as **`@n8n/workflow-sdk` TypeScript** and pushes
+them in with `create_workflow_from_code` / `update_workflow`. That means the committed artifact
+can be **real source code** rather than a serialised blob:
 
-⚠️ **Check the export for secrets before committing.** n8n stores credentials separately from
-workflows and normally exports only a credential *reference* (an id and name), but any secret
-typed directly into a node parameter — an API key in a header, a token in a URL — **is** in the
-JSON. Read the diff, don't just `git add`.
+```ts
+import { workflow, trigger, node } from '@n8n/workflow-sdk';
+// … nodes …
+export default workflow('id', 'name').add(gmailTrigger).to(toCanonical).to(postToVector);
+```
+
+Commit that. It reviews like code and diffs meaningfully, where a workflow JSON diff is mostly
+node ids and canvas coordinates. Round-trip through `validate_workflow` before
+`update_workflow`, and keep the file the thing you edit — so the repo copy stays the source of
+truth rather than drifting behind the instance.
+
+A UI export (**⋯ → Download**) is still the right fallback for a workflow built by hand in the
+canvas.
+
+⚠️ **Check either form for secrets before committing.** n8n stores credentials separately and
+normally emits only a credential *reference* (id and name), but any secret typed directly into a
+node parameter — an API key in a header, a token in a URL — **is** in the output. Read the diff,
+don't just `git add`.
 
 ## What a connector must do
 
@@ -41,37 +58,50 @@ If a mapping needs more than a Set node, it is semantics and belongs in
 
 ## Building one with the n8n MCP
 
-An `n8n` MCP server is registered in [`.mcp.json`](../.mcp.json) so workflows can be authored
-and inspected from here rather than clicked together by hand. Credentials follow the same split
-as every other MCP server in this repo:
+Workflows are authored through **n8n's official instance-level MCP server** — first-party, 25
+tools, registered in [`.mcp.json`](../.mcp.json) as an HTTP server:
+
+```
+POST https://<n8n-host>/mcp-server/http
+```
+
+Enable it once in n8n at **Settings → Instance-level MCP**, then mint a token on the **Access
+Token** tab. Note this is a **different credential from the REST API key** — the API key returns
+401 here. Credentials follow the same split as every other MCP server in this repo:
 
 | File | Committed? | Holds |
 |---|---|---|
-| [`.mcp.json`](../.mcp.json) | **yes** | the server *definition*, with `${N8N_API_URL}` / `${N8N_API_KEY}` placeholders |
+| [`.mcp.json`](../.mcp.json) | **yes** | the server *definition*, with `${N8N_API_URL}` / `${N8N_MCP_TOKEN}` placeholders |
 | `.claude/settings.local.json` | **no** — gitignored | the *values*, in its `env` block, plus `n8n` in `enabledMcpjsonServers` |
-
-Claude Code injects that `env` block into the process environment, which is what the `${…}`
-placeholders expand from. So the values go here, alongside the existing `AIVEN_TOKEN` and
-`GH_BACKLOG_TOKEN`:
 
 ```jsonc
 // .claude/settings.local.json  (gitignored — never commit this file)
 {
   "env": {
     "N8N_API_URL": "https://<your-n8n-host>",
-    "N8N_API_KEY": "<key from n8n: Settings → API>"
+    "N8N_MCP_TOKEN": "<Settings → Instance-level MCP → Access Token>",
+    "N8N_API_KEY": "<Settings → API — only needed for direct REST calls>"
   },
   "enabledMcpjsonServers": ["redis", "aiven", "neon", "n8n"]
 }
 ```
 
-**Not Doppler, and not a K8s secret** — those serve the cluster, and this MCP server is a local
-developer tool that never runs in a pod. Restart Claude Code after editing.
+Claude Code injects that `env` block into the process environment, which is what the `${…}`
+placeholders expand from. **Not Doppler, and not a K8s secret** — those serve the cluster, and
+this is a local developer tool that never runs in a pod. Restart Claude Code after editing; a
+newly *added* MCP server is picked up at startup, and `/mcp reconnect` will not do it.
 
-Both vars are **optional**: node search, templates and documentation work without them; they are
-needed only to create, deploy or test workflows in the instance. The `env` block takes literal
-strings only — no command substitution — so if you would rather not keep an API key on disk,
-export the two vars from your shell profile via `op read` instead and leave them out of the file.
+The tools worth knowing: `get_sdk_reference`, `search_nodes` and `get_node_types` (exact
+parameter names) for authoring; `validate_workflow` → `create_workflow_from_code` /
+`update_workflow` to push; `publish_workflow` to activate. And `prepare_test_pin_data` +
+`test_workflow`, which run a workflow against **pinned data** — so a connector can be tested
+without calling Gmail and without posting real events into `raw_sensors`.
+
+> The community `czlonkowski/n8n-mcp` server is an alternative (24 tools, JSON-based). It is not
+> used here: the official one covers the same ground, adds pin-data testing, needs no local npx
+> process, and authors workflows as committable SDK code. It also currently needs a `zod@3.25`
+> pin to start at all (`Cannot find module 'zod/v3'`), which surfaces as a server with zero
+> tools and no error.
 
 n8n also ships a native instance-level MCP server (public preview since April 2026). Worth
 switching to if the community server proves limiting — it would be an `{"type": "http", "url":

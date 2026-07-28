@@ -1,0 +1,11 @@
+# Candidate for issue #3: map the BMW-native `car_locked` into got_out_the_car as an exit
+# signal at 5, alongside the phone's own lock-change. This is the exact swap #3 gates.
+# Expected (per #3 comment 3): a NEW failure path, because the car auto-locks on DRIVE-AWAY,
+# putting a 5-weight "exit" signal inside a live trip with the gate already open.
+got_out_the_car:
+  weights:
+    device_disconnected_from_carplay: 6
+    car_lock_state_change: 5
+    device_disconnected_from_power: 5
+    car_driver_door_opened: 5
+    car_locked: 5

@@ -1,0 +1,9 @@
+# The real payoff of #33: the WiFi edges give enough directional evidence to CLOSE #2.
+# #2 is {car_lock_state_change 5 + car_driver_door_opened 5} = 10 = threshold, a phantom exit at
+# entry. Demoting the door to 4 kills that pair (9 < 10) but removes exit evidence — earlier
+# measurement showed it moving a trip boundary. car_wifi_disconnected at 6 replaces what the
+# door gave up, and does it DIRECTIONALLY, so it cannot re-create the phantom.
+got_into_the_car:
+  weights: {device_connected_to_power: 6, device_connected_to_carplay: 5, car_lock_state_change: 4, car_driver_door_opened: 4, car_wifi_connected: 6}
+got_out_the_car:
+  weights: {device_disconnected_from_carplay: 6, car_lock_state_change: 5, device_disconnected_from_power: 5, car_driver_door_opened: 4, car_wifi_disconnected: 6}

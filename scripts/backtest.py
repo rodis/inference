@@ -69,7 +69,8 @@ def fetch_signals(dsn: str, user: str, days: int, input_names: set[str]) -> list
     with psycopg.connect(dsn) as conn:
         rows = conn.execute(
             """
-            SELECT name, EXTRACT(EPOCH FROM occurred_at)::bigint AS ts, id::text, message
+            SELECT name, EXTRACT(EPOCH FROM occurred_at)::bigint AS ts, id::text, message,
+                   source_app
             FROM events
             WHERE user_id = %s
               AND occurred_at > now() - make_interval(days => %s)
@@ -85,10 +86,14 @@ def fetch_signals(dsn: str, user: str, days: int, input_names: set[str]) -> list
             """,
             (user, days, list(input_names)),
         ).fetchall()
+    # `source_app` is carried through from the column, not stubbed. It is envelope metadata the
+    # engines mostly ignore, but `ssid_edge` gates on it (two producers emit `location_ping` and
+    # only one reports the WiFi field), and a stubbed value would silently filter every ping out
+    # of the replay — an engine that "never fires" rather than a visible error.
     return [
-        {"name": n, "source_app": "backtest", "source_type": "http_server",
+        {"name": n, "source_app": app, "source_type": "http_server",
          "message": {**(msg or {}), "id": i, "name": n, "user_id": user, "timestamp": ts}}
-        for (n, ts, i, msg) in rows
+        for (n, ts, i, msg, app) in rows
     ]
 
 

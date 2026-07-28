@@ -1,0 +1,36 @@
+# Joined the car's WiFi hotspot — a DIRECTIONAL entry signal (issue #33).
+#
+# The phone auto-joins `BMW 73638` on getting in, so the not-joined -> joined edge means entry
+# and nothing else. That is what every other phone-side car signal lacks: the lock-change and
+# the BMW door both fire on entry AND exit, which is why ADR 0005 has them at weight 4 as mere
+# corroborators. This one is directional, so it can carry real weight.
+#
+# It is NOT a trip delimiter. The phone stays joined across a short stop (07-27 11:41:08→11:57:20
+# spans a 10-min drive plus the stop after it), and it associates when merely NEAR the car — two
+# spurious runs in 4 days, 26s and 3.2 min, with no trip. Both are the weight map's problem to
+# absorb, not the detector's: filtering here would need a min-dwell, which would delay exactly
+# the edge we want early.
+#
+# OBSERVATION-ONLY for now — in no weight map, the same way ADR 0006 landed `car_locked`.
+# Measured over the 4 days of WiFi history (scripts/trip_eval.py --days 4): at
+# car_wifi_connected 6 / car_wifi_disconnected 6 the quality metrics are IDENTICAL to current
+# (real_trips 10, junk_trips 0, drives_missed 0/10, end_error -42s) — see
+# scripts/backtest_candidates/wifi_direction_6.yml. Neutral, not better: this window has nothing
+# left to fix, so it cannot discriminate, and a weight change that demonstrates no improvement
+# is not justified (the #3 lesson). Deriving it now means the history accrues AND stays
+# replayable from the retained pings, so the next adjudication has a sample.
+name: car_wifi_connected
+enabled: true
+
+engine: ssid_edge
+engine_config:
+  ssid: BMW 73638
+  direction: connect
+  field: wifi
+  # Overland omits `wifi` when off-WiFi, so absent == not joined. OwnTracks also produces
+  # location_ping and reports WiFi on NO ping, so ungated one interleaved OwnTracks ping would
+  # read as a disconnect. Only producers that actually report the field may move state.
+  sources: [overland]
+
+source_topic: raw_sensors
+sink_topic: high_level_events

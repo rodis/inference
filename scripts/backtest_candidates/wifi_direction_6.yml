@@ -1,0 +1,9 @@
+# Issue #33: the WiFi edges as DIRECTIONAL signals, weighted to need one corroborator.
+# into:  wifi 6 + carplay 5 = 11 fires; wifi + lock/door = 10 does NOT (mirrors the ADR 0005
+#        rule that an ambiguous signal can't complete an entry with a single anchor).
+# out:   wifi 6 + gate 4 = 10 — a single reliable directional exit closes a known-open trip,
+#        the same rationale as device_disconnected_from_carplay at 6.
+got_into_the_car:
+  weights: {device_connected_to_power: 6, device_connected_to_carplay: 5, car_lock_state_change: 4, car_driver_door_opened: 4, car_wifi_connected: 6}
+got_out_the_car:
+  weights: {device_disconnected_from_carplay: 6, car_lock_state_change: 5, device_disconnected_from_power: 5, car_driver_door_opened: 5, car_wifi_disconnected: 6}
