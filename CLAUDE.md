@@ -14,6 +14,7 @@ The [`doc/`](doc/) folder is the source of truth for architecture and design rul
 - [`doc/adr/0006-car-native-trip-signals.md`](doc/adr/0006-car-native-trip-signals.md) — **proposed, not implemented.** Fuse car-native BMW CarData signals into the `got_into`/`got_out` weight maps via an HA-independent MQTT subscriber (a producer into `raw_sensors`, no new topic). Reliability comes from a *second independent source*, not more phone signals; start (`isMoving`→true) and end (a park-confirm, never raw `isMoving`-false) are asymmetric.
 - [`doc/adr/0007-stays-not-fences.md`](doc/adr/0007-stays-not-fences.md) — **places are stays, not fences.** Why edge-triggered geofencing structurally cannot see a shop visit (a boundary needs a sample on each side; standing still produces none) and the `stay_window` clustering engine that replaces it for dwell, leaving `geofence` for large declared regions you drive through. Also: place *labelling* is deliberately not in the engine.
 - [`doc/vector-pipeline.md`](doc/vector-pipeline.md) — **current truth for Vector.** The ingest + persist + metrics lanes with a graph, and the two-level ingest URL grammar (`/<domain>/<app>`): domain routes to a topic (first level), app routes to a body adapter within that domain (second level). Supersedes ADR 0001's Vector-transform description.
+- [`doc/connectors.md`](doc/connectors.md) + [`doc/adr/0008-connector-tier-via-n8n.md`](doc/adr/0008-connector-tier-via-n8n.md) — **how a third-party source gets added, and the rule that bounds it.** Sources like Gmail arrive as **n8n workflows** POSTing to the existing `/sensors/<app>` gateway — no worker, no Vector transform, no topic. The boundary: a connector may *authenticate, fetch and rename fields*; it may **not** threshold, correlate, window or decide that something happened. The reason it may not is that transformation splits at the **Kafka boundary** — a parser running *before* Kafka destroys whatever it misparses, while one running *after* leaves the raw body in Neon and is fixable by re-running `rederive.py` (invariant 19). So semantic extraction is a capability deriver, never a pre-Vector shaper. Also: n8n's Gmail trigger **polls** (1-minute floor) — it is not push, so it buys no latency for mail, only the absence of a poller/cursor/OAuth loop; its trigger advantage is real for webhook-native sources. Measured with [`scripts/connector_eval.py`](scripts/connector_eval.py).
 - `doc/architecture.md`, `doc/classes.md` — **deleted 2026-07-27** (they described the removed pre-Quix threaded runtime and had carried STALE banners for a month). Replaced by `doc/core.md`; read them in git history for the archaeology.
 - [`doc/adr/0001-message-shaping-pipeline.md`](doc/adr/0001-message-shaping-pipeline.md), [`0003-dynamic-event-runtime.md`](doc/adr/0003-dynamic-event-runtime.md) — **superseded by 0004.** Historical decision records (the typed-message/enricher pipeline and the threaded one-process-many-handlers runtime). The code they describe has been removed; the ideas live in git history.
 
@@ -101,6 +102,12 @@ uv run pytest                # tests/ exercise the import-clean core in-memory (
 # (junk_trips = sub-2-minute phantom trips, drives_missed = real drives lost).
 NEON_DATABASE_URL=... uv run python scripts/backtest.py --days 25 --candidate <cand.yml> --focus car_trip
 NEON_DATABASE_URL=... uv run python scripts/trip_eval.py --days 25 [-v] [<cand.yml> ...]
+
+# Score a CONNECTOR (an n8n-fronted third-party source; ADR 0008). Judges INGESTION, not
+# derivation, so it needs no replay — latency split into trigger lag (the connector's) vs
+# pipeline lag (ours, ~3.3s baseline), plus duplicates, freshness and contract compliance.
+# Non-zero exit = something needs attention. Completeness is the one thing it can't self-check.
+NEON_DATABASE_URL=... uv run python scripts/connector_eval.py --days 7 [--source gmail] [--all]
 
 # Rebuild derived events from retained raws after a definition change (a new engine can't
 # see the past; a `place` label is frozen at mint time). Dry-run by default; --only is

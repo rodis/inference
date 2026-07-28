@@ -126,6 +126,24 @@ safe to drop from producer URLs.
 **Adding a domain** is one localized subtree: a new `route_by_domain` route → its own
 second-level app-router → adapter(s) → a static-topic sink. No other component changes.
 
+### Producers on the `sensors` domain
+
+| `app` segment | Body adapter | Producer |
+|---|---|---|
+| `owntracks` | `owntracks_to_canonical` | iOS OwnTracks — region crossings |
+| `overland` | `overland_to_canonical` | iOS Overland — batched GeoJSON point stream |
+| `shortcut` | `shape_sensor` (standard) | iOS Shortcuts — power, CarPlay, lock, card payments |
+| `bmw` | `shape_sensor` (standard) | [`workers/bmw-cardata/`](../workers/bmw-cardata/) — car telemetry ([ADR 0006](adr/0006-car-native-trip-signals.md)) |
+| `gmail` | `shape_sensor` (standard) | **n8n connector** — labelled mail ([ADR 0008](adr/0008-connector-tier-via-n8n.md)) |
+
+> **New third-party sources arrive as n8n connectors, and must not add a transform here.**
+> The two `*_to_canonical` adapters exist only because those apps POST directly at us with a
+> body shape outside our control. An n8n workflow's body **is** ours, so it emits the canonical
+> `{"payload": {event_name, user_id, timestamp}}` and rides the shared `standard` lane —
+> `route_by_app` is meant to stop growing. Connectors also stay inside the `sensors` domain,
+> because a new domain means a new topic and the runtime permits exactly one external source
+> topic. See [`connectors.md`](connectors.md) for the contract.
+
 ## 2 · Persist lane
 
 A *separate* Kafka source (`kafka_persist`) reads back `raw_sensors` **and**
@@ -168,6 +186,8 @@ growing buffer means that sink is the bottleneck.
 
 ## See also
 
+- [connectors.md](connectors.md) — the contract third-party sources POST against, and why
+  they add no transform here ([ADR 0008](adr/0008-connector-tier-via-n8n.md)).
 - [ADR 0004 — scaling model](adr/0004-scaling-model.md) — why the runtime is out of
   Vector's emit path; the entity-keying rule that makes `user_id` mandatory on ingest.
 - [ADR 0001 — message-shaping pipeline](adr/0001-message-shaping-pipeline.md) —
