@@ -95,10 +95,17 @@ const CANONICAL_BODY =
   ' "from_name": {{ JSON.stringify(((($json.from || {}).value || [{}])[0] || {}).name || "") }},' +
   ' "from_domain": {{ JSON.stringify(String(((($json.from || {}).value || [{}])[0] || {}).address || "").split("@").pop().toLowerCase()) }},' +
   ' "subject": {{ JSON.stringify($json.subject) }},' +
-  // A bounded preview, NOT the body. Whole bodies would breach the ~1 MiB nginx ingress and
-  // Kafka ceilings, and would sit in Neon JSONB forever. upstream_id is enough to re-fetch the
-  // full mail if extraction ever needs it.
-  ' "snippet": {{ JSON.stringify(String($json.text || $json.snippet || "").replace(/\\s+/g, " ").trim().slice(0, 200)) }}' +
+  // A bounded PREFIX of the body, never the whole thing — a full body would breach the ~1 MiB
+  // nginx ingress and Kafka ceilings and sit in Neon forever.
+  //
+  // 1000, not 200. The first cut at 200 matched Gmail's own snippet length and truncated these
+  // mails at "Location: Zug Zon" — losing Zone, plate and `Started at`, which is the single most
+  // reliable field in a Parkingpay mail (#24) and the only one that could give a parking session
+  // a real start. The cap is a downstream-extraction budget, not a display budget: size it to the
+  // fields a capability deriver needs, because the runtime cannot re-fetch the mail (the core
+  // never calls an external service — invariants 1 and 14), so whatever is dropped here is gone
+  // until a re-ingest.
+  ' "snippet": {{ JSON.stringify(String($json.text || $json.snippet || "").replace(/\\s+/g, " ").trim().slice(0, 1000)) }}' +
   ' } }';
 
 const toCanonicalEvent = node({

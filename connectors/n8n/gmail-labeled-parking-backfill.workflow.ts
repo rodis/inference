@@ -94,7 +94,7 @@ const CANONICAL_BODY =
   ' "from_name": {{ JSON.stringify(((($json.from || {}).value || [{}])[0] || {}).name || "") }},' +
   ' "from_domain": {{ JSON.stringify(String(((($json.from || {}).value || [{}])[0] || {}).address || "").split("@").pop().toLowerCase()) }},' +
   ' "subject": {{ JSON.stringify($json.subject) }},' +
-  ' "snippet": {{ JSON.stringify(String($json.text || $json.snippet || "").replace(/\\s+/g, " ").trim().slice(0, 200)) }},' +
+  ' "snippet": {{ JSON.stringify(String($json.text || $json.snippet || "").replace(/\\s+/g, " ").trim().slice(0, 1000)) }},' +
   // The one field the live connector does not send: marks these rows as history, not live
   // capture, so their latency figures can be excluded from a connector_eval baseline.
   ' "backfill": true' +
