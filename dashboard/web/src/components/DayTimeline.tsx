@@ -1,6 +1,6 @@
 import type { AwareEvent } from "../types";
 import type { DayLayout } from "../view";
-import { catOf, fmtTime, hostOf, humanDur, inkOn, intervalOf, isSpan, labelOf, maxSpanSeconds, placeUnknown, startOf } from "../view";
+import { catOf, fmtTime, hostOf, humanDur, inkOn, intervalOf, isSpan, labelOf, placeUnknown, startOf } from "../view";
 import EventBody from "./EventBody";
 
 interface Props {
@@ -36,8 +36,6 @@ export default function DayTimeline({ events, layout, onSelect, revealOf }: Prop
 
   const activities = events.filter(isSpan).sort((a, b) => startOf(a) - startOf(b));
   const moments = events.filter((e) => !isSpan(e)).sort((a, b) => a.epoch - b.epoch);
-  // Over every activity of the day, not just the revealed ones — see `maxSpanSeconds`.
-  const durMax = maxSpanSeconds(events);
 
   return (
     /* --capcols lives on the wrapper so the lane headers and the lanes derive the same
@@ -46,11 +44,10 @@ export default function DayTimeline({ events, layout, onSelect, revealOf }: Prop
       <div className="dt-head">
         <div>
           <span className="lh-title">Activities</span>
-          {/* Not "capsule ∝ duration": the vertical scale is elastic on purpose, so the capsule is
-              only roughly proportional and the bar is the honest channel (see EventBody). And not
-              "bar ∝ duration" either — proportional to *what* is the whole question a lone bar
-              can't answer, so name the reference. */}
-          <span className="lh-sub">intervals · bar = share of the longest</span>
+          {/* Deliberately "≈", not "∝": the vertical scale is elastic on purpose (floored for
+              labels, compressed past a knee — see `dayLayout`), so a capsule tracks its duration
+              without being proportional to it. The exact figure is on the card. */}
+          <span className="lh-sub">intervals · length ≈ duration</span>
         </div>
         <div>
           <span className="lh-title">Moments</span>
@@ -93,24 +90,23 @@ export default function DayTimeline({ events, layout, onSelect, revealOf }: Prop
         // meanings into it would make "faded" ambiguous between "deep" and "unnamed". The class
         // restyles the capsule *inside* the row, so the two readings stay on separate channels.
         return (
-          /* The category colour + its readable ink reach CSS as custom properties on the ROW rather
-             than as a fixed `background` on the capsule: the unnamed variant restates that hue as a
-             dotted border, and the card's duration bar fills with it too (see styles.css). Row-level
-             so both can inherit one declaration — a new category needs no CSS. */
           <div key={e.id} className={"dt-act" + (placeUnknown(e) ? " unnamed" : "")}
-            style={{
-              top, opacity: r, pointerEvents: r < HIT_EPS ? "none" : undefined,
-              ["--cat" as string]: cat.c, ["--capink" as string]: inkOn(cat.c),
-            }}>
+            style={{ top, opacity: r, pointerEvents: r < HIT_EPS ? "none" : undefined }}>
             <div className="t">{fmtTime(new Date((iv?.started_at ?? e.epoch) * 1000))}</div>
             <div className="caps" style={{ width: cols * CAP_W }}>
+              {/* The category colour reaches CSS as `--cat` (and its readable ink as `--capink`)
+                  rather than as a fixed `background`, so the unnamed variant can restate that
+                  same hue as a dotted border and as the icon. */}
               <div className="capsule"
-                style={{ height: box?.height ?? 44, marginLeft: (box?.col ?? 0) * CAP_W }}>
+                style={{
+                  ["--cat" as string]: cat.c, ["--capink" as string]: inkOn(cat.c),
+                  height: box?.height ?? 44, marginLeft: (box?.col ?? 0) * CAP_W,
+                }}>
                 <cat.Icon size={18} strokeWidth={2.25} />
               </div>
             </div>
             <button className="dt-body" onClick={() => onSelect(e)} tabIndex={r < HIT_EPS ? -1 : undefined}>
-              <EventBody event={e} durMax={durMax} />
+              <EventBody event={e} />
             </button>
           </div>
         );

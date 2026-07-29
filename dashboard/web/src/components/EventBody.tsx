@@ -17,16 +17,13 @@ interface Props {
   orphan?: boolean;
   /** Tighter type, for the moments lane where rows are half-weight by design. */
   compact?: boolean;
-  /** Duration of the day's longest activity (`maxSpanSeconds`). Pass it to draw the duration bar;
-   *  omit it (the modal, the moments lane) and the card is just text. */
-  durMax?: number;
 }
 
 /** The text half of an event card: name + chips on line 1, the substantive detail on line 2.
  *  Shared by both lanes of the day timeline, so an activity and a moment can't drift apart in
  *  how they name themselves — the difference between them is weight, not grammar. The L /
  *  override / D chips are supported but unused on the day (see `level`); the modal shows them. */
-export default function EventBody({ event: e, level, def = null, depth, hostLabel, orphan, compact, durMax }: Props) {
+export default function EventBody({ event: e, level, def = null, depth, hostLabel, orphan, compact }: Props) {
   const iv = isSpan(e) ? intervalOf(e) : null;
   const isDer = e.event_class === "derived";
   const amount = Number(e.message.amount);
@@ -59,32 +56,15 @@ export default function EventBody({ event: e, level, def = null, depth, hostLabe
           {hostLabel && <span className="ev-host"> · in {hostLabel.toLowerCase()}</span>}
         </div>
       )}
-      {iv && !!durMax && <DurationBar seconds={iv.duration_seconds} max={durMax} />}
     </>
   );
 }
 
-/** Duration as a **horizontal** bar, `seconds / max` of the track — where `max` is the longest
- *  activity of the day, so the day's own shape is the reference and the longest bar is always full.
- *
- *  This is the card's one exactly-proportional channel, and it exists because the capsule beside it
- *  isn't one. The timeline's vertical scale is deliberately elastic (floored so labels fit, log-
- *  compressed so a lull can't run away — see `dayLayout`), which makes a capsule only *roughly*
- *  proportional, and worst for the longest activity on the board. Horizontal space has no such
- *  constraint: nothing has to fit inside the bar, so it can be linear without a floor big enough to
- *  distort it. Vertical answers *when, and roughly how long*; this answers *exactly how long*.
- *
- *  MIN_W is presence, not proportion: a 3-minute charge next to a 2h39 visit is 1.9% of the track
- *  and would round to a sub-pixel sliver, reading as "no bar" — i.e. as missing data rather than as
- *  a short event. Same bargain as CAP_MIN on the capsule, and it's why the exact figure stays in
- *  text right above. */
-const MIN_W = 2;
-function DurationBar({ seconds, max }: { seconds: number; max: number }) {
-  const pct = Math.max(MIN_W, Math.min(100, (seconds / max) * 100));
-  return (
-    <div className="ev-bar" aria-hidden="true"
-      title={`${humanDur(seconds)} — ${Math.round((seconds / max) * 100)}% of the day's longest activity`}>
-      <i style={{ width: `${pct}%` }} />
-    </div>
-  );
-}
+/* A horizontal duration bar lived here (width = duration / the day's longest activity) as the
+ * card's one exactly-proportional channel, since the capsule is only roughly proportional. Removed
+ * 2026-07-27: nobody could tell what the trough's length meant, and the honest answer made it worse
+ * — the reference was "the longest activity today", which is invisible on the card and *changes
+ * between days*, so the same 2h39 stay drew full one day and half the next. A ratio against an
+ * unstated, shifting quantity is not information. The exact duration is already in `humanDur` text
+ * above, and comparison at a glance is the capsule's job (approximately — see `dayLayout`). If it
+ * comes back, the scale has to be absolute and self-labelled: a fixed span with hour ticks. */

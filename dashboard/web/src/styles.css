@@ -207,28 +207,6 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 
 .ev-meta { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-top: 3px; }
 .ev-meta .dur { color: var(--accent); font-weight: 600; }
-/* line 3, activities only: duration as a share of the day's longest one (see EventBody).
-   The card's one exactly-proportional channel — the capsule beside it can't be, because the
-   vertical scale is elastic by design.
-
-   **The track must be visible.** It is the "of the longest" half of the claim: a fill with no
-   trough behind it is a length relative to nothing, and 11% and 100% both just read as "a line".
-   First attempt used --track (a segmented-control trough) which is #171a20 on a #1c1f27 card in
-   dark — invisible, so the bar landed as a mystery red underline. --chip is the token for a
-   neutral inset that has to be *seen* (badges, button tracks), and it reads in both themes.
-
-   **The fill is the category colour, not --accent.** --accent is the money/number red the `.dur`
-   text directly above already uses, which made the bar look like an underline of that text rather
-   than its own object. Restating the capsule's hue instead ties the two together — same activity,
-   same colour, one saying when and one saying how long. Inherited from `--cat` on the row (set in
-   DayTimeline), so a new category needs nothing here.
-
-   Deliberately narrow: past ~220px the eye compares lengths worse, not better. */
-.ev-bar { margin-top: 6px; height: 5px; max-width: 220px; border-radius: 3px; background: var(--chip); overflow: hidden; }
-.ev-bar > i { display: block; height: 100%; border-radius: 3px; background: var(--cat, var(--accent)); transition: width 0.4s cubic-bezier(.22,1,.36,1); }
-/* An unnamed place is drawn hollow throughout (see `placeUnknown`) — its bar states the same
-   confidence: the duration is still true, so the length is unchanged, only the fill is muted. */
-.dt-act.unnamed .ev-bar > i { background: var(--muted-2); }
 /* line 1: name + its classification (kind word, L/D chips) all on one row */
 .ev-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .ev-title { font-family: var(--rounded); font-weight: 650; font-size: 15px; letter-spacing: -0.01em; }

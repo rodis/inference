@@ -25,8 +25,8 @@ A day has two kinds of thing in it, and one column made them look alike. Each la
 with its own header:
 
 - **Activities** (left) — events with a duration, as capsules whose length tracks how long they
-  lasted (roughly — the scale is elastic, so each card also carries an exactly-proportional
-  **duration bar**; see below). Concurrent activities sit in **sub-columns**, because on a true time scale a 6-hour
+  lasted (roughly — the scale is elastic; see below). Concurrent activities sit in
+  **sub-columns**, because on a true time scale a 6-hour
   charge genuinely does span a 15-minute trip and the real feed has exactly that. A brief
   overlap does *not* earn one: a stay ends when the fix that broke its cluster arrives, which is
   after the drive away has already started, so a café visit and the trip home overlap by about a
@@ -78,44 +78,41 @@ curve's tail, so the same stay draws 216px. A stretch under several spans is pri
 generous claim on it, so a nested activity still gets its own room (a 15-minute trip inside a
 6-hour charge is charged against the trip's fresh budget, not squeezed into the charge's tail).
 
-**So a capsule is only *roughly* proportional — and the exact answer is horizontal.** The error
-is worst for the longest activity on the board: it absorbs all the compression, while short spans
-are *inflated* by the `MIN_STEP` floor on each of their interior instants. Measured on a real day
+**A capsule is only *roughly* proportional, and that is a floor rather than a bug.** The error is
+worst for the longest activity on the board: it absorbs all the compression, while short spans are
+*inflated* by the `MIN_STEP` floor on each of their interior instants. Measured on a real day
 (2026-07-27), px-per-minute ran from 2.5 for a 2h39 café stay to 14.7 for a 3-minute charge, so a
-9× duration difference drew as 2.6×. That is not a bug to tune away: the day held 3 minutes and
-159 minutes at once (50×) and a capsule needs ~44px for its icon, so a linear day would be
-thousands of px tall — one vertical channel cannot carry both legibility and that range. Two
-answers, and both were needed:
+9× duration difference drew as 2.6×. It cannot be tuned away: the day held 3 minutes and 159
+minutes at once (50×) and a capsule needs ~44px for its icon, so a linear day would be thousands of
+px tall — one vertical channel cannot carry both legibility and that range.
+
+So the capsule answers *when, in what order, for roughly how long, and containing what*, and the
+**exact** duration is left to the text on the card. Two decisions follow:
 
 - `compress` replaced a hard `min(…, MAX_STEP)` clamp, which was **not monotone** (109 minutes and
   4 hours both drew as exactly 210px, so a long activity could not read as longer than a medium
   one). A log knee keeps every extra minute worth strictly-positive px forever, so rank always
   survives; the join is C1, so no kink is visible.
-- The knee is tuned *tight* (96/24), and how tight is a decision the bar pays for. It was first
-  widened to 210/150 to stop that stay being clipped at all — correct while the capsule was the
-  only duration channel, but it drew the stay 495px on a 1185px page, which reads as one café visit
-  eating the day. Once the bar states duration exactly, the capsule doesn't need to buy it: with
-  the dwell budget above, the same stay is 216px on a 905px page — *shorter* than the 1087px the
-  hard clamp produced, while still the tallest activity on the board by 1.4×. The floor on
-  compression is a **rank** one, not an aesthetic one: at 48/24 a 96-minute quiet stay drew shorter
-  than a 19-minute busy trip, because `MIN_STEP` is charged per interior instant and doesn't care
-  about elapsed time. `render-check` holds that line.
-- The **duration bar** (`EventBody`) is the card's one exactly-proportional channel: width is
-  `duration / the day's longest activity`, linear, no floor big enough to distort it (only a 2%
-  minimum so a very short event reads as short rather than as missing). Vertical says *when, and
-  roughly how long*; the bar says *exactly how long*. Its denominator is every span of the day,
-  not the visible ones, so bars don't rescale as you change altitude.
+- The knee is tuned *tight* (96/24). It was first widened to 210/150 so a 2h39 café visit wasn't
+  clipped at all, which drew that stay 495px on a 1185px page and read as one visit eating the day.
+  Buying proportionality with page height buys nothing the text doesn't already say, so with the
+  dwell budget above the same stay is 216px on a 905px page — *shorter* than the 1087px the hard
+  clamp produced, while still the tallest activity on the board by 1.4×. The floor on compression is
+  a **rank** one, not an aesthetic one: at 48/24 a 96-minute quiet stay drew shorter than a
+  19-minute busy trip, because `MIN_STEP` is charged per interior instant and doesn't care about
+  elapsed time. `render-check` holds that line.
 
-  Two things about drawing it, both learned by getting them wrong. **The track has to be visible** —
-  it is the "of the longest" half of the claim, and without a trough behind the fill 11% and 100%
-  both just read as "a line". The first version used `--track`, which is `#171a20` on a `#1c1f27`
-  card in dark: invisible, so the bar shipped as a mystery red underline. It uses `--chip` now, the
-  token for an inset meant to be seen. **And the fill is the category colour, not `--accent`** —
-  accent is the money/number red the duration text directly above it already uses, so the bar read
-  as an underline of that text instead of its own object. Restating the capsule's hue ties the two
-  halves of one activity together, and it's inherited from `--cat` on the row so a new category
-  needs no CSS. The lane header names the reference outright ("share of the longest") rather than
-  saying `∝ duration`, since proportional to *what* is exactly what a lone bar can't answer.
+> **Tried and removed (2026-07-27): a horizontal duration bar on each card**, width = `duration /
+> the day's longest activity`. The idea was sound — horizontal space has no legibility floor, so it
+> *can* be linear where the capsule can't. It failed on the only thing that matters for an ambient
+> element: nobody could tell what it meant. Two rounds of "what is that line?" — first because the
+> trough used `--track` (`#171a20` on a `#1c1f27` card: invisible, so a fill with no reference read
+> as a mystery red underline, in `--accent`, directly beneath text already using `--accent`), and
+> then, once the trough *was* visible, because the honest answer was worse: the reference was "the
+> longest activity today", which is nowhere on the card and **changes between days**, so the same
+> 2h39 stay drew full on one day and half on the next. A ratio against an unstated, shifting
+> quantity isn't information. If it returns, the scale has to be absolute and self-labelled — a
+> fixed span with hour ticks — not relative to the day.
 
 **"Quiet" means nothing was happening, not that nothing was reported** (`busy` in `dayLayout`).
 A stretch only collapses if no visible span is in progress across it. Without that test the

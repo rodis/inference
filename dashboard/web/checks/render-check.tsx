@@ -310,15 +310,8 @@ check("the other seven activities draw at full strength",
   (dt.match(/class="dt-act"/g) || []).length === 7, `${(dt.match(/class="dt-act"/g) || []).length}`);
 // The category colour reaches CSS as a custom property, which is what lets the unnamed variant
 // restate the fill as a dotted border + icon colour. Hard-coding `background` inline again would
-// silently fill the hollow capsule back in. It has to sit on the ROW, not on the capsule: the
-// card's duration bar inherits the same hue from there, which is what ties the two halves of one
-// activity together (the bar was briefly --accent, the money-red the duration text above it uses,
-// and read as an underline of that text rather than as its own object).
-const rowTag = dt.match(/<div class="dt-act[^>]*>/)?.[0] ?? "";
-check("the category colour is exposed on the row, so the capsule and the bar can share it",
-  rowTag.includes("--cat:"), rowTag);
-check("the bar takes no inline background of its own",
-  !/class="ev-bar"[^>]*background/.test(dt));
+// silently fill the hollow capsule back in.
+check("a capsule exposes its category colour to CSS", dt.includes("--cat:"));
 check("moments drawn on the right rail", (dt.match(/class="dt-mom"/g) || []).length >= 5,
   `${(dt.match(/class="dt-mom"/g) || []).length}`);
 check("a containment band is drawn", dt.includes("dt-band"));
@@ -331,29 +324,6 @@ check("both lanes are named in a header", dt.includes(">Activities<") && dt.incl
 check("the header shares the lanes' boundary variable", dt.includes("--capcols"));
 check("the trip shows its duration", dt.includes("19 min"));
 
-// The duration bar is the card's one *exactly* proportional channel, and the reason it exists is
-// that the capsule beside it is not: the vertical scale is floored for legibility and compressed
-// past MAX_STEP, so px-per-minute varied ~6× across a real day (2026-07-27) and hit the LONGEST
-// activity hardest — a 9× duration difference drew as 2.6×. Horizontal space has no such
-// constraint, so it can be linear. Asserted numerically because a bar that renders but is scaled
-// wrong looks entirely plausible on a screenshot.
-const barW = [...dt.matchAll(/class="ev-bar"[^>]*>\s*<i style="width:\s*([\d.]+)%/g)].map((m) => +m[1]);
-check("every activity card carries a duration bar — and only they do",
-  barW.length === 8, `${barW.length} bars vs 8 capsules`);
-check("the day's longest activity fills its bar", Math.max(...barW) === 100, `max ${Math.max(...barW)}%`);
-// 96 minutes against the 6-hour charge that is the day's longest — 26%, and the capsule ratio for
-// the same pair is nothing like it.
-const stayPct = Math.round((96 * 60 / E("e10").message.interval!.duration_seconds) * 100);
-check("a 96-minute stay reads as its true share of the day's longest",
-  barW.some((w) => Math.abs(w - stayPct) < 1), `expected ~${stayPct}%, got ${barW.join(",")}`);
-// A floor for *presence*, not proportion: 60s of 6h is 0.28% and would round to a sub-pixel
-// sliver, reading as "no bar" — i.e. as missing data rather than as a short event. Same bargain as
-// CAP_MIN on the capsule, which is why the exact figure stays in text right above it.
-check("a 60-second span still shows a sliver rather than nothing", Math.min(...barW) === 2,
-  `min ${Math.min(...barW)}%`);
-// It restates the duration text, so it must not also claim to be interactive or announce itself
-// twice to a screen reader.
-check("the bar is decorative to assistive tech", dt.includes('class="ev-bar" aria-hidden="true"'));
 check("a payment shows its amount", dt.includes("CHF 6.20"));
 // "no host" appears exactly on the moments the layout found no container for — here the
 // orphan payment and the junk charge that fell out of the activity lane. A hosted moment says

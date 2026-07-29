@@ -170,13 +170,6 @@ export const isEverydayPlace = (e: AwareEvent) => e.message.place?.everyday === 
  *  floor on their capsule height (CAP_MIN) so they remain legible; if a noisy type crowds the
  *  lane, the fix is to demote it on the levels board, not to re-file it here. */
 export const isSpan = (e: AwareEvent) => SPAN_EVENTS.has(e.name) && !!e.message.interval;
-/** The longest activity in a set of events — the denominator for an activity card's duration bar
- *  (`EventBody`). Taken over *every* span in the day rather than only the visible ones, so the
- *  bars don't rescale under you as you change altitude: the reference is "the longest thing you
- *  did today", which is a property of the day, not of the current zoom. */
-export const maxSpanSeconds = (events: AwareEvent[]): number =>
-  events.reduce((m, e) => (isSpan(e) ? Math.max(m, intervalOf(e)!.duration_seconds) : m), 0);
-
 /** Which of the day timeline's two lanes an event belongs to: intervals on the left as
  *  capsules, points in time on the right as small discs on their own track. */
 export const laneOf = (e: AwareEvent): "activity" | "moment" => (isSpan(e) ? "activity" : "moment");
@@ -231,12 +224,15 @@ export function humanDur(sec: number): string {
  *
  *  Because of that, a capsule's *length* is only ever roughly proportional to its duration, and
  *  the error is worst for the longest activity on the board (it eats the compression, while short
- *  ones are inflated by the MIN_STEP floor on their interior instants). One vertical channel
- *  cannot carry both legibility and the feed's real dynamic range — a day holding a 3-minute
- *  charge and a 2h39 café visit spans 50×, and a capsule needs ~44px for its icon, so a truly
- *  linear day would be thousands of px tall. Exact proportion is therefore carried *horizontally*
- *  instead, by the duration bar on each activity card (`EventBody`, scaled to the day's longest
- *  activity): vertical says **when** and roughly how long, horizontal says **exactly** how long.
+ *  ones are inflated by the MIN_STEP floor on their interior instants). Measured on a real day
+ *  (2026-07-27) px-per-minute ran 2.5 → 14.7, so a 9× duration difference drew as under 3×.
+ *
+ *  **That is a floor, not a bug to tune out.** One vertical channel cannot carry both legibility
+ *  and the feed's real dynamic range: a day holding a 3-minute charge and a 2h39 café visit spans
+ *  50×, and a capsule needs ~44px for its icon, so a linear day would be thousands of px tall. So
+ *  the capsule answers *when, in what order, for roughly how long, and containing what* — and the
+ *  exact figure is left to the text on the card (`humanDur`), which is where it was all along. An
+ *  exactly-proportional bar was tried on the card and removed; see `EventBody` for why.
  *
  *  **Lanes.** `laneOf` puts intervals left and points right. Concurrent spans are packed into
  *  sub-columns (greedy, by start) rather than interlocked with a notch: on a true time scale a
@@ -277,15 +273,16 @@ const PAD_BOTTOM = 56;
  *  join), so no kink is visible where a stretch crosses MAX_STEP.
  *
  *  **But the capsule is not the duration channel.** MAX_STEP is deliberately low — 30 minutes at
- *  PPM — because a span's exact duration is stated twice already, in text and in its horizontal
- *  duration bar (`EventBody`). The vertical extent's remaining jobs are cheap: show that the
- *  activity persisted, contain the moments that fell inside it, and rank it against its neighbours.
- *  None of those needs px proportional to a lull. It was tuned the wrong way once — widened to
- *  210/150 to stop a 2h39 café visit being clipped, back when the capsule *was* the only duration
- *  channel, which drew that one stay 495px on a 1185px page. The floor on compression is a rank
- *  one, not an aesthetic one: at 48/24 a 96-minute *quiet* stay drew shorter than a 19-minute
- *  *busy* trip (see `render-check`), because MIN_STEP is charged per interior instant and doesn't
- *  care about elapsed time. 96/24 clears that with margin. */
+ *  PPM — because the card states the exact duration in text right next to it (`humanDur`), so
+ *  buying proportionality with page height buys nothing you can't already read. The vertical
+ *  extent's remaining jobs are cheap: show that the activity persisted, contain the moments that
+ *  fell inside it, and rank it against its neighbours. None of those needs px proportional to a
+ *  lull. It was tuned the wrong way once — widened to 210/150 so a 2h39 café visit wasn't clipped
+ *  at all, which drew that one stay 495px on a 1185px page and read as one visit eating the day.
+ *
+ *  The floor on compression is a **rank** one, not an aesthetic one: at 48/24 a 96-minute *quiet*
+ *  stay drew shorter than a 19-minute *busy* trip (see `render-check`), because MIN_STEP is charged
+ *  per interior instant and doesn't care about elapsed time. 96/24 clears that with margin. */
 const compress = (rawPx: number): number =>
   rawPx <= MAX_STEP ? rawPx : MAX_STEP + KNEE * Math.log1p((rawPx - MAX_STEP) / KNEE);
 
