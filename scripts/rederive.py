@@ -59,7 +59,8 @@ class DictState:
 def fetch_signals(dsn: str, user: str, since: str, until: str | None, names: set[str]) -> list[dict]:
     """Raw signals in PRODUCTION order (ingested_at), carrying the full persisted body."""
     sql = """
-        SELECT name, EXTRACT(EPOCH FROM occurred_at)::bigint AS ts, id::text, message
+        SELECT name, EXTRACT(EPOCH FROM occurred_at)::bigint AS ts, id::text, message,
+               source_app
         FROM events
         WHERE user_id = %s AND name = ANY(%s) AND occurred_at >= %s::timestamptz
           AND (%s::timestamptz IS NULL OR occurred_at < %s::timestamptz)
@@ -74,10 +75,14 @@ def fetch_signals(dsn: str, user: str, since: str, until: str | None, names: set
     """
     with psycopg.connect(dsn) as conn:
         rows = conn.execute(sql, (user, list(names), since, until, until)).fetchall()
+    # `source_app` is carried through from the column, not stubbed. `ssid_edge` gates on it
+    # (two producers emit `location_ping` and only one reports the WiFi field), so a stubbed
+    # value filters every ping out of the replay — which surfaces as "nothing to re-derive"
+    # rather than as an error, the worst possible failure for a repair tool.
     return [
-        {"name": n, "source_app": "backtest", "source_type": "http_server",
+        {"name": n, "source_app": app, "source_type": "http_server",
          "message": {**(msg or {}), "id": i, "name": n, "user_id": user, "timestamp": ts}}
-        for (n, ts, i, msg) in rows
+        for (n, ts, i, msg, app) in rows
     ]
 
 
