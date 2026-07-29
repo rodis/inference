@@ -115,6 +115,30 @@ n8n also ships a native instance-level MCP server (public preview since April 20
 switching to if the community server proves limiting — it would be an `{"type": "http", "url":
 …}` entry instead, like the `neon` one.
 
+## ⚠️ Publishing: `update_workflow` is not enough
+
+n8n pins an **active version**. `update_workflow` writes the **draft** — the running workflow
+keeps executing the version that was published, indefinitely, with no warning anywhere.
+
+```
+versionId        27acb16b…   <- the draft; what update_workflow just wrote
+activeVersionId  b265ef27…   <- what is actually EXECUTING
+```
+
+So **every `update_workflow` must be followed by `publish_workflow`.** Verified the hard way: a
+`from_domain` fix was pushed to the draft, the live connector then fired on real mail three hours
+later and still emitted the *old* broken value. Check them with `get_workflow_details` and compare
+the two ids — equal means the repo, the draft and the running code agree.
+
+This is the sharpest form of the divergence risk in [ADR 0008](../doc/adr/0008-connector-tier-via-n8n.md):
+the committed source can match the draft perfectly while production runs something else.
+
+> **Republishing re-delivers.** Publishing appears to reset a polling trigger's cursor, so mail
+> already ingested can arrive a second time — it did, same `upstream_id`, ~3h after the original.
+> Harmless by design (hazard 2: no deterministic ids, so a duplicate is a visible extra row rather
+> than a batch failure) and `connector_eval.py` surfaces it. But expect it, and prefer publishing
+> when a re-delivery is acceptable.
+
 ## Folders
 
 Connector workflows live in the n8n folder **`Aware connectors`** (personal project

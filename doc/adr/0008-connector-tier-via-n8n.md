@@ -114,6 +114,11 @@ buys for Gmail is that we write and maintain **no poller, no cursor/high-water-m
 refresh loop, and no Neon state table** — precisely the `bmw_cardata/token_store.py` shape of
 work, including its hand-created table with no migration.
 
+> **Measured 2026-07-29, first live capture.** Mail arrived 10:45:31; n8n noticed it **40.0s**
+> later; our pipeline added **2.0s**; end-to-end **42s**. So the trigger lag sits inside the 60s
+> poll window exactly as predicted, and the pipeline half is the smaller term by an order of
+> magnitude. This was the last claim in this ADR without evidence, and it holds.
+
 **It does buy push where the source has webhooks.** Stripe, GitHub, Todoist, Calendly and
 similar fire genuine webhooks, and n8n's Webhook node makes those effectively instant. We
 could not match that per-source cheaply. Gmail simply is not such a source.
