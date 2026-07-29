@@ -310,8 +310,15 @@ check("the other seven activities draw at full strength",
   (dt.match(/class="dt-act"/g) || []).length === 7, `${(dt.match(/class="dt-act"/g) || []).length}`);
 // The category colour reaches CSS as a custom property, which is what lets the unnamed variant
 // restate the fill as a dotted border + icon colour. Hard-coding `background` inline again would
-// silently fill the hollow capsule back in.
-check("a capsule exposes its category colour to CSS", dt.includes("--cat:"));
+// silently fill the hollow capsule back in. It has to sit on the ROW, not on the capsule: the
+// card's duration bar inherits the same hue from there, which is what ties the two halves of one
+// activity together (the bar was briefly --accent, the money-red the duration text above it uses,
+// and read as an underline of that text rather than as its own object).
+const rowTag = dt.match(/<div class="dt-act[^>]*>/)?.[0] ?? "";
+check("the category colour is exposed on the row, so the capsule and the bar can share it",
+  rowTag.includes("--cat:"), rowTag);
+check("the bar takes no inline background of its own",
+  !/class="ev-bar"[^>]*background/.test(dt));
 check("moments drawn on the right rail", (dt.match(/class="dt-mom"/g) || []).length >= 5,
   `${(dt.match(/class="dt-mom"/g) || []).length}`);
 check("a containment band is drawn", dt.includes("dt-band"));

@@ -106,6 +106,17 @@ answers, and both were needed:
   roughly how long*; the bar says *exactly how long*. Its denominator is every span of the day,
   not the visible ones, so bars don't rescale as you change altitude.
 
+  Two things about drawing it, both learned by getting them wrong. **The track has to be visible** —
+  it is the "of the longest" half of the claim, and without a trough behind the fill 11% and 100%
+  both just read as "a line". The first version used `--track`, which is `#171a20` on a `#1c1f27`
+  card in dark: invisible, so the bar shipped as a mystery red underline. It uses `--chip` now, the
+  token for an inset meant to be seen. **And the fill is the category colour, not `--accent`** —
+  accent is the money/number red the duration text directly above it already uses, so the bar read
+  as an underline of that text instead of its own object. Restating the capsule's hue ties the two
+  halves of one activity together, and it's inherited from `--cat` on the row so a new category
+  needs no CSS. The lane header names the reference outright ("share of the longest") rather than
+  saying `∝ duration`, since proportional to *what* is exactly what a lone bar can't answer.
+
 **"Quiet" means nothing was happening, not that nothing was reported** (`busy` in `dayLayout`).
 A stretch only collapses if no visible span is in progress across it. Without that test the
 collapse fires on exactly the events it shouldn't: standing still produces no location fixes at

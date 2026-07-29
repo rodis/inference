@@ -47,8 +47,10 @@ export default function DayTimeline({ events, layout, onSelect, revealOf }: Prop
         <div>
           <span className="lh-title">Activities</span>
           {/* Not "capsule ∝ duration": the vertical scale is elastic on purpose, so the capsule is
-              only roughly proportional and the bar is the honest channel (see EventBody). */}
-          <span className="lh-sub">intervals · bar ∝ duration</span>
+              only roughly proportional and the bar is the honest channel (see EventBody). And not
+              "bar ∝ duration" either — proportional to *what* is the whole question a lone bar
+              can't answer, so name the reference. */}
+          <span className="lh-sub">intervals · bar = share of the longest</span>
         </div>
         <div>
           <span className="lh-title">Moments</span>
@@ -91,18 +93,19 @@ export default function DayTimeline({ events, layout, onSelect, revealOf }: Prop
         // meanings into it would make "faded" ambiguous between "deep" and "unnamed". The class
         // restyles the capsule *inside* the row, so the two readings stay on separate channels.
         return (
+          /* The category colour + its readable ink reach CSS as custom properties on the ROW rather
+             than as a fixed `background` on the capsule: the unnamed variant restates that hue as a
+             dotted border, and the card's duration bar fills with it too (see styles.css). Row-level
+             so both can inherit one declaration — a new category needs no CSS. */
           <div key={e.id} className={"dt-act" + (placeUnknown(e) ? " unnamed" : "")}
-            style={{ top, opacity: r, pointerEvents: r < HIT_EPS ? "none" : undefined }}>
+            style={{
+              top, opacity: r, pointerEvents: r < HIT_EPS ? "none" : undefined,
+              ["--cat" as string]: cat.c, ["--capink" as string]: inkOn(cat.c),
+            }}>
             <div className="t">{fmtTime(new Date((iv?.started_at ?? e.epoch) * 1000))}</div>
             <div className="caps" style={{ width: cols * CAP_W }}>
-              {/* The category colour reaches CSS as `--cat` (and its readable ink as `--capink`)
-                  rather than as a fixed `background`, so the unnamed variant can restate that
-                  same hue as a dotted border and as the icon. */}
               <div className="capsule"
-                style={{
-                  ["--cat" as string]: cat.c, ["--capink" as string]: inkOn(cat.c),
-                  height: box?.height ?? 44, marginLeft: (box?.col ?? 0) * CAP_W,
-                }}>
+                style={{ height: box?.height ?? 44, marginLeft: (box?.col ?? 0) * CAP_W }}>
                 <cat.Icon size={18} strokeWidth={2.25} />
               </div>
             </div>
