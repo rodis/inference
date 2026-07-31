@@ -1,0 +1,13 @@
+# The charger is the WINDOW CARRIER, not a weight problem. It re-seats every few minutes while
+# driving, so a mid-drive re-seat is still "present" in got_into's 600s window at the ARRIVAL
+# boundary, where a walk-away lock + the exit door then complete an entry. Measured case
+# 2026-07-24: got_out fired correctly at 07:46:50, then power@07:44:59 (a re-seat, 126s stale)
+# + door@07:46:43 (the exit door) + lock@07:47:05 (walk-away) = 14 minted got_into@07:47:05,
+# which stayed open until a door at 12:02:58 -> a 4h16m phantom trip that the displacement
+# guardrail cannot refute (the phone really did move over that span).
+#
+# Capping its freshness separates its two roles: it still anchors an entry when it is the
+# thing that just happened, but it stops keeping the pattern alive minutes later.
+got_into_the_car:
+  max_age_seconds:
+    device_connected_to_power: 60

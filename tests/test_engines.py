@@ -50,6 +50,38 @@ def test_weighted_prunes_events_older_than_window(state, event):
     assert eng.decide(event("b", T + 800), state) is None           # a pruned (800 > 600) -> only 5
 
 
+# --- max_age_seconds: per-contributor freshness -------------------------------
+
+def test_max_age_evicts_a_stale_contributor_early(state, event):
+    # `a` is a self-repeating signal: inside the shared 600s window but no longer fresh, so
+    # it must not still be there to let `b` complete the pattern at a later boundary.
+    eng = _weighted(cooldown_seconds=0, max_age_seconds={"a": 60})
+    eng.decide(event("a", T), state)
+    assert eng.decide(event("b", T + 120), state) is None            # a is 120s old vs its 60s cap
+
+
+def test_max_age_leaves_a_fresh_contributor_alone(state, event):
+    eng = _weighted(cooldown_seconds=0, max_age_seconds={"a": 60})
+    eng.decide(event("a", T), state)
+    assert eng.decide(event("b", T + 30), state) is not None         # within a's cap
+
+
+def test_max_age_does_not_shorten_the_other_contributors(state, event):
+    # the cap is per-name: `b` keeps the shared window_seconds.
+    eng = _weighted(cooldown_seconds=0, max_age_seconds={"a": 60})
+    eng.decide(event("b", T), state)
+    assert eng.decide(event("a", T + 500), state) is not None        # b is 500s old, cap is 600s
+
+
+def test_max_age_lets_a_repeat_reinstate_the_contributor(state, event):
+    # after eviction a fresh sighting re-enters (keep-earliest can't resurrect the stale ts),
+    # so capping freshness costs nothing when the signal really is present at the boundary.
+    eng = _weighted(cooldown_seconds=0, max_age_seconds={"a": 60})
+    eng.decide(event("a", T), state)
+    eng.decide(event("a", T + 300), state)
+    assert eng.decide(event("b", T + 310), state) is not None
+
+
 # --- decaying_window ------------------------------------------------------------
 
 def test_decaying_fires_when_signals_are_close(state, event):
@@ -151,6 +183,9 @@ def test_gated_consumes_session_so_sequential_trips_dont_reuse_it(state, event):
     assert eng.decide(event("carplay_off", T + 100), state) is not None  # trip 1 closes (gated single)
     # a second lone CarPlay-disconnect with no new "in" must NOT fire on the consumed gate
     assert eng.decide(event("carplay_off", T + 5000), state) is None
+
+
+
 
 
 # --- geofence -------------------------------------------------------------------

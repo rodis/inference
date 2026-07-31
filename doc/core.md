@@ -1079,6 +1079,7 @@ holds off for a cooldown.
 | `threshold` | ✓ | — | fire when the sum reaches this |
 | `window_seconds` | ✓ | — | contributors older than this are pruned |
 | `cooldown_seconds` | — | `1800` | minimum event-time gap between fires |
+| `max_age_seconds` | — | `{}` | `{name: seconds}` — per-contributor freshness cap, overriding `window_seconds` for that name only. **`weighted_window` only** — see below |
 
 State: `window = {name: {ts, event}}`, `last_fired`. Event-time: `max(contributor ts)` — the moment
 the pattern completed and the inference first became knowable. Lineage: every contributor in the
@@ -1088,6 +1089,43 @@ Live example — `got_into_the_car` (threshold 11, 600 s window): `device_connec
 `device_connected_to_carplay` 5, `car_lock_state_change` 4, `car_driver_door_opened` 4. Note that no
 single signal fires it, and the weights encode *directional trustworthiness*: a CarPlay connect only
 happens at entry, while a lock change fires at both entry and exit.
+
+#### `max_age_seconds` — a contributor's *second* role
+
+A contributor does two things, and the weight map can only speak about one. It adds weight, and while
+it sits in the window it **keeps the whole pattern completable**. For a signal that repeats on its own
+schedule the second role is the harmful one, and no weight can address it.
+
+`device_connected_to_power` (the wireless charger) re-seats every few minutes while driving, so a
+mid-drive re-seat is still in `got_into_the_car`'s 600 s window at the **arrival**, where the
+walk-away lock and the exit door then complete an *entry*. On 2026-07-24 that minted
+`got_into@07:47:05` fifteen seconds *after* a correct `got_out@07:46:50`, and the phantom entry stayed
+open until a door at 12:02:58 — a 4 h 16 m "trip". Displacement cannot refute it: the phone really did
+move over that span, so the bounding box is large. This is the phantom class that survived every
+weight candidate of 2026-07-28/29 (ADR 0009), because it is not a weighting failure.
+
+Capping freshness separates the two roles — the charger still anchors an entry when it is the thing
+that just happened, and stops carrying the pattern minutes later. Unlike a weight this is not a
+preference but a claim about how long a particular signal remains evidence of anything. Measured over
+30 d / 86 drives on what `car_trip` actually emits: phantom trips 7 → 4, fabricated trip-time
+9.19 h → 2.06 h, with matched drives 68/86, duration error 129 s and `drives_missed` 2/86 all
+unchanged; monotone in the cap (30 s → 1.65 h, 300 s → 7.91 h), so it tracks the mechanism rather than
+fitting the sample. Issue #35, `scripts/backtest_candidates/charger_freshness_60.yml`.
+
+It is deliberately **not** offered on `session_gated_window`: measured a no-op there, because that
+engine keeps the *latest* sighting and its window is 300 s. The mechanism needs keep-earliest **plus**
+a long window **plus** a signal that repeats on its own schedule.
+
+> **Necessity is the one thing this map still cannot express**, and it was measured and not adopted
+> (2026-07-31, issue #35). `got_out_the_car` fires on `car_driver_door_opened + car_lock_state_change`
+> — two direction-ambiguous signals summing to exactly the threshold (5+5=10) at walk-away, 19 times
+> in 30 d. Raising the threshold to 11 cannot forbid *that* subset without equally forbidding the
+> gated single-signal path ADR 0005 exists to provide (CarPlay-disconnect 6 + gate 4 = 10). An
+> explicit at-least-one-of veto can, but scored worse: 3 matched drives lost for 2.9 h of phantom
+> span. And in `session_gated_window` a veto **defers rather than deletes** — the latch is consumed
+> and the cooldown starts only *on fire*, so 9 of the 19 suppressed firings simply re-fired minutes
+> later with a peripheral attached. Reason about suppression there against the state machine, not as
+> arithmetic on the firing count.
 
 ### `decaying_window`
 
@@ -1232,6 +1270,13 @@ otherwise close a trip that hadn't happened.
 Lineage is the windowed signals only — the gate is *contextual* evidence, not lineage. The
 start→end relationship is captured downstream by the `session_window` that pairs this event with its
 start.
+
+> **Gotcha — in this engine, suppressing a firing is a deferral, not a deletion.** The latch is
+> consumed and the cooldown starts *only on fire*, so a suppressed pattern leaves the window, the
+> latch and the cooldown untouched and fires as soon as one more contributor lands. Measured on 30 d
+> of real signals, vetoing the ambiguous `door+lock` exits suppressed 19 firings and **9 of them
+> simply re-fired** minutes later with a peripheral attached (issue #35). See §11's
+> `max_age_seconds` note.
 
 ### `geofence`
 

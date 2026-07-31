@@ -3,6 +3,16 @@
 Fires when distinct contributing event types seen within a time window sum (by
 weight) to a threshold, then holds off for a cooldown. State (the window of
 contributors + the last-fired time) lives in the per-entity scoped Quix `State`.
+
+Optional `max_age_seconds: {name: seconds}` caps how long an individual contributor stays in
+the window, overriding the shared `window_seconds` for that name only. It exists because a
+contributor has two roles — it adds weight, and it *carries the window forward*: while it
+sits in the window it keeps the whole pattern completable. For a signal that repeats on its
+own schedule (the wireless charger re-seats every few minutes while driving) the second role
+is the harmful one: a stale re-seat is still "present" at the far boundary, so a signal that
+arrives there completes a pattern that only makes sense at the near one. Freshness is the
+axis that separates the two roles, and unlike a weight it is not a preference — it is a
+claim about how long that particular signal remains evidence of anything.
 """
 
 from inference.engines.base import Decision, ScopedState, register_engine
@@ -17,6 +27,8 @@ class WeightedWindowEngine:
         self.threshold = config["threshold"]
         self.window = config["window_seconds"]
         self.cooldown = config.get("cooldown_seconds", 1800)
+        # per-contributor freshness cap, overriding `window_seconds` for that name only
+        self.max_age: dict[str, float] = config.get("max_age_seconds", {})
 
     def input_event_names(self) -> set[str]:
         return set(self.weights)
@@ -32,7 +44,8 @@ class WeightedWindowEngine:
         # window. The full event body is retained (not just id/ts) so the Decision can carry it
         # as a `source` for capability derivation downstream — see Decision.sources.
         window = state.get("window", {})
-        window = {k: v for k, v in window.items() if now - v["ts"] <= self.window}
+        window = {k: v for k, v in window.items()
+                  if now - v["ts"] <= self.max_age.get(k, self.window)}
         if name not in window or now < window[name]["ts"]:
             window[name] = {"ts": now, "event": event}
         state.set("window", window)

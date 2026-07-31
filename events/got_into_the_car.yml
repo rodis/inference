@@ -42,6 +42,31 @@ engine_config:
   threshold: 11
   window_seconds: 600
   cooldown_seconds: 600   # 10 min — fires at most once per trip
+  # The charger has TWO roles here, and only one of them is wanted. It adds weight (below),
+  # and while it sits in the 600s window it keeps the whole entry pattern *completable* — and
+  # because it re-seats every few minutes while driving, a mid-drive re-seat is still present
+  # at the ARRIVAL, where the walk-away lock and the exit door then complete an *entry*.
+  # 2026-07-24: power@07:44:59 (a re-seat) + door@07:46:43 (the exit door) + lock@07:47:05
+  # (walk-away) = 14 minted got_into@07:47:05, fifteen seconds AFTER a correct
+  # got_out@07:46:50 — and that phantom entry stayed open until a door at 12:02:58, a 4h16m
+  # "trip". Displacement can't refute it: the phone really did move over that span, so the
+  # bounding box is large. This is the phantom class that survived every weight candidate of
+  # 2026-07-28/29 (ADR 0009) — because it is not a weighting failure.
+  #
+  # Capping freshness separates the two roles: the charger still anchors an entry when it is
+  # the thing that just happened, but stops carrying the pattern minutes later. Measured over
+  # 30d/86 drives on what car_trip actually emits (scripts/backtest_candidates/
+  # charger_freshness_60.yml, issue #35): phantom trips 7->4, fabricated trip-time 9.19h->
+  # 2.06h, with matched drives 68/86, duration error 129s and drives_missed 2/86 ALL
+  # unchanged. Monotone in the cap (30s: 1.65h; 300s: 7.91h), so it tracks a mechanism rather
+  # than fitting this sample. 60s over 30s buys ~2x tolerance for a slow settle-in (sit down,
+  # phone on the charger 40s later) for one extra phantom.
+  #
+  # Not applied to got_out_the_car: measured no-op there. session_gated_window keeps the
+  # LATEST sighting and its window is 300s, so it has no stale-carrier problem. The mechanism
+  # needs keep-earliest + a long window + a signal that repeats on its own schedule.
+  max_age_seconds:
+    device_connected_to_power: 60
   weights:
     device_connected_to_power: 6    # anchor: settling in to drive — but it re-seats mid-drive
     device_connected_to_carplay: 5  # DIRECTIONAL corroborator (connect only happens at entry)
