@@ -1,0 +1,11 @@
+# Drop the charger and make the BMW DOOR the anchor instead of CarPlay, so the phantom-prone
+# CarPlay+lock pair stays blocked (ADR 0005's park-and-settle guard):
+#   carplay 5 + door 6  = 11 >= 10  fires
+#   door 6 + lock 4     = 10 >= 10  fires
+#   carplay 5 + lock 4  =  9 <  10  BLOCKED — the pair ADR 0005 closed
+got_into_the_car:
+  threshold: 10
+  max_age_seconds: {}
+  weights: {device_connected_to_carplay: 5, car_driver_door_opened: 6, car_lock_state_change: 4}
+got_out_the_car:
+  weights: {device_disconnected_from_carplay: 6, car_lock_state_change: 5, car_driver_door_opened: 5}

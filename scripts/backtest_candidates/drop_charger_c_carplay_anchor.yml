@@ -1,0 +1,6 @@
+got_into_the_car:
+  threshold: 10
+  max_age_seconds: {}
+  weights: {device_connected_to_carplay: 6, car_lock_state_change: 4, car_driver_door_opened: 4}
+got_out_the_car:
+  weights: {device_disconnected_from_carplay: 6, car_lock_state_change: 5, car_driver_door_opened: 5}
