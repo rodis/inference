@@ -79,10 +79,12 @@ It is infrastructure, not news.
    `push-monitor` either: `herdr agent get|prompt <target>` resolves a name with **no workspace
    filter**, so two worktrees each running this skill would create two agents with the same name and
    every later `get`/`prompt` would hit an arbitrary one — including the check-back that exists to
-   catch failures. Set the name once and use it throughout:
+   catch failures. Set the lowercased id once and derive both names — the agent's and the dashboard
+   label's — from it, so the two never disagree on case:
 
 ```bash
-NAME="push-monitor-$(printf '%s' "$HERDR_WORKSPACE_ID" | tr '[:upper:]' '[:lower:]')"
+WS_LC=$(printf '%s' "$HERDR_WORKSPACE_ID" | tr '[:upper:]' '[:lower:]')
+NAME="push-monitor-$WS_LC"
 ```
 
    The lookup filters on `workspace_id` exactly (unmodified), so lowercasing the *name* cannot
@@ -107,7 +109,7 @@ DASH=$(herdr pane list | python3 -c "
 import sys,json,os
 ws=os.environ.get('HERDR_WORKSPACE_ID')
 m=[p for p in json.load(sys.stdin)['result']['panes']
-   if p.get('label')==f'deploy-dash-{ws}' and p['workspace_id']==ws]
+   if p.get('label')==f'deploy-dash-{ws.lower()}' and p['workspace_id']==ws]
 print(m[0]['pane_id'] if m else '')
 ")
 ```
@@ -152,7 +154,7 @@ else
       --env KUBECONFIG=/Users/rods/.kube/kube_prod \
     | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['pane']['pane_id'])")
 fi
-herdr pane rename "$DASH" "deploy-dash-$HERDR_WORKSPACE_ID"
+herdr pane rename "$DASH" "deploy-dash-$WS_LC"
 
 # Now carve the agent out of the BOTTOM of that pane, leaving the dashboard a slim strip on top.
 sleep 1
