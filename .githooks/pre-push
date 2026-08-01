@@ -1,0 +1,70 @@
+#!/bin/sh
+# Enforce the two push rules a multi-agent worktree workflow cannot keep by convention.
+#
+# Installed via `core.hooksPath` (scripts/install-hooks.sh), set to an ABSOLUTE path so every
+# linked worktree uses this copy regardless of what it has checked out. Bypass deliberately
+# with `git push --no-verify`.
+set -eu
+
+common=$(git rev-parse --git-common-dir)
+gitdir=$(git rev-parse --git-dir)
+zero=0000000000000000000000000000000000000000
+
+# --- Rule 1: only the primary worktree may push -------------------------------------------
+# In the primary these are equal; in a linked worktree git-dir is <common>/worktrees/<name>.
+if [ "$gitdir" != "$common" ]; then
+  cat >&2 <<'MSG'
+
+  ✗ push refused — you are in a linked worktree.
+
+  Only the primary worktree pushes. Merge your branch there and push once:
+
+      cd <primary worktree> && git merge <your-branch> && git push
+
+  Why: there is ONE deploy target. Two worktrees pushing concurrently race on the
+  deploy-state force-push, and whoever lands last owns production — so a parallel
+  push is not parallel work, it is a coin flip over whose change ships.
+
+  Override:  git push --no-verify
+
+MSG
+  exit 1
+fi
+
+# --- Rule 2: never mix deploy/** with code in one push -------------------------------------
+# publish-images.yml (paths-ignore: deploy/**) and mirror-deploy-state.yml (paths: deploy/**)
+# sit in DIFFERENT concurrency groups, so a push touching both starts two workflows that race
+# on the deploy-state force-push. The loser's change is lost with no error anywhere.
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue                                    # branch deletion
+  if [ "$remote_sha" = "$zero" ]; then
+    base=$(git merge-base "$local_sha" origin/main 2>/dev/null) || continue # new branch
+  else
+    base=$remote_sha
+  fi
+  paths=$(git diff --name-only "$base" "$local_sha" 2>/dev/null) || continue
+  [ -z "$paths" ] && continue
+  deploy_n=$(printf '%s\n' "$paths" | grep -c '^deploy/' || true)
+  code_n=$(printf '%s\n' "$paths" | grep -vc '^deploy/' || true)
+  if [ "$deploy_n" -gt 0 ] && [ "$code_n" -gt 0 ]; then
+    cat >&2 <<'MSG'
+
+  ✗ push refused — this push mixes deploy/** with code.
+
+  Both publish-images.yml and mirror-deploy-state.yml would fire, in DIFFERENT
+  concurrency groups, and both force-push deploy-state. Last writer wins; the
+  other change vanishes with no error anywhere.
+
+  Split it — code first, then deploy:
+
+      git push origin <sha-of-last-code-commit>:main
+      git push
+
+  Override:  git push --no-verify
+
+MSG
+    exit 1
+  fi
+done
+
+exit 0
