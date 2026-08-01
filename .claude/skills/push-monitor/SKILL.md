@@ -170,8 +170,14 @@ import sys,json
 try: print(json.load(sys.stdin)['result']['agent']['agent_status'])
 except Exception: print('gone')
 ")
-VERDICT=$(herdr pane read "$PANE" 2>/dev/null | grep -E '^\s*Verdict:' | tail -1)
+OUT=$(herdr pane read "$PANE" 2>/dev/null)
+VERDICT=$(printf '%s' "$OUT" | grep -E '^\s*Verdict:' | tail -1)
+TROUBLE=$(printf '%s' "$OUT" | grep -cE '❌|⚠️')      # 0 == nothing to relay
 ```
+
+The mandated symbols make this cheap: **`TROUBLE` = 0 with a `Verdict:` present means green, and you
+say nothing.** You never have to parse prose to decide whether to speak — which is what keeps the
+check silent by default.
 
 **`agent_status` alone cannot tell you whether it finished.** A monitor that completed and reported
 sits at **`idle`** — exactly like one that was started and never prompted. That is why the prompt
@@ -267,19 +273,62 @@ is **five phases** and is not done at green CI — green CI only means an image 
 > Watch for `CrashLoopBackOff`, `ImagePullBackOff`, or a new pod stuck `Pending` while an old one
 > still serves — image drift shows up exactly that way.
 >
-> ### Report
-> One short paragraph per phase that had something to say, then **a final line beginning literally
-> `Verdict:`** — did the commit reach running pods or not. That prefix is the completion signal the
-> launching agent greps for; without it your run is indistinguishable from one that never started.
-> Call out specifically:
+> ### Output format — emit a status line the moment each phase settles
+>
+> **Do not batch the report to the end.** Print one line as each phase resolves, so the pane is
+> watchable in flight rather than blank until it finishes:
+>
+> ```
+> [1/5] ✅ CI            publish-images #482 · 106 tests · 3m12s
+> [2/5] ✅ deploy-state  be0b9a2 · sha-bd202a2
+> [3/5] ⏳ Argo          polling, not synced yet (2m)
+> ```
+>
+> Symbols, used strictly — they are the whole point of the glance:
+>
+> | | meaning |
+> |---|---|
+> | ✅ | phase passed, nothing to read |
+> | ❌ | **failed** — stop the chain here, detail below |
+> | ⚠️ | passed but needs a human eye (restarts > 0, a suspected stale render, an odd timing) |
+> | ⏳ | still in progress |
+> | ⏭️ | not applicable this run (say why in four words) |
+>
+> Keep each line to one row: `[n/5]`, symbol, phase name, then the *specific facts* — run number,
+> sha, tag, counts, durations. No prose on these lines.
+>
+> ### Final block
+>
+> Close with a fenced summary, then the verdict:
+>
+> ```
+> ┌─ bd202a2 ──────────────────────────────────────────────
+> │ ✅ CI   ✅ deploy-state   ✅ Argo   ✅ image   ✅ rollout
+> └────────────────────────────────────────────────────────
+> ```
+> `Verdict: bd202a2 reached running pods — 3 deployments on sha-bd202a2, 0 restarts.`
+>
+> **If every phase is ✅, that block plus the verdict is the ENTIRE report.** Write nothing else. The
+> user should be able to confirm a good deploy in one glance and never read a word of prose.
+>
+> **Only when a phase is ❌ or ⚠️** do you write detail, and only for that phase — under a
+> `### ❌ Phase N — <name>` heading, so the eye lands on it immediately. Everything green stays
+> collapsed to its one line. This is the whole design: glance when it is fine, read when it is not.
+>
+> The final line must begin literally `Verdict:` — it is the completion signal the launching agent
+> greps for, and without it your run is indistinguishable from one that never started.
+>
+> In the detail for a failing phase, call out specifically:
 > - a workflow failure, with the failing job and the relevant log lines only;
 > - `Synced` with a stale image (Phase 4) — the confusing one;
 > - Argo `ComparisonError`, which wedges an app with an empty revision that a hard refresh will not
 >   clear; only a new commit fixes it;
 > - pods that rolled but are not healthy.
 >
-> Keep it tight — this is a status report, not a narrative. If the whole chain is still incomplete
-> after 20 minutes, say where it stopped and stop rather than waiting indefinitely.
+> Keep it tight — a status report, not a narrative. If the whole chain is still incomplete after 20
+> minutes, emit the summary block with the phases you reached marked and the remainder ⏳, say where
+> it stopped, and stop rather than waiting indefinitely. A partial block still beats silence: it
+> shows at a glance how far it got.
 
 ## Notes
 
