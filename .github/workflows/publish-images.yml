@@ -130,7 +130,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          ref: main
+          # The TRIGGERING commit, not `main`. These two differ whenever another push lands
+          # while this run is queued or executing, and `ref: main` then force-pushes a tree that
+          # never existed as a commit — a later commit's deploy/** carrying this run's image tag.
+          # Provenance has to hold: the manifests shipped to deploy-state must describe the same
+          # commit whose images were built. Safe because the push below is `--force HEAD:deploy-state`,
+          # so a detached checkout is fine — nothing here needs to be ON a branch.
+          ref: ${{ github.sha }}
 
       - uses: actions/download-artifact@v4
         # No receipts at all (every build failed) makes this step fail; the next step turns that
@@ -196,6 +202,16 @@ jobs:
       - name: Commit bump and force-push to deploy-state
         run: |
           set -euo pipefail
+          # Re-running an OLD run now deploys that old tree, because the checkout is pinned to the
+          # triggering commit. That is the correct reading of "re-run", but it silently reverts any
+          # newer deploy/** — so make it loud rather than surprising.
+          # FETCH_HEAD, not origin/main: actions/checkout configures a narrow refspec for the
+          # single ref it fetched, so `origin/main` may simply not exist as a remote-tracking ref.
+          git fetch origin main --depth=1 >/dev/null 2>&1 || true
+          if [ -n "$(git rev-parse --verify -q FETCH_HEAD || true)" ] \
+             && [ "$(git rev-parse HEAD)" != "$(git rev-parse FETCH_HEAD)" ]; then
+            echo "::warning::This run is not for main's tip — deploy-state will be set to ${GITHUB_SHA:0:7}'s tree, reverting any newer deploy/** until the next push."
+          fi
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if git diff --quiet -- deploy/; then

@@ -27,7 +27,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          # The TRIGGERING commit, not `main`. These two differ whenever another push lands
+          # while this run is queued or executing, and `ref: main` then force-pushes a tree that
+          # never existed as a commit — a later commit's deploy/** carrying this run's image tag.
+          # Provenance has to hold: the manifests shipped to deploy-state must describe the same
+          # commit whose images were built. Safe because the push below is `--force HEAD:deploy-state`,
+          # so a detached checkout is fine — nothing here needs to be ON a branch.
+          ref: ${{ github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Preserve bumped image tags from deploy-state
