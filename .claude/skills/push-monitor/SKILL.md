@@ -122,21 +122,32 @@ Where the monitor area goes depends on whether the right half of the window is a
 Never squeeze the conversation pane a second time — if something is already on the right, the
 monitor goes *under it*, not beside it.
 
-**Both panes belong in the PRIMARY checkout, never in a worktree** — pass `$REPO` below, never
-`$PWD`. `$PWD` is whatever the launching session happened to be sitting in, which makes the panes'
-cwd incidental: land from a worktree session and they inherit *that* worktree. It has to be pinned,
-for a reason that bites late and looks unrelated:
+**Both panes get a NEUTRAL cwd — the monitor's state directory, never any repo checkout.** Two
+constraints, learned separately, and only a non-repo directory satisfies both:
 
-- A worktree **can be removed while the deploy is still running** — a ~5–10 minute window. Its
-  directory then vanishes under the monitor, and the last thing the monitor does is
-  `scripts/lock.sh deploy release`. That fails, so the `deploy` lock sits until its 30-minute TTL and
-  every other agent is blocked for no reason — the exact failure the lock exists to prevent.
-- Nothing the monitor reads is branch-specific anyway. It watches CI, `deploy-state`, Argo and pods:
-  all `main`'s, all remote. The primary checkout is the only one guaranteed to outlive the deploy.
+- **Not the worktree (`$PWD`).** A worktree **can be removed while the deploy is still running** — a
+  ~5–10 minute window. Its directory then vanishes under the monitor, and the last thing the monitor
+  does is release the `deploy` lock. That fails, so the lock sits until its 30-minute TTL and every
+  other agent is blocked for no reason — the exact failure the lock exists to prevent.
+- **Not the primary checkout either.** A pane's cwd gives it a repo identity, and herdr surfaces
+  that identity in the workspace: with the monitor's panes sitting in the primary checkout, the
+  worktree workspace (and its agent rows in the sidebar) got relabeled to the repo name
+  (`inference`) instead of the worktree's own name — observed 2026-08-02, repeatedly, on every
+  monitor launch. The workspace's identity belongs to the *worktree*, not to whatever the monitor
+  happens to poll.
+
+The monitor does not need a repo cwd at all: everything it touches — `deploy_status.py`, `lock.sh`,
+`gh`, `kubectl` — is invoked by absolute path, and nothing it reads is branch-specific (CI,
+`deploy-state`, Argo, pods: all `main`'s, all remote). The state directory outlives both checkouts.
 
 ```bash
-# The primary checkout — the first entry of `worktree list`, resolvable from inside any worktree.
+# The primary checkout — still needed for SCRIPT PATHS (deploy_status.py, lock.sh), just not as cwd.
+# First entry of `worktree list`, resolvable from inside any worktree.
 REPO=$(git worktree list --porcelain | head -1 | cut -d' ' -f2)
+
+# The panes' cwd: the monitor's own state directory. No repo, nothing for herdr to relabel from.
+MON_CWD="$HOME/.cache/inference-deploy"
+mkdir -p "$MON_CWD"
 
 RIGHT=$(herdr pane neighbor --current --direction right 2>/dev/null | python3 -c "
 import sys,json
@@ -145,12 +156,12 @@ print(json.load(sys.stdin).get('result',{}).get('neighbor',{}).get('neighbor_pan
 
 if [ -z "$RIGHT" ]; then
   # Nothing on the right: split the current pane in half, vertically.
-  DASH=$(herdr pane split --current --direction right --ratio 0.5 --cwd "$REPO" --no-focus \
+  DASH=$(herdr pane split --current --direction right --ratio 0.5 --cwd "$MON_CWD" --no-focus \
       --env KUBECONFIG=/Users/rods/.kube/kube_prod \
     | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['pane']['pane_id'])")
 else
   # Occupied: split THAT pane horizontally; the new pane is the bottom one.
-  DASH=$(herdr pane split "$RIGHT" --direction down --ratio 0.5 --cwd "$REPO" --no-focus \
+  DASH=$(herdr pane split "$RIGHT" --direction down --ratio 0.5 --cwd "$MON_CWD" --no-focus \
       --env KUBECONFIG=/Users/rods/.kube/kube_prod \
     | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['pane']['pane_id'])")
 fi
@@ -158,7 +169,7 @@ herdr pane rename "$DASH" "deploy-dash-$WS_LC"
 
 # Now carve the agent out of the BOTTOM of that pane, leaving the dashboard a slim strip on top.
 sleep 1
-PANE=$(herdr pane split "$DASH" --direction down --ratio 0.25 --cwd "$REPO" --no-focus \
+PANE=$(herdr pane split "$DASH" --direction down --ratio 0.25 --cwd "$MON_CWD" --no-focus \
     --env KUBECONFIG=/Users/rods/.kube/kube_prod \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['pane']['pane_id'])")
 ```
@@ -357,7 +368,7 @@ is **five phases** and is not done at green CI — green CI only means an image 
 > in the pane above yours, rendering from a state file. Your output is these calls, one the moment
 > each phase settles — **substitute the absolute `$REPO` path when filling this prompt in**, do not
 > leave the variable for the monitor to resolve (its shell never had it set, and its pane's cwd is
-> the primary checkout, not necessarily where you launched from):
+> a neutral state directory, not any repo checkout):
 >
 > ```bash
 > uv run $REPO/scripts/deploy_status.py set --sha <SHA> --phase <1-5> \
@@ -454,8 +465,11 @@ is **five phases** and is not done at green CI — green CI only means an image 
 >
 > ### Then release the deploy lock — always, success or failure
 >
+> Absolute path (same substitution as above) — your cwd is not the repo, so a relative
+> `scripts/lock.sh` will not resolve:
+>
 > ```bash
-> scripts/lock.sh deploy release
+> sh $REPO/scripts/lock.sh deploy release
 > ```
 >
 > `.githooks/pre-push` took a lock when this push left the machine so that one push travels the
