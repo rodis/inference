@@ -443,6 +443,11 @@ kbd { font-family: var(--mono); font-size: 10px; background: var(--chip); border
 .drow .dg { flex: 1; }
 .drillback { font-family: var(--mono); font-size: 11px; color: var(--accent); background: none; border: 0; padding: 0 0 12px; cursor: pointer; }
 .drillback:hover { text-decoration: underline; }
+/* a bulk contributor type collapsed into one summary row (issue #32) — evidence, not navigation */
+.drow.dcollapsed { cursor: default; background: transparent; border-style: dashed; }
+.drow.dcollapsed:hover { border-color: var(--hair); background: transparent; }
+.drow.dcollapsed .dn { color: var(--muted); font-weight: 500; }
+.drow.dcollapsed .dtile { opacity: 0.55; }
 .dkids { margin-left: 15px; padding-left: 16px; border-left: 2px solid var(--hair); }
 .dleaf-note { font-family: var(--mono); font-size: 11px; color: var(--muted); padding: 4px 0 0 14px; }
 

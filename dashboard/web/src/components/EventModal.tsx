@@ -1,7 +1,13 @@
 import { useEffect, useState } from "react";
 import type { AwareEvent } from "../types";
-import { catOf, fmtTimeSec, humanDur, inkOn, labelOf } from "../view";
+import { catOf, fmtTime, fmtTimeSec, humanDur, inkOn, labelOf, typeLabel } from "../view";
 import LevelChip, { OverrideFlag } from "./LevelChip";
+
+/** A contributor type that floods the tree (a `stay` derives from *dozens* of location pings,
+ *  issue #32) collapses into one summary row per type. The rule is structural — any type at or
+ *  past this count, not a name list — so the next bulk source is covered without a code change.
+ *  The row is evidence ("104 pings back this"), not navigation, so it doesn't drill. */
+const COLLAPSE_AT = 6;
 
 interface Props {
   event: AwareEvent | null;
@@ -14,6 +20,40 @@ interface Props {
    *  event's lineage is collapsed out of sight on the board behind the modal. */
   revealOf?: (e: AwareEvent) => number;
   onClose: () => void;
+}
+
+/** One summary row standing in for a bulk contributor type: count + the span the fixes cover.
+ *  A plain div, not a button — there is nothing to drill into that the count doesn't already say. */
+function CollapsedRow({ name, events }: { name: string; events: AwareEvent[] }) {
+  const cat = catOf(name);
+  let from = events[0].date, to = events[0].date;
+  for (const ev of events) {
+    if (ev.date < from) from = ev.date;
+    if (ev.date > to) to = ev.date;
+  }
+  return (
+    <div className="drow dcollapsed" title={`${events.length} contributing events of this type — collapsed (issue #32)`}>
+      <span className="dtile" style={{ background: cat.c, color: inkOn(cat.c) }}><cat.Icon size={15} strokeWidth={2.25} /></span>
+      <span className="dn">{events.length} {typeLabel(name).toLowerCase()}{events.length === 1 ? "" : "s"}</span>
+      <span className="dg" />
+      <span className="dt">{fmtTime(from)} – {fmtTime(to)}</span>
+    </div>
+  );
+}
+
+/** One level of the derivation tree: individual rows for the sparse contributors, a summary
+ *  row per bulk type. Collapsed rows render after the drillable ones so evidence trails story. */
+function DKidList({ kids, byId, levelOf, derivLevel, onOpen }: { kids: AwareEvent[]; byId: Record<string, AwareEvent>; levelOf: (n: string) => number; derivLevel: (e: AwareEvent) => number; onOpen: (e: AwareEvent) => void }) {
+  const countByName = new Map<string, number>();
+  for (const k of kids) countByName.set(k.name, (countByName.get(k.name) || 0) + 1);
+  const shown = kids.filter((k) => (countByName.get(k.name) || 0) < COLLAPSE_AT);
+  const bulkNames = [...countByName.keys()].filter((n) => (countByName.get(n) || 0) >= COLLAPSE_AT);
+  return (
+    <>
+      {shown.map((k) => <DNode key={k.id} e={k} byId={byId} levelOf={levelOf} derivLevel={derivLevel} onOpen={onOpen} />)}
+      {bulkNames.map((n) => <CollapsedRow key={n} name={n} events={kids.filter((k) => k.name === n)} />)}
+    </>
+  );
 }
 
 /** Recursive lineage node — the derivation tree under an event. Each row is clickable to
@@ -34,7 +74,7 @@ function DNode({ e, byId, levelOf, derivLevel, onOpen }: { e: AwareEvent; byId: 
       </button>
       {kids.length > 0 && (
         <div className="dkids">
-          {kids.map((k) => <DNode key={k.id} e={k} byId={byId} levelOf={levelOf} derivLevel={derivLevel} onOpen={onOpen} />)}
+          <DKidList kids={kids} byId={byId} levelOf={levelOf} derivLevel={derivLevel} onOpen={onOpen} />
         </div>
       )}
     </div>
@@ -67,7 +107,13 @@ export default function EventModal({ event, byId, levelOf, derivLevel, defaultOf
   const hiddenBeneath = revealOf
     ? kids.reduce((n, k) => (revealOf(k) < 0.5 ? n + 1 : n), 0)
     : 0;
-  const raw = { id: e.id, name: e.name, event_class: e.event_class, source_app: e.source_app, occurred_epoch: e.occurred_epoch, message: e.message };
+  // The raw box is a *view*, so a bulk lineage is trimmed here too (full lineage stays in Neon —
+  // the copy button copies what's shown, so the note travels with it).
+  const df = e.message.derived_from || [];
+  const rawMessage = df.length >= COLLAPSE_AT
+    ? { ...e.message, derived_from: [...df.slice(0, 3), `… ${df.length - 3} more contributors trimmed for display — the full lineage is in the event store`] }
+    : e.message;
+  const raw = { id: e.id, name: e.name, event_class: e.event_class, source_app: e.source_app, occurred_epoch: e.occurred_epoch, message: rawMessage };
   const rawJson = JSON.stringify(raw, null, 2);
 
   return (
@@ -115,7 +161,7 @@ export default function EventModal({ event, byId, levelOf, derivLevel, defaultOf
             )}
           </p>
           {kids.length ? (
-            <div className="dtree">{kids.map((k) => <DNode key={k.id} e={k} byId={byId} levelOf={levelOf} derivLevel={derivLevel} onOpen={open} />)}</div>
+            <div className="dtree"><DKidList kids={kids} byId={byId} levelOf={levelOf} derivLevel={derivLevel} onOpen={open} /></div>
           ) : (
             <div className="dleaf-note">— end of lineage —</div>
           )}
