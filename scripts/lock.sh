@@ -40,29 +40,44 @@ now=$(date +%s)
 
 age() { [ -f "$lock" ] || return 1; at=$(sed -n 's/^at=//p' "$lock" 2>/dev/null || echo 0); echo $(( now - ${at:-0} )); }
 
+# A holder that no longer exists is stale NOW, whatever the TTL says. Locks record the herdr
+# pane that took them, and herdr answers `pane_not_found` for a pane that is gone — so a monitor
+# whose pane was closed, or a worktree torn down mid-rederive, frees its lock immediately
+# instead of blocking every other agent for the full 30 minutes. Falls back to the TTL when the
+# holder is not a herdr pane (a bare hostname:pid, where there is no cheap liveness check).
+holder_gone() {
+  by=$(sed -n 's/^by=//p' "$lock" 2>/dev/null) || return 1
+  case "$by" in w[0-9]*:p*) ;; *) return 1 ;; esac
+  command -v herdr >/dev/null 2>&1 || return 1
+  # herdr writes this error to STDERR and exits 1, so `2>/dev/null` would discard the very
+  # thing being matched and every dead holder would look alive. Merge the streams.
+  herdr pane get "$by" 2>&1 | grep -q 'pane_not_found'
+}
+
 case "${1:-status}" in
   acquire)
     detail=${2:-$(git rev-parse --short HEAD)}
     if a=$(age); then
-      if [ "$a" -lt "$TTL" ]; then
-        held_sha=$(sed -n 's/^detail=//p' "$lock"); held_by=$(sed -n 's/^by=//p' "$lock")
+      if holder_gone; then
+        echo "  ⚠ breaking the $name lock — holder pane $by no longer exists" >&2
+      elif [ "$a" -lt "$TTL" ]; then
+        held_detail=$(sed -n 's/^detail=//p' "$lock"); held_by=$(sed -n 's/^by=//p' "$lock")
         cat >&2 <<MSG
 
   ✗ refused — the '$name' lock is held.
 
-      holder:  $held_sha
+      holder:  $held_detail
       started: $((a / 60))m ${a}s ago, by $held_by
 
   Wait for the holder to finish. If it has died:
 
       scripts/lock.sh $name release
 
-  Override:  git push --no-verify
-
 MSG
         exit 1
+      else
+        echo "  ⚠ breaking a stale $name lock (${a}s old > ${TTL}s TTL) — the holder likely died" >&2
       fi
-      echo "  ⚠ breaking a stale $name lock (${a}s old > ${TTL}s TTL) — the holder likely died" >&2
     fi
     printf 'detail=%s\nat=%s\nby=%s\n' "$detail" "$now" "${HERDR_PANE_ID:-$(hostname):$$}" > "$lock"
     ;;
@@ -72,7 +87,11 @@ MSG
   status)
     if a=$(age); then
       echo "HELD  $(sed -n 's/^detail=//p' "$lock")  age=${a}s  by=$(sed -n 's/^by=//p' "$lock")"
-      [ "$a" -ge "$TTL" ] && echo "      (stale — past the ${TTL}s TTL, next acquire will break it)"
+      if holder_gone; then
+        echo "      (STALE — holder pane $by is gone; next acquire will break it)"
+      elif [ "$a" -ge "$TTL" ]; then
+        echo "      (stale — past the ${TTL}s TTL, next acquire will break it)"
+      fi
     else
       echo "free"
     fi
