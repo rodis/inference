@@ -1,5 +1,5 @@
 import type { AwareEvent } from "../types";
-import { fmtTime, humanDur, intervalOf, isSpan, labelOf } from "../view";
+import { fmtTime, humanDur, intervalOf, isSpan, labelOf, routeOf } from "../view";
 import LevelChip, { OverrideFlag } from "./LevelChip";
 
 interface Props {
@@ -27,6 +27,9 @@ export default function EventBody({ event: e, level, def = null, depth, hostLabe
   const iv = isSpan(e) ? intervalOf(e) : null;
   const isDer = e.event_class === "derived";
   const amount = Number(e.message.amount);
+  // A journey's route lives here, on the detail line, and never in the title — one place rather
+  // than two, so it stays short and can't be half-missing. See view.ts::routeOf.
+  const route = routeOf(e);
 
   let detail: string;
   if (iv) {
@@ -53,6 +56,7 @@ export default function EventBody({ event: e, level, def = null, depth, hostLabe
         <div className="ev-meta">
           {iv && <span className="dur">{humanDur(iv.duration_seconds)}</span>}
           {iv && detail ? ` · ${detail}` : iv ? "" : detail}
+          {route && <span className="ev-route"> · {route}</span>}
           {hostLabel && <span className="ev-host"> · in {hostLabel.toLowerCase()}</span>}
         </div>
       )}

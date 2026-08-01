@@ -149,9 +149,16 @@ side: a second *independent source*, not more phone peripherals.
   [`core.md`](../core.md#deliberately-absent): declaring `capabilities: [interval, …]` obliges you to
   add the dashboard registry entries in the same change, because the split that keeps presentation
   out of the data model also means nothing connects the two automatically.
-- `trip` names itself after its journey — "Home → ENNETSeeKLINIK für Kleintiere" — by the same rule a
-  `stay` names itself after its place, degrading to "To …"/"From …" when only one end matched a POI
-  (5 of the first 20 journeys had an unlabelled end).
+- `trip` first named itself after its journey — "Home → ENNETSeeKLINIK für Kleintiere" — by the same
+  rule a `stay` names itself after its place. **Reverted on real use.** A route runs to 38 characters
+  against a stay's 30, and titles sit in a `flex-wrap` row with the chips inside a fixed-width lane,
+  so it wrapped and shoved the capsules around. Worse, 9 of the first 21 journeys had an unlabelled
+  end (7 with one, 2 with neither), so the half-missing "To Home" form was the *common* case rather
+  than the edge — a title that is usually incomplete is not a title. A journey is now titled by its
+  **mode** ("Drive"/"Walk"/"Ride"/"Run", falling back to "Trip"): always complete, 4-5 characters, and
+  it carries the fact that makes this event generic in the first place. The route keeps its place one
+  rung down on the detail line as **one** end — "to Home", else "from Home" — which halves the length
+  and picks the half that answers the question.
 - ~~On sparse days a trip's span stretches~~ — **this was the bug, not a quirk.** See the second
   addendum: the spans were systematically too wide because the engine trusted the motion label, and
   "worth watching, not worth a threshold yet" was the wrong read of a defect that ran every

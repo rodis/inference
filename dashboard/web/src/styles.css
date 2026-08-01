@@ -209,7 +209,11 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 .ev-meta .dur { color: var(--accent); font-weight: 600; }
 /* line 1: name + its classification (kind word, L/D chips) all on one row */
 .ev-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.ev-title { font-family: var(--rounded); font-weight: 650; font-size: 15px; letter-spacing: -0.01em; }
+/* `overflow-wrap: anywhere` + `min-width: 0` are a BACKSTOP, not the design: a title long enough to
+   need them is the real bug (see view.ts::MODE_NOUN — a trip's route in the title ran to 38 chars
+   and shoved the capsule lane around). This keeps the next long label — a German compound POI name,
+   say — from overflowing the lane instead of merely looking cramped. */
+.ev-title { font-family: var(--rounded); font-weight: 650; font-size: 15px; letter-spacing: -0.01em; min-width: 0; overflow-wrap: anywhere; }
 .ev-kind { font-family: var(--mono); font-size: 10px; color: var(--muted-2); }
 
 /* semantic-zoom: gesture surface + a fixed, always-reachable +/- control */
@@ -318,6 +322,7 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 
 .ev-amount { font-family: var(--rounded); font-weight: 700; font-size: 13.5px; font-variant-numeric: tabular-nums; color: var(--accent); }
 .ev-host { color: var(--muted-2); }
+.ev-route { color: var(--muted-2); }
 .orphan { font-family: var(--mono); font-size: 10px; color: var(--muted-2); border: 1px dashed var(--hair-2); border-radius: 6px; padding: 1px 6px; white-space: nowrap; }
 
 @media (max-width: 760px) {

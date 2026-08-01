@@ -4,8 +4,8 @@ import type { AwareEvent } from "./types";
 
 export const VERBS: Record<string, string> = {
   car_trip: "Car trip", got_into_the_car: "Got into the car", got_out_the_car: "Got out of the car",
-  // Fallback only: a `trip` names itself after the journey it made (see labelOf), the same way
-  // a `stay` names itself after its place. "Trip" is what's left when neither end is a known POI.
+  // A `trip` titles itself by its MODE (see labelOf / MODE_NOUN); this is the fallback for a
+  // journey where no fix claimed one.
   trip: "Trip",
   car_door_opened: "Car door opened", car_door_closed: "Car door closed", phone_is_charging: "Phone charging",
   // Retired 2026-08-01 (issue #6) — labels kept because 34 historical events are still in
@@ -121,27 +121,52 @@ const titleize = (s: string) => { const t = s.replace(/_/g, " "); return t.charA
 /** An event carrying the `place` capability names itself after the place it matched — the label
  *  IS the useful noun ("Konditorei von Rotz Baar", not "Stay"). Falls back to the verb when the
  *  place is unknown, which is the honest reading: we know you stopped, not where. */
-/** An event carrying the `journey` capability names itself after the journey it made, by the same
- *  rule `place` follows: the endpoints ARE the useful noun. "Home → ENNETSeeKLINIK für Kleintiere"
- *  says what happened; "Trip" says only that something did.
+/** How a journey titles itself: by its **mode**, not by its endpoints.
  *
- *  Degrades one end at a time rather than all-or-nothing, because an unlabelled endpoint is common
- *  and not a failure — 5 of the first 20 journeys had one end at a place with no `poi` row. "To
- *  Home" and "From Home" each still carry the half we know, while "→ Home" with a blank on the left
- *  would look broken rather than partial. Both ends unknown falls through to the verb. Adding the
- *  POI row and re-deriving upgrades the label (ADR 0007). */
-const journeyLabel = (e: AwareEvent): string | null => {
+ *  The first version put the route in the title — "Home → ENNETSeeKLINIK für Kleintiere" — on the
+ *  reasoning that `place` does the same for a stay. Two things were wrong with that, both visible on
+ *  a real board:
+ *
+ *  - **It breaks the layout.** Titles are 15px semibold inside `.ev-head`, a `flex-wrap` row that
+ *    also carries the chips, sitting in a fixed-width lane. A route runs to 38 characters against a
+ *    stay's 30, so it wrapped and shoved the capsules around. (The wrap guard in `.ev-title` is now
+ *    a backstop, but the real fix is not putting a two-ended string there.)
+ *  - **It is incomplete far too often.** 9 of the first 21 journeys had an unlabelled end — 7 with
+ *    one, 2 with neither — so "To Home" and "From Home" were the common case, not the edge. A title
+ *    that is usually half-missing is not a title.
+ *
+ *  Mode is the better noun: always complete (it falls back to the verb), 4-5 characters so it can
+ *  never be the thing that overflows, and it carries the fact that makes this event *generic* — a
+ *  walk and a drive read differently at a glance, which is the whole reason `trip` exists alongside
+ *  `car_trip`. The route is real information and keeps its place, one rung down, in `routeOf`. */
+const MODE_NOUN: Record<string, string> = {
+  driving: "Drive", walking: "Walk", cycling: "Ride", running: "Run",
+};
+const tripLabel = (e: AwareEvent): string | null => {
+  const mode = e.message.journey?.mode;
+  return mode ? MODE_NOUN[mode] ?? null : null;
+};
+
+/** Where a journey went, as **one** place rather than two — for the card's detail line, never its
+ *  title.
+ *
+ *  One end, not both, for the same reason a stay names itself after a single place: it halves the
+ *  length and picks the half that answers the question. Destination wins because "where did I end
+ *  up" is what you want from a finished journey; the origin is the fallback, which is what makes
+ *  this degrade cleanly instead of rendering an arrow with a blank on one side.
+ *
+ *  Null when neither end matched a POI — the caller then shows duration alone, which is honest.
+ *  Adding the `poi` row and re-deriving upgrades it (ADR 0007: a label is frozen at derive time). */
+export const routeOf = (e: AwareEvent): string | null => {
   const j = e.message.journey;
   if (!j) return null;
-  const from = j.origin?.label, to = j.destination?.label;
-  if (from && to) return `${from} \u2192 ${to}`;
-  if (to) return `To ${to}`;
-  if (from) return `From ${from}`;
+  if (j.destination?.label) return `to ${j.destination.label}`;
+  if (j.origin?.label) return `from ${j.origin.label}`;
   return null;
 };
 
 export const labelOf = (e: AwareEvent) =>
-  journeyLabel(e) ??
+  tripLabel(e) ??
   (e.message.place?.label
     ? e.message.place.label
     : e.event_class === "derived" ? VERBS[e.name] || titleize(e.name) : RAW_LABEL[e.name] || titleize(e.name));

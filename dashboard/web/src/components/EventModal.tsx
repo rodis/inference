@@ -85,7 +85,13 @@ export default function EventModal({ event, byId, levelOf, derivLevel, defaultOf
             </div>
             <div className="mtitle">{labelOf(e)}</div>
             <div className="mmeta">
-              <span className="mt">{fmtTimeSec(e.date)}{e.message.interval ? " · " + humanDur(e.message.interval.duration_seconds) : ""}</span>
+              <span className="mt">{fmtTimeSec(e.date)}{e.message.interval ? " · " + humanDur(e.message.interval.duration_seconds) : ""}{
+                /* The modal is the one place wide enough for both ends, so it spells out the whole
+                   route where the card shows only the informative half (view.ts::routeOf). */
+                e.message.journey
+                  ? " · " + (e.message.journey.origin?.label ?? "somewhere") + " \u2192 " +
+                            (e.message.journey.destination?.label ?? "somewhere")
+                  : ""}</span>
               <LevelChip level={lv} />
               {defaultOf && <OverrideFlag level={lv} def={defaultOf(e.name)} />}
               <span className="dbadge">D{dl}</span>

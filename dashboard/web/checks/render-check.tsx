@@ -26,7 +26,7 @@ import DayTimeline from "../src/components/DayTimeline";
 import EventModal from "../src/components/EventModal";
 import LevelsDashboard from "../src/dashboards/levels/LevelsDashboard";
 import TimelineDashboard from "../src/dashboards/timeline/TimelineDashboard";
-import { catOf, dayLayout, defaultLevelOf, hostOf, inkOn, isEverydayPlace, isSpan, labelOf, laneCount, laneNames, laneOf, placeUnknown, prepare, supersededIds } from "../src/view";
+import { catOf, dayLayout, defaultLevelOf, hostOf, inkOn, isEverydayPlace, isSpan, labelOf, laneCount, laneNames, laneOf, placeUnknown, prepare, routeOf, supersededIds } from "../src/view";
 import type { AwareEvent } from "../src/types";
 
 // Both dashboards use useLayoutEffect (scroll anchoring, focus-after-move) — correct on the
@@ -414,6 +414,7 @@ console.log("\n— a journey draws as a journey (ADR 0010) —");
 const journeyEv = (
   id: string, name: string, span: [string, string],
   j?: { from: string | null; to: string | null }, vehicle?: string[],
+  mode: string | null = "driving",
 ) => ({
   id, name, event_class: "derived" as const, occurred_epoch: at(span[1]),
   epoch: at(span[1]), date: new Date(at(span[1]) * 1000),
@@ -424,7 +425,7 @@ const journeyEv = (
     ...(j ? { journey: {
       origin: { lat: 47.2, lon: 8.57, spread_m: 0, label: j.from },
       destination: { lat: 47.16, lon: 8.44, spread_m: 0, label: j.to },
-      straight_line_m: 11350, path_m: 23960, mode: "driving",
+      straight_line_m: 11350, path_m: 23960, ...(mode ? { mode } : {}),
     } } : {}),
     ...(vehicle ? { vehicle: { evidence: vehicle, confirmed: vehicle.length >= 2 } } : {}),
   },
@@ -432,6 +433,8 @@ const journeyEv = (
 
 const ownCar = journeyEv("t1", "trip", ["07:50", "08:13"], { from: "Home", to: "Konditorei von Rotz Baar" },
                          ["got_out_the_car", "got_into_the_car"]);
+const onFoot = journeyEv("t6", "trip", ["19:00", "19:20"], { from: "Home", to: null }, undefined, "walking");
+const modeless = journeyEv("t7", "trip", ["20:00", "20:20"], { from: null, to: null }, undefined, null);
 const borrowed = journeyEv("t2", "trip", ["14:50", "15:16"], { from: "Home", to: "ENNETSeeKLINIK" });
 const toOnly = journeyEv("t3", "trip", ["16:00", "16:20"], { from: null, to: "Home" });
 const fromOnly = journeyEv("t4", "trip", ["17:00", "17:20"], { from: "Home", to: null });
@@ -442,14 +445,22 @@ const bare = journeyEv("t5", "trip", ["18:00", "18:20"], { from: null, to: null 
 // is an allowlist and nobody added it. An interval in the data is not a span on the board.
 check("a trip is a span", isSpan(ownCar));
 check("a trip is not filed as a moment", laneOf(ownCar) === "activity", laneOf(ownCar));
-// Named after the journey, by the same rule a stay is named after its place.
-check("a trip is labelled with its endpoints", labelOf(ownCar) === "Home \u2192 Konditorei von Rotz Baar",
-  labelOf(ownCar));
-// One unlabelled end is common (5 of the first 20) and degrades to the half we know, because
-// "\u2192 Home" with a blank on the left reads as broken rather than partial.
-check("a trip with only a destination reads 'To …'", labelOf(toOnly) === "To Home", labelOf(toOnly));
-check("a trip with only an origin reads 'From …'", labelOf(fromOnly) === "From Home", labelOf(fromOnly));
-check("a trip with neither end named falls back to its verb", labelOf(bare) === "Trip", labelOf(bare));
+// Titled by MODE, not by its endpoints. The route in the title ran to 38 chars against a stay's 30,
+// wrapped `.ev-head`, and shoved the capsule lane around — and 9 of the first 21 journeys had an
+// unlabelled end, so the half-missing "To Home" form was the common case rather than the edge.
+check("a drive is titled by its mode", labelOf(ownCar) === "Drive", labelOf(ownCar));
+check("a walk is titled as a walk", labelOf(onFoot) === "Walk", labelOf(onFoot));
+check("a journey with no mode falls back to its verb", labelOf(modeless) === "Trip", labelOf(modeless));
+// Short enough that a trip can never be the title that overflows the lane.
+check("every trip title is short", [ownCar, onFoot, modeless, toOnly, bare].every((t) => labelOf(t).length <= 6),
+  [ownCar, onFoot, modeless].map(labelOf).join("/"));
+// The route keeps its place one rung down, as ONE end — the destination when known, else the origin.
+check("the route shows the destination when known", routeOf(ownCar) === "to Konditorei von Rotz Baar",
+  String(routeOf(ownCar)));
+check("...and falls back to the origin", routeOf(onFoot) === "from Home" && routeOf(fromOnly) === "from Home",
+  String(routeOf(onFoot)));
+check("...and is absent when neither end matched", routeOf(bare) === null, String(routeOf(bare)));
+check("a non-journey event has no route", routeOf(E("e14")) === null, String(routeOf(E("e14"))));
 // A journey must not change colour depending on which event expressed it; the icon carries the
 // difference. Guards against `trip` falling through catOf to the anonymous grey circle.
 check("a trip is not an anonymous dot", catOf("trip").c === catOf("car_trip").c && catOf("trip").c !== "#9298a6",

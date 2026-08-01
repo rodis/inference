@@ -891,14 +891,18 @@ chooses to surface an event — not an intrinsic fact about it. `car_trip` and `
 both carry `interval`; only the dashboard decides one is drawn as a span. Role lives in the
 dashboard's `SPAN_EVENTS`, never in this model.
 
-> **Known cost of that split, worth stating because it has already bitten.** `SPAN_EVENTS` is an
+> **Known cost of that split, worth stating because it has already bitten twice.** `SPAN_EVENTS` is an
 > **allowlist**, so a new interval-carrying event defaults to being drawn as a *point* — and nothing
 > fails. `trip` shipped 2026-08-01 with a correct `interval` on all 20 events in Neon and rendered as
 > a disc beside `credit_card_payment`, because only the backend half of the change was done. The
 > data model is right to stay out of presentation, but "the capability is emitted" is not "the event
 > is drawn": a definition declaring `interval` needs its dashboard registry entry in the *same*
 > change. The dashboard's registries are `SPAN_EVENTS`, `VERBS` and `CAT` — a missing `CAT` entry
-> renders an anonymous grey dot, also without failing.
+> renders an anonymous grey dot, also without failing. The second bite was the reverse direction:
+> `trip` was given a *rich* title (its origin→destination route) which the backend was happy to
+> supply and the layout could not hold — 38 characters in a `flex-wrap` row inside a fixed-width
+> lane. Presentation being a view decision cuts both ways: the view owns not just *whether* to draw
+> a capability but *how much of it* fits.
 
 **A confidence score.** Removed, which resolves ADR 0002's open question. It existed for weighted
 composition across derivation hops, and that never happened, because trust ended up declared *per
