@@ -72,7 +72,9 @@ Env/secrets live in `workers/.env` (gitignored). The entrypoint loads it via `fi
 - **Code changes** (`paths-ignore: deploy/**`) trigger [`publish-images.yml`](.github/workflows/publish-images.yml): build each **component** image (auto-discovered `workers/<name>/Dockerfile` → `inference-<slug>`, plus the explicitly-declared `dashboard/Dockerfile` → `inference-dashboard`), bump that component's `values.yml` (`deploy/inference/kustomize/base/<slug>/values.yml` for workers, `deploy/dashboard/kustomize/base/values.yml` for the dashboard) to `sha-<short>`, commit, force-push `deploy-state`.
 - **Deploy-only changes** (`paths: deploy/**`) trigger [`mirror-deploy-state.yml`](.github/workflows/mirror-deploy-state.yml): mirror `main`→`deploy-state` **carrying the existing `deploy-state` image tag forward**.
 
-Pushing **both** code and `deploy/**` in one commit races on the `deploy-state` force-push — split them into separate pushes (code first).
+Pushing **both** code and `deploy/**` in one commit races on the `deploy-state` force-push — split them into separate pushes (code first). This is **enforced**, not conventional: `.githooks/pre-push` refuses such a push. Run `scripts/install-hooks.sh` once per clone.
+
+The same hook refuses a push from a **linked worktree**. With several agents on worktrees there is still exactly one deploy target, so concurrent pushes are a coin flip over whose change ships — merge into the primary worktree and push once from there. Both rules are bypassable with `git push --no-verify` when you mean it.
 
 ## Runtime state in K8s
 
