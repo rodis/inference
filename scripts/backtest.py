@@ -86,10 +86,10 @@ def fetch_signals(dsn: str, user: str, days: int, input_names: set[str]) -> list
             """,
             (user, days, list(input_names)),
         ).fetchall()
-    # `source_app` is carried through from the column, not stubbed. It is envelope metadata the
-    # engines mostly ignore, but `ssid_edge` gates on it (two producers emit `location_ping` and
-    # only one reports the WiFi field), and a stubbed value would silently filter every ping out
-    # of the replay — an engine that "never fires" rather than a visible error.
+    # `source_app` is carried through from the column, not stubbed. No engine reads it today,
+    # but it is part of the envelope production hands them, and an engine that DOES gate on it
+    # (one did — `ssid_edge`, removed 2026-08-01) sees a stubbed value filter every event out of
+    # the replay silently: "never fires" rather than a visible error. Replay fidelity is cheap.
     return [
         {"name": n, "source_app": app, "source_type": "http_server",
          "message": {**(msg or {}), "id": i, "name": n, "user_id": user, "timestamp": ts}}

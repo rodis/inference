@@ -1030,7 +1030,7 @@ fix is skipped and the track continues from the last trustworthy position.
 
 ## 11. Engine reference
 
-Eight engines are registered; the seven distinct strategies are grouped below
+Seven engines are registered; the six distinct strategies are grouped below
 (`validated_session_window` subclasses the pairing one and is documented with it). All share the
 shape `(event, scoped state) -> Decision | None`, and all are selected purely by a definition's
 `engine:` string.
@@ -1048,9 +1048,6 @@ flowchart TB
     subgraph geo["Geometry — read the location stream"]
         gf["geofence<br/>containment EDGE"]
         stw["stay_window<br/>CLUSTER at departure"]
-    end
-    subgraph fld["Field edge — read a NON-geometric field on that same stream"]
-        se["ssid_edge<br/>joined-network EDGE"]
     end
 ```
 
@@ -1362,61 +1359,6 @@ Two deliberate omissions keep this a *strategy* rather than a policy: no POI nam
 generic `stay` carrying its centroid; labelling happens in the `place` capability), and no re-opening
 of a closed stay if you return (that is a second stay, correctly).
 
-### `ssid_edge` (issue #33)
-
-The **only directional** car-boundary signal in the set, and the reason it exists: every other one is
-position-ambiguous. `car_lock_state_change` fires on lock and unlock alike, `car_driver_door_opened`
-on entry and exit alike — the root of the phantom exit-at-entry class (issue #2) and of ADR 0005's
-whole weight-tuning fight. The car's own lock descriptor was expected to break the tie and did not:
-it fires on drive-away *and* on walk-away (issue #3). The network the phone is **joined to** does
-break it, because the phone associates with the car's hotspot on getting in and leaves it on getting
-out, so the transition itself carries the direction.
-
-| Config | Default | Meaning |
-|---|---|---|
-| `ssid` | *required* | the network whose join/leave edge fires (e.g. `BMW 73638`) |
-| `direction` | *required* | `connect` fires not-joined → joined; `disconnect` the reverse |
-| `field` | `wifi` | message field carrying the joined network's name |
-| `sources` | *(none)* | producers authoritative for `field` — see below, this is a correctness gate |
-| `event_name` | `location_ping` | the stream to read |
-
-State: `last` (joined network or `None`), `ts` (event-time of the last change), `seen`. All three are
-written **only on a change**, so a steady stream of pings inside the car costs no changelog record.
-
-Three rules that are not obvious, each from a real failure mode:
-
-1. **Association, not availability.** Probing whether the SSID is *in range* cannot work, and it is
-   ADR 0007's point restated: an edge detector needs a sample on each side of the boundary, and a
-   hotspot is in range while you approach it *and* while you walk away. Only association has an edge.
-2. **`sources` is a correctness gate.** The field is *absent* when off WiFi — Overland omits the key
-   entirely (941 of 1485 pings, never an explicit null) — so absent has to read as not-joined. But a
-   producer that never reports the field is then indistinguishable from one reporting off-WiFi, and
-   `location_ping` has two producers: OwnTracks emitted 110 pings and reported WiFi on **none**.
-   Ungated, one interleaved OwnTracks fix mid-drive reads as a disconnect and mints a phantom exit.
-3. **Baseline-silent, and an out-of-order guard.** A phone already in the car at startup (or after a
-   state reset) must not mint an entry it never crossed — the same edge rule the BMW mapper applies
-   to its descriptors. And Overland posts batches whose internal order is not guaranteed, so a ping
-   older than the last transition is skipped: pings (t=100 off) (t=200 joined) (t=150 off) processed
-   in arrival order would otherwise read the last as a disconnect at t=150.
-
-Measured over the 4 days of WiFi history: 9 connect / 9 disconnect edges, perfectly alternating,
-covering 7/7 real trips (the BMW lane manages ~75%/88%), with the disconnect edge landing +6…+50 s
-after the current `got_out_the_car` — the tightest exit evidence available. Total detection latency
-~90 s (Overland's ~62 s sampling gap + ~30 s ingest), inside `got_out`'s 300 s window.
-
-It is nonetheless **observation-only**, in no weight map, exactly as ADR 0006 landed `car_locked`. At
-`car_wifi_connected` 6 / `car_wifi_disconnected` 6 the `trip_eval` metrics are *identical* to current
-(real 10, junk 0, missed 0/10, end_error −42 s): the window has nothing left to fix, so it cannot
-discriminate, and a weight change that demonstrates no improvement is not justified. Two negatives it
-did settle: dropping the ambiguous lock once WiFi exists **regresses** (real 10→8, junk 0→1), and
-WiFi does **not** buy enough headroom to close #2 by demoting the door in `got_out` (that demotion
-costs a real trip and mints a 32 s junk trip either way). Candidates live in
-`scripts/backtest_candidates/wifi_*.yml`.
-
-Two known weaknesses, both left for the weight map rather than the detector: the phone associates
-when merely *near* the car (two spurious runs in 4 days, 26 s and 3.2 min, no trip), and a run spans
-consecutive drives across a short stop — so this is "in/near the car", not a trip delimiter.
-
 ### The retired seventh
 
 `naive_bayes_window` was removed 2026-07-27. `car_door_closed` was its only consumer, gone since ADR
@@ -1466,14 +1408,11 @@ definitions are:
 | `geofence` | `inside` | `bool` | **only on change** |
 | | `last_fix` | `{lat, lon, ts}` | every accepted fix |
 | `stay_window` | `open` | `{clat, clon, n, first_ts, last_ts, last_lat, last_lon, events}` | every accepted fix |
-| `ssid_edge` | `last` | `str` or `None` (the joined network; `None` = off-WiFi) | **only on change** |
-| | `ts` | `int` — event-time of the last change, the out-of-order guard | **only on change** |
-| | `seen` | `bool` — has any ping been observed (baseline-silent first observation) | once, on the first ping |
 
 Concretely, for the current definition set: `stay:open`, `got_into_the_car:window`,
 `got_into_the_car:last_fired`, `got_out_the_car:window`, `got_out_the_car:open`,
 `got_out_the_car:last_fired`, `car_trip:open`, `car_trip:track`, `phone_is_charging:open`,
-`arrived_home_by_car:window`, `entered_home:inside`, `entered_home:last_fix`, `car_wifi_connected:last`, `car_wifi_disconnected:last`, …
+`arrived_home_by_car:window`, `entered_home:inside`, `entered_home:last_fix`, …
 
 Everything stored must be JSON-serializable — Quix `State` round-trips values through the changelog.
 This is why engines stash full event **dicts** rather than model instances.

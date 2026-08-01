@@ -1,0 +1,3 @@
+# The mirror: entry side only (Overland-derived), to attribute wifi_direction_6's neutrality.
+got_into_the_car:
+  weights: {device_connected_to_power: 6, device_connected_to_carplay: 5, car_lock_state_change: 4, car_driver_door_opened: 4, car_wifi_connected: 6}

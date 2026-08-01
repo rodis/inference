@@ -75,10 +75,10 @@ def fetch_signals(dsn: str, user: str, since: str, until: str | None, names: set
     """
     with psycopg.connect(dsn) as conn:
         rows = conn.execute(sql, (user, list(names), since, until, until)).fetchall()
-    # `source_app` is carried through from the column, not stubbed. `ssid_edge` gates on it
-    # (two producers emit `location_ping` and only one reports the WiFi field), so a stubbed
-    # value filters every ping out of the replay — which surfaces as "nothing to re-derive"
-    # rather than as an error, the worst possible failure for a repair tool.
+    # `source_app` is carried through from the column, not stubbed. No engine reads it today,
+    # but a stubbed value silently filters out every event an engine gates on it — surfacing as
+    # "nothing to re-derive" rather than as an error, the worst possible failure for a repair
+    # tool. (Cost one debugging session on `ssid_edge`, removed 2026-08-01.)
     return [
         {"name": n, "source_app": app, "source_type": "http_server",
          "message": {**(msg or {}), "id": i, "name": n, "user_id": user, "timestamp": ts}}

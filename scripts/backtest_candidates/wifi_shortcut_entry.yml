@@ -1,0 +1,6 @@
+# The PHONE-side WiFi edge (device_connected_to_car_wifi) as an entry corroborator, rather than
+# the Overland-derived car_wifi_connected. Better timestamps (mean ~87s earlier, p50 lag 3.2s)
+# but the same underlying fact — so only ONE of the two may ever carry weight, else a single
+# WiFi association scores twice (weighted_window sums over distinct NAMES, not facts).
+got_into_the_car:
+  weights: {device_connected_to_power: 6, device_connected_to_carplay: 5, car_lock_state_change: 4, car_driver_door_opened: 4, device_connected_to_car_wifi: 6}

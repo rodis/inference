@@ -1,0 +1,5 @@
+# Isolate the EXIT side: car_wifi_disconnected only, no entry weight. The exit edge is the
+# half that measured well (+8..+50s after got_out, tightest exit evidence we have), and
+# wifi_direction_6 weights both — so a helpful exit could be cancelling a harmful entry.
+got_out_the_car:
+  weights: {device_disconnected_from_carplay: 6, car_lock_state_change: 5, device_disconnected_from_power: 5, car_driver_door_opened: 5, car_wifi_disconnected: 6}
