@@ -38,7 +38,18 @@ engine_config:
   # ~100m over 510m of walking path — so 500m clears the noise with room on both sides and
   # keeps car-park drift from becoming a journey.
   min_distance_m: 500
-  min_duration_seconds: 180
+
+  # 120s, was 180 (2026-08-01). A backstop, NOT the working guardrail — `min_distance_m` is what
+  # rejects standing still, and it rejects it on displacement, which is the physical fact. This
+  # floor only adds "…and you can't have covered 500m implausibly fast", so it should sit well
+  # below any real journey rather than near one. At 180 it was cutting into real ones: a 1.36km
+  # drive from the petrol station home (14 fixes, 25-58 km/h, bracketed by the Avia Neuheim and
+  # Home stays) spanned 140s and was dropped — the only failing gate, with extent 1356m and 14
+  # fixes both passing with room. Swept over the 30 days to 2026-08-01: 180 -> 150 changes
+  # nothing, and every value from 120 down to ZERO admits that one trip and nothing else, so
+  # below 180 this parameter is inert and extent is carrying the decision alone. 120 therefore
+  # buys the real trip while keeping a floor that a 500m-in-under-two-minutes claim must clear.
+  min_duration_seconds: 120
   min_fixes: 4                 # the fixes are the ONLY evidence here, so sparse = nothing to report
 
   # A sampling outage this long ends the trip where it was last seen: no evidence, no claim.

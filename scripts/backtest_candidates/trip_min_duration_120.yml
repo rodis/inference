@@ -1,0 +1,9 @@
+# Lower `trip`'s duration floor 180s -> 120s.
+#
+# Motivating case (2026-08-01): a 1.36 km drive Avia Neuheim -> Home, 14 fixes at 25-58 km/h,
+# spanning 140 s between two real stays. Rejected on duration alone — `min_fixes` (14 >= 4) and
+# `min_distance_m` (1356 >= 500) both passed with room. The duration floor was set against
+# car-park wandering, which `min_distance_m` already excludes on displacement; the question this
+# candidate answers is whether 120 s admits anything that 500 m of extent does not already reject.
+trip:
+  min_duration_seconds: 120

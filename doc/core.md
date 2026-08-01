@@ -1397,7 +1397,7 @@ Overland in full (123 fixes out, 104 back, max 119 km/h, bounding-box extent 13.
 | `settle_radius_m` | `60` | a fix within this of the running centroid is the same cluster; decides both "you left" and "you arrived". Mirrors `stay_window`'s `radius_m` |
 | `settle_seconds` | `300` | how long a cluster must hold to count as **arrived** rather than stopped at a light. Set to `stay`'s `min_dwell_seconds` — see below |
 | `min_distance_m` | `500` | bounding-box **extent** below which the entity went nowhere |
-| `min_duration_seconds` | `180` | shorter than this is not a journey |
+| `min_duration_seconds` | `120` | a **backstop** under `min_distance_m`, not the working guardrail — see below. Was `180`; lowered 2026-08-01 |
 | `min_fixes` | `4` | moving fixes needed; the fixes are the *only* evidence here |
 | `max_gap_seconds` | `1800` | a sampling outage ends the trip where it was last seen |
 | `max_duration_seconds` | `21600` | a `motion` array stuck on `driving` can't accumulate forever |
@@ -1436,6 +1436,20 @@ same instant.
 Slow steady movement cannot falsely mature a cluster: the running-mean centroid lags behind and a
 fix eventually escapes it. That is the same property that stops `stay_window` fusing a 13-minute
 drive into a stay (ADR 0007), used from the other side.
+
+> **The rejection guardrails are not peers: `min_distance_m` decides, `min_duration_seconds` backs
+> it up.** Extent is a physical fact about where the entity got to; a duration floor is a proxy for
+> the same thing and a worse one, because a short journey is still a journey. Measured 2026-08-01
+> over the preceding 30 days, sweeping the floor 180 → 150 → 120 → 90 → 60 → 0 against unchanged
+> `min_distance_m: 500`: 150 changes nothing at all, and **every** value from 120 down to zero
+> admits exactly one additional trip and nothing else. So below 180 the parameter is inert — extent
+> alone is rejecting the non-journeys — while at 180 it was cutting into real ones. The trip it was
+> cutting: a 1.36 km drive from a petrol station home on 2026-08-01, 14 fixes at 25–58 km/h,
+> bracketed by the **Avia Neuheim** and **Home** stays, spanning 140 s. Extent (1356 m) and fixes
+> (14) both passed with room; duration was the only failing gate. Lowered to `120`, which keeps a
+> floor a "500 m in under two minutes" claim must clear without pricing out short real legs. If a
+> future phantom needs rejecting, reach for extent or the plausibility guard first — a duration
+> floor tuned upward will always take real short journeys with it.
 
 **Both bounds are settled fixes, not travelling ones.** A trip is bounded by the last fix of the
 cluster it departed and the **first** fix of the cluster it arrived in. Clipping to the first/last

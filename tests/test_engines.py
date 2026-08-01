@@ -484,7 +484,7 @@ def test_validated_coverage_is_a_true_fraction_of_the_session(state, event):
 
 def _trip(**over):
     cfg = {"settle_radius_m": 60, "settle_seconds": 300, "min_distance_m": 500,
-           "min_duration_seconds": 180, "min_fixes": 4, "max_gap_seconds": 1800,
+           "min_duration_seconds": 120, "min_fixes": 4, "max_gap_seconds": 1800,
            "max_duration_seconds": 21600, "max_accuracy_m": 100}
     cfg.update(over)
     return TripWindowEngine(cfg)
@@ -626,6 +626,25 @@ def test_trip_ignores_a_run_too_short_to_be_a_journey(state, event):
     _sit(eng, state, event, T)
     last, _ = _leg(eng, state, event, T + 300, n=6, step=5)             # 4km but only 25s
     assert _arrive(eng, state, event, last + 10) is None
+
+
+def test_trip_admits_a_short_leg_that_covered_real_ground(state, event):
+    """The duration floor is a BACKSTOP under min_distance_m, not a second opinion on it.
+
+    2026-08-01: a 1.36km drive from the petrol station home — 14 fixes at 25-58 km/h, bracketed by
+    the Avia Neuheim and Home stays — spanned 140s and was dropped by `min_duration_seconds: 180`,
+    the only failing gate. Swept over the preceding 30 days, every floor from 120 down to zero
+    admitted that trip and nothing else, so below 180 the parameter was inert and extent was
+    already carrying the decision (ADR 0010 addendum 3). Short and "went nowhere" are different
+    claims; only extent tests the second one.
+    """
+    eng = _trip()
+    dep = _sit(eng, state, event, T, n=2, step=30)                      # depart at T+30
+    last, _ = _leg(eng, state, event, T + 60, n=5, step=30)             # 4km in 5 displacing fixes
+    d = _arrive(eng, state, event, last + 20)
+    assert d is not None
+    span = d.occurred_at - dep
+    assert 120 <= span < 180                                           # admitted now, rejected at 180
 
 
 def test_trip_ignores_a_run_with_too_few_fixes(state, event):

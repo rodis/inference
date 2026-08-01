@@ -75,10 +75,12 @@ fix is the obvious implementation and it is wrong for a specific, measurable rea
 the first moving fix was ~600 m down the road, outside Home's POI radius, so the journey would have
 lost its origin label. The whole value of the event is that it reads *Home → ENNETSeeKLINIK*.
 
-The cost is that arrival is only knowable in retrospect: `settle_seconds` (180) distinguishes
-arriving from stopping at a light, so non-moving fixes are buffered, spliced back into the trip if
-motion resumes, and only promoted to "arrived" once the entity has stayed still that long. It sits
-below `stay`'s `min_dwell_seconds` (300) so a trip closes before the stay it leads into opens.
+The cost is that arrival is only knowable in retrospect: `settle_seconds` distinguishes arriving
+from stopping at a light, so non-moving fixes are buffered, spliced back into the trip if movement
+resumes, and only promoted to "arrived" once the entity has stayed put that long. It is set *equal*
+to `stay`'s `min_dwell_seconds` (both 300) rather than below it, which is what makes the complement
+claim exact — see addendum 2. (This paragraph said 180 and "sits below" until 2026-08-01; that was
+the pre-#44 value, left stale by the rewrite.)
 
 **3. The guardrails are the ones the geometry engines already use, for the reasons already recorded.**
 Bounding-box **extent** rather than net displacement (`validated_session_window`: a drive that returns
@@ -304,3 +306,43 @@ journeys and displacement-derived for borrowed ones, decided by which peripheral
 
 Honest limits after the fix: own-car recall is 13 of 15 by *presence*, with 1 of 6 borrowed legs
 falsely gaining `evidence` (the 30 July phantom exit, #2). `confirmed` stays clean at 7 of 7.
+
+## Addendum 3 — the duration floor was a proxy for extent, and a worse one
+
+**2026-08-01.** `min_duration_seconds` drops from 180 to **120**.
+
+The trigger was a missing leg on the day's timeline. A 1.36 km drive from the petrol station home —
+14 fixes, 25–58 km/h, bracketed by the **Avia Neuheim** and **Home** stays, both endpoints inside
+their POI radii (16 m and 25 m) — produced nothing. The span was 140 s. Extent (1356 m) and fixes
+(14) passed with room; the duration floor was the sole rejection.
+
+Sweeping the floor over the preceding 30 days against unchanged `min_distance_m: 500`:
+
+| `min_duration_seconds` | trips derived | delta |
+|---|---|---|
+| 180 (current) | 22 | — |
+| 150 | 22 | no change |
+| 120 | 23 | +1, −0 |
+| 90 | 23 | +1, −0 |
+| 60 | 23 | +1, −0 |
+| **0** | **23** | **+1, −0** |
+
+The floor is **inert below 180**. Removing it entirely admits the same single trip and nothing
+else, which means `min_distance_m` was already rejecting every non-journey on its own — and the
+only thing the floor contributed over 30 days was deleting a real drive.
+
+That is the shape of the original decision, seen from the other side. Section 3 above argued the
+guardrails should be the physical facts the geometry engines already use, and extent *is* one: it
+says where the entity actually got to. Duration is a **proxy** for the same question, and a lossy
+one, because "short" and "didn't go anywhere" are different claims that only coincide on average. A
+proxy set beside the fact it approximates does no work until it starts overruling it — which is
+exactly what 180 did on a 1.4 km drive.
+
+It is not removed, because a floor is cheap insurance against a class extent cannot see on its own:
+500 m covered in seconds is a teleport, not a journey, and `is_implausible_jump` guards consecutive
+pairs rather than the run as a whole. 120 s keeps that backstop below any plausible real leg.
+
+**The rule this leaves behind:** the guardrails are not peers. `min_distance_m` decides;
+`min_duration_seconds` backs it up. A future phantom should be answered with extent or the
+plausibility guard — a duration floor tuned upward will always take real short journeys with it,
+and the measurement above shows it buys nothing on the way.
