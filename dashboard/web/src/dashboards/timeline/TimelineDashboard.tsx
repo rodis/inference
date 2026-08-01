@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useAware } from "../../app/useAware";
 import { DAY_WINDOW } from "../../api";
 import type { AwareEvent } from "../../types";
-import { absorbedIds, catOf, dayKey, dayLayout, humanDur, isEverydayPlace, laneNames } from "../../view";
+import { absorbedIds, catOf, dayKey, dayLayout, humanDur, isEverydayPlace, laneNames, supersededIds } from "../../view";
 import DayTimeline from "../../components/DayTimeline";
 import WeekStrip from "../../components/WeekStrip";
 import EventModal from "../../components/EventModal";
@@ -37,9 +37,19 @@ export default function TimelineDashboard() {
   // altitude, which is not what "off the timeline" means.
   // `isEverydayPlace` drops stays at the place you live in for the same reason and by the same
   // mechanism — off the timeline, still derived and still in Neon. Flip this to keep them.
+  // `supersededIds` drops a span another span restates more completely (a `car_trip` under the
+  // `trip` covering the same drive), so one drive is one capsule. It is computed over the day
+  // BEFORE the level filter on purpose: whether a drive is already drawn is a fact about the
+  // day, not about the altitude you happen to be viewing it at — deriving it from the filtered
+  // set would resurrect the `car_trip` as soon as `trip` was parked on the levels board.
+  const daySpans = useMemo(
+    () => all.filter((e) => dayKey(e.date) === selectedDay),
+    [all, selectedDay]
+  );
+  const superseded = useMemo(() => supersededIds(daySpans), [daySpans]);
   const dayAll = useMemo(
-    () => all.filter((e) => dayKey(e.date) === selectedDay && !isHidden(e.name) && !isEverydayPlace(e)),
-    [all, selectedDay, isHidden]
+    () => daySpans.filter((e) => !isHidden(e.name) && !isEverydayPlace(e) && !superseded.has(e.id)),
+    [daySpans, isHidden, superseded]
   );
   const absorbed = useMemo(() => absorbedIds(dayAll, revealOf), [dayAll, revealOf]);
   const revealDay = useCallback((e: AwareEvent) => (absorbed.has(e.id) ? 0 : revealOf(e)), [absorbed, revealOf]);

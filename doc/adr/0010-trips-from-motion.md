@@ -132,9 +132,26 @@ side: a second *independent source*, not more phone peripherals.
 
 **Costs and open edges:**
 
-- Two definitions now describe overlapping facts, so a consumer showing both will draw a car drive
-  twice. Which to surface is a **presentation** decision and stays in the dashboard (the data model
-  has carried no `role` since Stage 1), but it is real work that this ADR does not do.
+- Two definitions now describe overlapping facts, so a consumer showing both would draw a car drive
+  twice. Resolved in the dashboard, where presentation belongs (the data model has carried no `role`
+  since Stage 1): `SUPERSEDED_BY` maps `car_trip -> trip` and `supersededIds` drops a `car_trip` that
+  an overlapping `trip` restates, so one drive is one capsule. **Preference, not deletion** — a
+  `car_trip` no `trip` covers still draws, which is what keeps every pre-Overland drive on the
+  timeline. It is keyed on the event *name* rather than a capability, deliberately: `car_trip` says
+  nothing structurally that distinguishes it from any other bare-interval event, so a rule like
+  "an interval superseded by an overlapping `journey`" would also swallow `phone_is_charging`, which
+  merely overlaps a drive rather than restating it.
+- **`trip` first shipped drawing as a *point*.** `SPAN_EVENTS` is an allowlist and the backend half
+  of the change did not touch it, so an event with a correct `interval` on all 20 rows rendered as a
+  disc beside `credit_card_payment` — and nothing failed, in either the backend or the frontend
+  checks. Fixed the same day, along with the `VERBS`/`CAT` entries it was also missing (a missing
+  `CAT` entry draws an anonymous grey dot, equally silently). The lesson is recorded in
+  [`core.md`](../core.md#deliberately-absent): declaring `capabilities: [interval, …]` obliges you to
+  add the dashboard registry entries in the same change, because the split that keeps presentation
+  out of the data model also means nothing connects the two automatically.
+- `trip` names itself after its journey — "Home → ENNETSeeKLINIK für Kleintiere" — by the same rule a
+  `stay` names itself after its place, degrading to "To …"/"From …" when only one end matched a POI
+  (5 of the first 20 journeys had an unlabelled end).
 - On sparse days a trip's span stretches: the 25 July legs read 50.4 and 57.4 minutes for an 11 km
   drive, against 25.6 on the densely-sampled 30th. The endpoints are right and the extent is right;
   the *duration* inherits the sampling. Worth watching, not worth a threshold yet.

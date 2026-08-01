@@ -1,9 +1,12 @@
-import { Car, LogIn, LogOut, DoorOpen, DoorClosed, KeyRound, Smartphone, Plug, BatteryCharging, CreditCard, House, MapPin, Circle } from "lucide-react";
+import { Car, Route, LogIn, LogOut, DoorOpen, DoorClosed, KeyRound, Smartphone, Plug, BatteryCharging, CreditCard, House, MapPin, Circle } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { AwareEvent } from "./types";
 
 export const VERBS: Record<string, string> = {
   car_trip: "Car trip", got_into_the_car: "Got into the car", got_out_the_car: "Got out of the car",
+  // Fallback only: a `trip` names itself after the journey it made (see labelOf), the same way
+  // a `stay` names itself after its place. "Trip" is what's left when neither end is a known POI.
+  trip: "Trip",
   car_door_opened: "Car door opened", car_door_closed: "Car door closed", phone_is_charging: "Phone charging",
   // Retired 2026-08-01 (issue #6) — labels kept because 34 historical events are still in
   // Neon and would otherwise render unlabelled on the timeline.
@@ -34,6 +37,12 @@ export const CAT: Record<string, { c: string; Icon: LucideIcon }> = {
   // coffee-shop capsule in the parallel-lanes design sketch, which is what a stay turned out
   // to be in practice — most of them are a café.
   stay: { c: "#b4732f", Icon: MapPin },
+  // Same blue as `car_trip`, on purpose: a journey is a journey, and on any day since the
+  // Overland lane landed the `trip` is the one drawn (see SUPERSEDED_BY), so a drive must not
+  // change colour depending on which event happened to express it. The icon carries the
+  // difference — `Route` for a journey known from motion, `Car` for one known from the car's
+  // own signals — which is the distinction that actually matters when both appear on one day.
+  trip: { c: "#3d6cf7", Icon: Route },
 };
 
 /** Readable ink for something drawn ON a category fill (a capsule icon, a lineage tile).
@@ -112,10 +121,30 @@ const titleize = (s: string) => { const t = s.replace(/_/g, " "); return t.charA
 /** An event carrying the `place` capability names itself after the place it matched — the label
  *  IS the useful noun ("Konditorei von Rotz Baar", not "Stay"). Falls back to the verb when the
  *  place is unknown, which is the honest reading: we know you stopped, not where. */
+/** An event carrying the `journey` capability names itself after the journey it made, by the same
+ *  rule `place` follows: the endpoints ARE the useful noun. "Home → ENNETSeeKLINIK für Kleintiere"
+ *  says what happened; "Trip" says only that something did.
+ *
+ *  Degrades one end at a time rather than all-or-nothing, because an unlabelled endpoint is common
+ *  and not a failure — 5 of the first 20 journeys had one end at a place with no `poi` row. "To
+ *  Home" and "From Home" each still carry the half we know, while "→ Home" with a blank on the left
+ *  would look broken rather than partial. Both ends unknown falls through to the verb. Adding the
+ *  POI row and re-deriving upgrades the label (ADR 0007). */
+const journeyLabel = (e: AwareEvent): string | null => {
+  const j = e.message.journey;
+  if (!j) return null;
+  const from = j.origin?.label, to = j.destination?.label;
+  if (from && to) return `${from} \u2192 ${to}`;
+  if (to) return `To ${to}`;
+  if (from) return `From ${from}`;
+  return null;
+};
+
 export const labelOf = (e: AwareEvent) =>
-  e.message.place?.label
+  journeyLabel(e) ??
+  (e.message.place?.label
     ? e.message.place.label
-    : e.event_class === "derived" ? VERBS[e.name] || titleize(e.name) : RAW_LABEL[e.name] || titleize(e.name);
+    : e.event_class === "derived" ? VERBS[e.name] || titleize(e.name) : RAW_LABEL[e.name] || titleize(e.name));
 export const typeLabel = (n: string) => VERBS[n] || RAW_LABEL[n] || titleize(n);
 
 /** An event that knows *where* it happened but not *what* that place is: the `place` capability
@@ -142,11 +171,63 @@ export const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 // --- presentation config (dashboard-owned) --------------------------------------
 // Which derived events render as a time *span* (a duration capsule on the day timeline).
 // The backend emits the `interval` capability as data; whether to *draw* an event as a
-// span is a view decision, so it lives here, not in the event definition. Both events that
-// carry an interval today (a trip, a charge) read naturally as durations, so both render as
-// capsules whose length is proportional to how long they lasted.
-export const SPAN_EVENTS = new Set<string>(["car_trip", "phone_is_charging", "stay"]);
+// span is a view decision, so it lives here, not in the event definition. Every event that
+// carries an interval today (a journey, a charge, a stay) reads naturally as a duration, so
+// each renders as a capsule whose length is proportional to how long it lasted.
+//
+// This list is an allowlist, so a NEW interval-carrying event defaults to being drawn as a
+// point — which is a silent wrong answer, not a missing feature: `trip` shipped with its
+// `interval` correct in Neon on all 20 events and still drew as a disc next to
+// `credit_card_payment`. If you add a definition with `capabilities: [interval, …]`, add it
+// here in the same change.
+export const SPAN_EVENTS = new Set<string>(["car_trip", "trip", "phone_is_charging", "stay"]);
 export const intervalOf = (e: AwareEvent) => e.message.interval ?? null;
+
+/** Spans that another span on the same day re-expresses more completely — mapped
+ *  `redundant -> replacement`, by NAME, deliberately.
+ *
+ *  `trip` and `car_trip` describe the same drive whenever it happened in your own car
+ *  (ADR 0010): `trip` derives the span from motion and carries `journey` (labelled origin and
+ *  destination, distance, mode) plus `vehicle` (which car boundaries corroborated it), while
+ *  `car_trip` carries a bare interval derived by *pairing* those boundaries. Drawing both puts
+ *  two capsules on one drive, which reads as a duplicate rather than as two views of it.
+ *
+ *  **Preference, not deletion.** `car_trip` still renders on days `trip` cannot see — it needs
+ *  >= 4 moving fixes, so every drive before the Overland lane landed (2026-07-25) has a
+ *  `car_trip` and no `trip`. Suppressing the type outright would blank those days; suppressing
+ *  it only where a `trip` actually covers the same drive keeps the history intact. Whether
+ *  `car_trip` retires at all is issue #42, and this deliberately does not prejudge it.
+ *
+ *  **Keyed on name, unlike `placeUnknown` and `isEverydayPlace` above.** Those keep to
+ *  capabilities so the next place-carrying event inherits the treatment for free. There is no
+ *  capability to key on here: `car_trip` says nothing structurally that distinguishes it from
+ *  any other bare-interval event, so a rule like "an interval superseded by an overlapping
+ *  `journey`" would also swallow `phone_is_charging`, which merely *overlaps* a drive rather
+ *  than restating it. Supersession is an editorial claim that one event replaces another, so it
+ *  is written down as one. */
+export const SUPERSEDED_BY = new Map<string, string>([["car_trip", "trip"]]);
+
+/** Ids of spans suppressed because their replacement is present and covers the same episode.
+ *
+ *  **Overlap, not containment.** `trip`'s bounds are settled fixes just outside the movement
+ *  while `car_trip`'s are the boundary signals, so the pairing usually sits *inside* the
+ *  journey — but not always: measured over 25 Jul - 1 Aug, on two of fourteen own-car drives
+ *  the entry boundary preceded the journey's first settled fix by ~105 s. Containment would
+ *  have let those two draw twice, which is the exact case this exists to prevent. */
+export function supersededIds(events: AwareEvent[]): Set<string> {
+  const out = new Set<string>();
+  for (const e of events) {
+    const replacement = SUPERSEDED_BY.get(e.name);
+    const iv = intervalOf(e);
+    if (!replacement || !iv) continue;
+    for (const r of events) {
+      if (r.name !== replacement) continue;
+      const rv = intervalOf(r);
+      if (rv && iv.started_at <= rv.ended_at && iv.ended_at >= rv.started_at) { out.add(e.id); break; }
+    }
+  }
+  return out;
+}
 
 /** An event at an **everyday** place — the one you live in (reference data, the `everyday`
  *  column on a `regions` POI row; see `inference.capabilities`).

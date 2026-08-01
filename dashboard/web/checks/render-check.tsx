@@ -26,7 +26,7 @@ import DayTimeline from "../src/components/DayTimeline";
 import EventModal from "../src/components/EventModal";
 import LevelsDashboard from "../src/dashboards/levels/LevelsDashboard";
 import TimelineDashboard from "../src/dashboards/timeline/TimelineDashboard";
-import { catOf, dayLayout, defaultLevelOf, hostOf, inkOn, isEverydayPlace, isSpan, labelOf, laneCount, laneNames, placeUnknown, prepare } from "../src/view";
+import { catOf, dayLayout, defaultLevelOf, hostOf, inkOn, isEverydayPlace, isSpan, labelOf, laneCount, laneNames, laneOf, placeUnknown, prepare, supersededIds } from "../src/view";
 import type { AwareEvent } from "../src/types";
 
 // Both dashboards use useLayoutEffect (scroll anchoring, focus-after-move) — correct on the
@@ -406,6 +406,80 @@ check("the mark is four dots", (shell.match(/<circle/g) || []).length === 4,
 check("...on an opacity ramp", ["0.26", "0.48", "0.74"].every((o) => shell.includes(`opacity="${o}"`)));
 check("the mark inherits the tile's ink", shell.includes('fill="currentColor"'));
 check("the wordmark is next to it", shell.includes(">Aware<"));
+
+console.log("\n— a journey draws as a journey (ADR 0010) —");
+// Built standalone rather than added to `rows`: a `trip` overlapping the day's car_trip would
+// add a concurrent span and change the layout's sub-column count, breaking the geometry checks
+// above for reasons that have nothing to do with what is being tested here.
+const journeyEv = (
+  id: string, name: string, span: [string, string],
+  j?: { from: string | null; to: string | null }, vehicle?: string[],
+) => ({
+  id, name, event_class: "derived" as const, occurred_epoch: at(span[1]),
+  epoch: at(span[1]), date: new Date(at(span[1]) * 1000),
+  message: {
+    name,
+    derived_from: [],
+    interval: { started_at: at(span[0]), ended_at: at(span[1]), duration_seconds: at(span[1]) - at(span[0]) },
+    ...(j ? { journey: {
+      origin: { lat: 47.2, lon: 8.57, spread_m: 0, label: j.from },
+      destination: { lat: 47.16, lon: 8.44, spread_m: 0, label: j.to },
+      straight_line_m: 11350, path_m: 23960, mode: "driving",
+    } } : {}),
+    ...(vehicle ? { vehicle: { evidence: vehicle, confirmed: vehicle.length >= 2 } } : {}),
+  },
+}) as unknown as AwareEvent;
+
+const ownCar = journeyEv("t1", "trip", ["07:50", "08:13"], { from: "Home", to: "Konditorei von Rotz Baar" },
+                         ["got_out_the_car", "got_into_the_car"]);
+const borrowed = journeyEv("t2", "trip", ["14:50", "15:16"], { from: "Home", to: "ENNETSeeKLINIK" });
+const toOnly = journeyEv("t3", "trip", ["16:00", "16:20"], { from: null, to: "Home" });
+const fromOnly = journeyEv("t4", "trip", ["17:00", "17:20"], { from: "Home", to: null });
+const bare = journeyEv("t5", "trip", ["18:00", "18:20"], { from: null, to: null });
+
+// The bug this group exists for: `trip` shipped with a correct `interval` on all 20 events in Neon
+// and still drew as a disc in the moments lane, next to `credit_card_payment` — because SPAN_EVENTS
+// is an allowlist and nobody added it. An interval in the data is not a span on the board.
+check("a trip is a span", isSpan(ownCar));
+check("a trip is not filed as a moment", laneOf(ownCar) === "activity", laneOf(ownCar));
+// Named after the journey, by the same rule a stay is named after its place.
+check("a trip is labelled with its endpoints", labelOf(ownCar) === "Home \u2192 Konditorei von Rotz Baar",
+  labelOf(ownCar));
+// One unlabelled end is common (5 of the first 20) and degrades to the half we know, because
+// "\u2192 Home" with a blank on the left reads as broken rather than partial.
+check("a trip with only a destination reads 'To …'", labelOf(toOnly) === "To Home", labelOf(toOnly));
+check("a trip with only an origin reads 'From …'", labelOf(fromOnly) === "From Home", labelOf(fromOnly));
+check("a trip with neither end named falls back to its verb", labelOf(bare) === "Trip", labelOf(bare));
+// A journey must not change colour depending on which event expressed it; the icon carries the
+// difference. Guards against `trip` falling through catOf to the anonymous grey circle.
+check("a trip is not an anonymous dot", catOf("trip").c === catOf("car_trip").c && catOf("trip").c !== "#9298a6",
+  catOf("trip").c);
+check("...but its icon differs from car_trip's", catOf("trip").Icon !== catOf("car_trip").Icon);
+
+console.log("\n— supersession: one drive, one capsule —");
+const pairedInside = journeyEv("c1", "car_trip", ["07:52", "08:11"]);      // inside the trip
+const pairedEarly = journeyEv("c2", "car_trip", ["07:48", "08:05"]);       // starts BEFORE it
+const otherDay = journeyEv("c3", "car_trip", ["20:00", "20:30"]);          // no trip covers it
+const overlapCharge = journeyEv("c4", "phone_is_charging", ["07:00", "12:00"]); // merely overlaps
+{
+  const sup = supersededIds([ownCar, borrowed, pairedInside, pairedEarly, otherDay, overlapCharge]);
+  check("a car_trip inside the trip is suppressed", sup.has("c1"));
+  // Overlap, not containment: measured over 25 Jul - 1 Aug, on 2 of 14 own-car drives the entry
+  // boundary preceded the journey's first settled fix by ~105s. Containment would draw those twice.
+  check("a car_trip that starts before the trip is still suppressed", sup.has("c2"));
+  // Preference, not deletion — every drive before the Overland lane landed has a car_trip and no
+  // trip, and suppressing the type outright would blank those days.
+  check("a car_trip no trip covers survives", !sup.has("c3"));
+  // The reason this is name-keyed: a charge has an interval and overlaps the drive without
+  // restating it, so a structural "interval superseded by an overlapping journey" rule would eat it.
+  check("an overlapping charge is NOT superseded", !sup.has("c4"));
+  check("the trips themselves are never superseded", !sup.has("t1") && !sup.has("t2"));
+}
+{
+  // With no trip present nothing is suppressed — the pre-Overland shape of every day.
+  const sup = supersededIds([pairedInside, otherDay, overlapCharge]);
+  check("no trip on the day means no suppression at all", sup.size === 0, `${sup.size} suppressed`);
+}
 
 if (fails.length) throw new Error(`${fails.length} check(s) failed: ${fails.join("; ")}`);
 console.log("\nall checks passed\n");
