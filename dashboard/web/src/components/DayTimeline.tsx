@@ -126,7 +126,7 @@ export default function DayTimeline({ events, layout, onSelect, revealOf }: Prop
             <div className="t">{fmtTime(e.date)}</div>
             <div className="disc" style={{ color: cat.c }}><cat.Icon size={13} strokeWidth={2.4} /></div>
             <button className="dt-body" onClick={() => onSelect(e)} tabIndex={r < HIT_EPS ? -1 : undefined}>
-              <EventBody event={e} compact
+              <EventBody event={e}
                 orphan={!banded && !anyHost}
                 hostLabel={anyHost ? labelOf(anyHost) : undefined} />
             </button>

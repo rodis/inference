@@ -492,5 +492,15 @@ const overlapCharge = journeyEv("c4", "phone_is_charging", ["07:00", "12:00"]); 
   check("no trip on the day means no suppression at all", sup.size === 0, `${sup.size} suppressed`);
 }
 
+console.log("\n— card chrome —");
+// The kind chip ("inferred" / "signal") is gone from both lanes. It labelled the machinery rather
+// than the day: every derived event said "inferred", which is true of almost everything on the board
+// and so carries no information at the point of reading it. Depth/level chips still express it in
+// the modal, where taxonomy belongs.
+check("no lane labels events as inferred/signal", !dt.includes("ev-kind") && !dt.includes(">inferred<"),
+  dt.includes("ev-kind") ? "ev-kind still rendered" : ">inferred< still rendered");
+// A truncated title must still be readable without opening the modal.
+check("titles carry a hover tooltip", dt.includes('title="Konditorei von Rotz Baar"'));
+
 if (fails.length) throw new Error(`${fails.length} check(s) failed: ${fails.join("; ")}`);
 console.log("\nall checks passed\n");

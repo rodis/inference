@@ -129,8 +129,9 @@ const titleize = (s: string) => { const t = s.replace(/_/g, " "); return t.charA
  *
  *  - **It breaks the layout.** Titles are 15px semibold inside `.ev-head`, a `flex-wrap` row that
  *    also carries the chips, sitting in a fixed-width lane. A route runs to 38 characters against a
- *    stay's 30, so it wrapped and shoved the capsules around. (The wrap guard in `.ev-title` is now
- *    a backstop, but the real fix is not putting a two-ended string there.)
+ *    stay's 30, so it wrapped and shoved the capsules around. (`.ev-title` now truncates with an
+ *    ellipsis instead, which is the general guard — but the real fix is not putting a two-ended
+ *    string there.)
  *  - **It is incomplete far too often.** 9 of the first 21 journeys had an unlabelled end — 7 with
  *    one, 2 with neither — so "To Home" and "From Home" were the common case, not the edge. A title
  *    that is usually half-missing is not a title.

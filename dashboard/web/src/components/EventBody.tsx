@@ -15,15 +15,13 @@ interface Props {
   hostLabel?: string;
   /** A moment with no containing span — worth flagging, it may be an activity we can't infer yet. */
   orphan?: boolean;
-  /** Tighter type, for the moments lane where rows are half-weight by design. */
-  compact?: boolean;
 }
 
 /** The text half of an event card: name + chips on line 1, the substantive detail on line 2.
  *  Shared by both lanes of the day timeline, so an activity and a moment can't drift apart in
  *  how they name themselves — the difference between them is weight, not grammar. The L /
  *  override / D chips are supported but unused on the day (see `level`); the modal shows them. */
-export default function EventBody({ event: e, level, def = null, depth, hostLabel, orphan, compact }: Props) {
+export default function EventBody({ event: e, level, def = null, depth, hostLabel, orphan }: Props) {
   const iv = isSpan(e) ? intervalOf(e) : null;
   const isDer = e.event_class === "derived";
   const amount = Number(e.message.amount);
@@ -44,9 +42,9 @@ export default function EventBody({ event: e, level, def = null, depth, hostLabe
   return (
     <>
       <div className="ev-head">
-        <span className="ev-title">{labelOf(e)}</span>
+        {/* `title=` so a truncated name is still readable on hover; the modal has it in full. */}
+        <span className="ev-title" title={labelOf(e)}>{labelOf(e)}</span>
         {Number.isFinite(amount) && amount > 0 && <span className="ev-amount">CHF {amount.toFixed(2)}</span>}
-        {!compact && <span className="ev-kind">{isDer ? "inferred" : "signal"}</span>}
         {orphan && <span className="orphan" title="not inside any activity we infer">no host</span>}
         {level != null && <LevelChip level={level} />}
         {level != null && <OverrideFlag level={level} def={def} />}

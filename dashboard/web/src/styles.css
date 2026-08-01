@@ -208,13 +208,16 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 .ev-meta { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-top: 3px; }
 .ev-meta .dur { color: var(--accent); font-weight: 600; }
 /* line 1: name + its classification (kind word, L/D chips) all on one row */
-.ev-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-/* `overflow-wrap: anywhere` + `min-width: 0` are a BACKSTOP, not the design: a title long enough to
-   need them is the real bug (see view.ts::MODE_NOUN — a trip's route in the title ran to 38 chars
-   and shoved the capsule lane around). This keeps the next long label — a German compound POI name,
-   say — from overflowing the lane instead of merely looking cramped. */
-.ev-title { font-family: var(--rounded); font-weight: 650; font-size: 15px; letter-spacing: -0.01em; min-width: 0; overflow-wrap: anywhere; }
-.ev-kind { font-family: var(--mono); font-size: 10px; color: var(--muted-2); }
+.ev-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+/* One line, ellipsised — never wrapped. A title is an identifier, so the useful part is its start;
+   a long POI name (a German compound, say) should run out of room rather than reflow the row it
+   shares with the chips and push every capsule down. Nothing is lost: the full name is the modal's
+   heading, and `title=` puts it in a hover tooltip.
+   `min-width: 0` is what makes the ellipsis actually engage — as a flex item inside `.ev-head`, and
+   with `.dt-body` a grid item, both default to `min-width: auto` and would refuse to shrink below
+   their content, wrapping the row instead of clipping the text. */
+.ev-title { font-family: var(--rounded); font-weight: 650; font-size: 15px; letter-spacing: -0.01em;
+            min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* semantic-zoom: gesture surface + a fixed, always-reachable +/- control */
 .dtwrap { touch-action: pan-y; }
@@ -235,7 +238,7 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
   --capw: 46px;                   /* one capsule sub-column — must match CAP_W in DayTimeline */
   --capd: 38px;                   /* the capsule itself, inside that column */
   --capcols: 1;                   /* set per day by the layout: concurrent activities */
-  --actlabel: 220px;              /* room for an activity's name + chips */
+  --actlabel: 280px;              /* room for an activity's name (see .ev-title: it truncates) */
   --laneA: calc(var(--gutter) + var(--capcols) * var(--capw) + var(--actlabel));
   --dotx: calc(var(--laneA) + 56px);   /* centre of the moments rail */
   --band-a: 0.075;
@@ -312,7 +315,7 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 .dt-mom .ev-title { font-size: 13.5px; font-weight: 600; }
 .dt-mom .ev-meta { font-size: 11px; margin-top: 1px; }
 
-.dt-body { text-align: left; background: none; border: 0; color: inherit; cursor: pointer; padding: 6px 6px 12px 8px; border-radius: 12px; transition: background 0.12s; }
+.dt-body { min-width: 0; text-align: left; background: none; border: 0; color: inherit; cursor: pointer; padding: 6px 6px 12px 8px; border-radius: 12px; transition: background 0.12s; }
 .dt-body:hover { background: var(--card-2); }
 .dt-body:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
 
