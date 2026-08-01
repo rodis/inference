@@ -19,15 +19,18 @@ enabled: true
 
 engine: trip_window
 engine_config:
-  # Only consulted when `motion` makes no claim (23% of fixes carry no motion array), so this
-  # does not model walking — it clears the 4-7km/h `vel` noise real fixes report while the
-  # phone sits still at home.
-  min_speed_kmh: 10
+  # The one parameter that decides both "you left" and "you arrived": a fix within this of the
+  # running centroid is the same cluster. Mirrors stay.yml's radius_m so the two engines agree
+  # on what standing still looks like. Movement is judged by DISPLACEMENT, never by the phone's
+  # motion label — issue #44: `motion` stays "driving" with vel 0 for minutes after parking, and
+  # trusting it ran every measurable journey long, by up to 21 minutes at the arrival end.
+  settle_radius_m: 60
 
-  # 3 min of not moving = arrived, rather than stopped at a light. Below stay.yml's
-  # min_dwell_seconds (300), so a trip closes before the stay it leads into opens. On the
-  # 30-07 vet trip the two legs' internal stops were 11-71s, well inside this.
-  settle_seconds: 180
+  # A cluster holding this long means arrived, not stopped at a light. Set to stay.yml's
+  # min_dwell_seconds so the complementarity is EXACT: below this neither a stay nor a trip-end
+  # exists, above it both do, at the same instant. The arrival is still DATED at the cluster's
+  # first fix, so waiting to be sure costs latency, not accuracy.
+  settle_seconds: 300
 
   # Bounding-box EXTENT, not net displacement: a drive out and back is still a drive
   # (the reasoning validated_session_window records). Measured on the 14 days to 2026-08-01:
@@ -54,6 +57,17 @@ engine_config:
   # boundary. Measured 25 Jul-1 Aug: all 14 own-car journeys carried at least one of these
   # inside the span (12 both), all 6 borrowed-car ones carried none.
   corroborating_events: [got_into_the_car, got_out_the_car]
+
+  # How far outside the span a corroborating event may sit and still count. NOT zero, because a
+  # correctly-measured journey systematically excludes both boundaries: you get in before the
+  # phone leaves the departure cluster and get out after it enters the arrival one (measured
+  # median: 58s before the start, 18s after the end). Strict containment found evidence on only
+  # 6 of 21 journeys where 15 were in the user's own car; 60s recovers 14 of them. Wider pads
+  # buy nothing real — 120s and 180s add 1 and 3 more, all of them borrowed-car legs gaining a
+  # phantom exit. 60s is also principled rather than fitted: it is about one sampling interval,
+  # which is the actual uncertainty in where the span's edge sits.
+  # It cannot widen `interval`, which is derived from the located fixes alone.
+  corroboration_pad_seconds: 60
 
 source_topic: raw_sensors
 sink_topic: high_level_events

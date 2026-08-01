@@ -1390,8 +1390,8 @@ Overland in full (123 fixes out, 104 back, max 119 km/h, bounding-box extent 13.
 
 | Config | Default | Meaning |
 |---|---|---|
-| `min_speed_kmh` | `10` | speed at which the *numeric* rungs call a fix moving (see the ladder below) |
-| `settle_seconds` | `180` | how long stopped counts as **arrived** rather than at a light; below `stay`'s `min_dwell_seconds` |
+| `settle_radius_m` | `60` | a fix within this of the running centroid is the same cluster; decides both "you left" and "you arrived". Mirrors `stay_window`'s `radius_m` |
+| `settle_seconds` | `300` | how long a cluster must hold to count as **arrived** rather than stopped at a light. Set to `stay`'s `min_dwell_seconds` — see below |
 | `min_distance_m` | `500` | bounding-box **extent** below which the entity went nowhere |
 | `min_duration_seconds` | `180` | shorter than this is not a journey |
 | `min_fixes` | `4` | moving fixes needed; the fixes are the *only* evidence here |
@@ -1401,30 +1401,46 @@ Overland in full (123 fixes out, 104 back, max 119 km/h, bounding-box extent 13.
 | `max_speed_kmh` | `400` | plausibility guard |
 | `location_event` | `location_ping` | named, so this stays a strategy rather than a location policy |
 | `corroborating_events` | `()` | events that ride along as **evidence** without defining the span (see below) |
+| `corroboration_pad_seconds` | `60` | how far outside the span a corroborating event may sit and still count |
 
-State: one `run` (`{sources, la0, la1, lo0, lo1, first_ts, n_moving, last, still}`), one `settled`
-fix (the departure anchor) and a `marks` list (latched corroboration). `run`/`settled` are `None`
-between trips; `marks` is bounded by `max_duration_seconds`.
+State: one `run`, one `anchor` (the cluster you are sitting in) and a `marks` list (latched
+corroboration). `run`/`anchor` are `None` between trips; `marks` is bounded by
+`max_duration_seconds`.
 
-**Is this fix moving? A three-rung ladder, and the order is load-bearing in both directions.**
+**A trip is the interval between two stays, and both ends are found by the same clustering
+primitive `stay_window` uses** — a running-mean centroid plus `settle_radius_m`. You are *settled*
+while consecutive fixes stay within the radius of that centroid; a fix that **escapes** it means you
+left; a cluster that **holds** for `settle_seconds` means you arrived. One parameter means both
+"still here" and "no longer moving", so the two geometry engines are exact complements rather than
+two independent guesses that happen to interleave — `settle_seconds` is `stay`'s
+`min_dwell_seconds`, so below it neither a stay nor a trip-end exists, and above it both do at the
+same instant.
 
-1. `motion` — iOS's own classification, present on 77% of real fixes. `driving`/`walking`/`running`/
-   `cycling` → moving; `stationary` → not; absent or empty is **no claim**, which falls through.
-2. `vel` — present on 87%. Compared against `min_speed_kmh`.
-3. speed implied against the last accepted fix — pure geometry, the last resort.
+> **Why displacement and not the motion label** — issue [#44](https://github.com/rodis/inference/issues/44),
+> and the reason this engine was rewritten the day after it shipped. The first version asked "is this
+> fix moving?" from a ladder of `motion` → `vel` → implied speed, `motion` first so a red light with
+> `vel` 0 could not end a trip early. Scored against `car_trip`, it ran **long on all 14 comparable
+> journeys**, overshooting the arrival by 31 s to **1259 s** — and `car_trip`'s bounds are the
+> get-in/get-out signals, which already *bracket* the driving, so a wider span is not measuring the
+> journey at all. Three failures, one cause: `motion` stays `["driving"]` with `vel` 0 for minutes
+> after you park; `motion: ["walking"]` plus noisy `vel` (14, 18 km/h standing in a car park)
+> re-opened the settling buffer and absorbed the walk to the door; and a spurious `["cycling"]` while
+> standing at home opened a run four minutes early. Every one is a *label* contradicting the physical
+> fact that the entity was not going anywhere — the general form of which [ADR 0009](adr/0009-weights-are-at-their-ceiling.md)
+> had already recorded. `motion` still decides the journey's **mode**, which is what it is good for.
 
-Reading `vel` first would end a trip at a red light where a car reports `vel` 0 and `motion` still
-says `driving`, fragmenting one journey into two. Reading `motion` as authoritative-when-absent would
-lose the ~10 fixes per leg carrying neither field. And `min_speed_kmh` never has to model walking,
-because rung 1 already caught it — it only has to clear the 4-7 km/h `vel` noise real fixes report
-while the phone sits still at home.
+Slow steady movement cannot falsely mature a cluster: the running-mean centroid lags behind and a
+fix eventually escapes it. That is the same property that stops `stay_window` fusing a 13-minute
+drive into a stay (ADR 0007), used from the other side.
 
-**Both bounds are settled fixes, not moving ones.** A trip is bounded by the last settled fix before
-departure (kept as `settled`, the anchor) and the first settled fix after arrival. Clipping to the
-first/last *moving* fix instead would have put the vet trip's origin ~600 m down the road, outside
-Home's POI radius — so the journey would have lost its origin label. A stale anchor (older than
-`max_gap_seconds`) is not a departure point, and a cold start with no anchor at all simply begins at
-the first moving fix: degraded, not wrong.
+**Both bounds are settled fixes, not travelling ones.** A trip is bounded by the last fix of the
+cluster it departed and the **first** fix of the cluster it arrived in. Clipping to the first/last
+*displacing* fix would have put the vet trip's origin ~600 m down the road, outside Home's POI
+radius — so the journey would have lost its origin label. Arrival is therefore only *knowable*
+`settle_seconds` after it happens, but it is *dated* correctly, because the emitted end is the
+cluster's first fix and not the fix that confirmed it. The matured cluster becomes the next
+`anchor`, which is what makes a day a chain: you arrive somewhere, and that is where the following
+journey departs from. An anchor older than `max_gap_seconds` is stale rather than a departure point.
 
 ```mermaid
 flowchart TB
@@ -1432,17 +1448,19 @@ flowchart TB
     g1 -->|no| drop1["ignore"]
     g1 -->|yes| g2{"in order AND plausible jump?"}
     g2 -->|no| drop2["skip — late or confidently-wrong fix"]
-    g2 -->|yes| g3{"run open AND<br/>gap > max_gap_seconds?"}
-    g3 -->|yes| close1["CLOSE at the last fix seen —<br/>no evidence across a blackout"]
-    g3 -->|no| g4{"moving? (motion → vel → geometry)"}
-    g4 -->|"no, no run"| anchor["remember as the departure anchor"]
-    g4 -->|"yes, no run"| open["OPEN a run at the anchor"]
-    g4 -->|"yes, run open"| ext["splice any buffered stop back in,<br/>append, widen the box"]
-    g4 -->|"no, run open"| buf{"stopped ≥ settle_seconds?"}
-    buf -->|no| hold["buffer it — a light, not an arrival"]
-    buf -->|yes| close2["CLOSE at the FIRST buffered fix"]
+    g2 -->|yes| g3{"gap > max_gap_seconds?"}
+    g3 -->|yes| close1["CLOSE at the last fix seen —<br/>no evidence across a blackout;<br/>this fix starts a fresh anchor"]
+    g3 -->|no| g4{"run open?"}
+    g4 -->|no| s1{"within settle_radius_m<br/>of the anchor centroid?"}
+    s1 -->|yes| ext1["absorb — still settled"]
+    s1 -->|no| open["LEFT: open a run<br/>from the anchor's LAST fix"]
+    g4 -->|yes| s2{"within settle_radius_m<br/>of the settling candidate?"}
+    s2 -->|no| ext2["still travelling: splice the<br/>candidate into the journey,<br/>start a new candidate here"]
+    s2 -->|yes| s3{"candidate held ≥ settle_seconds?"}
+    s3 -->|no| hold["absorb — a light, not an arrival"]
+    s3 -->|yes| close2["ARRIVED: close at the<br/>candidate's FIRST fix"]
     close1 --> judge
-    close2 --> judge{"n_moving ≥ min_fixes AND<br/>duration ≥ min_duration AND<br/>extent ≥ min_distance_m?"}
+    close2 --> judge{"fixes ≥ min_fixes AND<br/>duration ≥ min_duration AND<br/>extent ≥ min_distance_m?"}
     judge -->|no| drop3["emit nothing — the run is consumed"]
     judge -->|yes| fire["FIRE trip<br/>occurred_at = arrival"]
 
@@ -1458,11 +1476,14 @@ and 510 m of walking path covered a bounding box ~100 m across.
 are the only evidence, so sparse sampling has nothing to report and emitting would be a fabrication.
 
 Replayed over 25 Jul - 1 Aug (the era with real ping density — before 25 Jul the lane produced 2-12
-fixes a day and no `motion` at all): **20 trips, all `mode=driving`, shortest 15.6 min**, against 14
-`car_trip`s of which one was a 15-second phantom. Six of the 20 have no `car_trip` at all — the vet
-legs of 25, 26 and 30 July. One `car_trip` (25 Jul 09:30, the lane's setup day, 8 fixes in 30 minutes
-including the 700 m-wrong `acc: 5` fix) has no `trip`, correctly: below `min_fixes` there is nothing
-to conclude.
+fixes a day and no `motion` at all): **21 trips, all `mode=driving`, 8.4-28.9 min, median 16.0**.
+Six have no `car_trip` at all — the vet legs of 25, 26 and 30 July, in a borrowed car. Against the
+14 comparable `car_trip`s the span now sits **inside** the get-in/get-out envelope (median -58 s at
+the start, -18 s at the end), which is the correct relationship: you get in before the phone leaves
+the departure cluster and get out after it enters the arrival one. The one remaining large outlier
+(+703 s) is measured against the 15-second phantom `car_trip` of 30 July, not against real ground
+truth. Displacement detection also recovered the drive the label-based version missed — 25 Jul
+09:30, the setup day, 8 fixes and **no `motion` field at all** — taking own-car recall to 15 of 15.
 
 **Corroboration rides along; it never defines the span.** `corroborating_events` are consumed but
 can never open, extend or close a run — a journey is detected from motion alone, and the guardrails
@@ -1504,7 +1525,7 @@ detection-local and never emitted. It lives in git history.
 |---|---|---|---|---|
 | Enum member | `Capability.INTERVAL` | `Capability.PLACE` | `Capability.JOURNEY` | `Capability.VEHICLE` |
 | Model | `Interval(started_at, ended_at, +duration_seconds)` | `Place(lat, lon, spread_m, label?, distance_m?, everyday?)` | `Journey(origin, destination, straight_line_m, path_m, mode?)` | `Vehicle(evidence, confirmed)` |
-| Derived from | source `message.timestamp` values | source `message.lat`/`lon` + the place book | the earliest + latest located source, the legs between them, and `message.motion` | the sources carrying **no** coordinates |
+| Derived from | the **located** sources' timestamps, else all of them | source `message.lat`/`lon` + the place book | the earliest + latest located source, the legs between them, and `message.motion` | the sources carrying **no** coordinates |
 | Needs reference data | no | yes (degrades to `label=None`) | yes (degrades to `label=None` on both endpoints) | no |
 | Yields no fragment when | never (assumes non-empty sources) | no source carries coordinates | fewer than two located sources | every source carries coordinates |
 | Declared by | `car_trip`, `phone_is_charging`, `stay`, `trip` | `stay` | `trip` | `trip` |
@@ -1534,9 +1555,17 @@ so a lock burst while unloading groceries counts once rather than three times.
 **Presence is the claim; absence asserts nothing.** No fragment is emitted without corroboration,
 rather than `Vehicle(known=False)`, because the peripherals could simply have been off — the standing
 asymmetry between absence of evidence and evidence of absence. A consumer may read "no `vehicle`" as
-"probably not my car"; the data model does not say so. Measured over 25 July - 1 August: of 20
-journeys, the 14 in the user's own car all carried evidence (12 `confirmed`) and the 6 in a borrowed
-car carried none — perfect separation with no threshold.
+"probably not my car"; the data model does not say so.
+
+Measured over 25 July - 1 August, after the span fix of [#44](https://github.com/rodis/inference/issues/44):
+of 21 journeys, **13 of the 15 own-car ones carry evidence and 5 of the 6 borrowed-car ones carry
+none**; `confirmed` (two distinct boundaries) is clean at 7 of 7 own-car. The one false positive is
+the 30 July phantom exit, traceable to [#2](https://github.com/rodis/inference/issues/2). An earlier
+version of this note claimed *perfect* separation on strict containment — that was measured against
+spans which were systematically too wide, so the boundaries fell inside only because the geometry was
+wrong. Correct spans exclude both boundaries by tens of seconds, which is why
+`corroboration_pad_seconds` exists and why it is safe: `interval` derives from the located sources
+alone, so the pad buys evidence without touching the span.
 
 `derive_capability(capability, sources)` raises `RuntimeError` listing the registered capabilities if
 a declared one has no deriver. Since `Capability` is a pydantic-validated enum, a YAML *typo* is
@@ -1565,11 +1594,11 @@ definitions are:
 | | `open` | `{ts, event}` or `None` | on gate; cleared on fire or when stale |
 | | `last_fired` | `int` | on fire |
 | `stay_window` | `open` | `{clat, clon, n, first_ts, last_ts, last_lat, last_lon, events}` | every accepted fix |
-| `trip_window` | `run` | `{sources, la0, la1, lo0, lo1, first_ts, n_moving, last, still}` or `None` | every accepted fix while moving; cleared on close |
-| | `settled` | `{lat, lon, ts, event}` or `None` — the departure anchor | every accepted non-moving fix; cleared when a trip closes without an arrival fix |
+| `trip_window` | `run` | `{sources, la0, la1, lo0, lo1, first_ts, n, last, settling}` or `None` | opened when a fix escapes the anchor; cleared on close |
+| | `anchor` | a cluster `{clat, clon, n, first_ts, last, last_event, fixes, events}` or `None` | the cluster you are settled in; becomes the arrival cluster on close |
 | | `marks` | `[{ts, event}]` — latched corroboration, pruned to `max_duration_seconds` | every corroborating event; those inside the span consumed on close |
 
-Concretely, for the current definition set: `stay:open`, `trip:run`, `trip:settled`, `trip:marks`,
+Concretely, for the current definition set: `stay:open`, `trip:run`, `trip:anchor`, `trip:marks`,
 `got_into_the_car:window`,
 `got_into_the_car:last_fired`, `got_out_the_car:window`, `got_out_the_car:open`,
 `got_out_the_car:last_fired`, `car_trip:open`, `car_trip:track`, `phone_is_charging:open`,

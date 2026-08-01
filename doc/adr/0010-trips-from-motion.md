@@ -152,9 +152,10 @@ side: a second *independent source*, not more phone peripherals.
 - `trip` names itself after its journey — "Home → ENNETSeeKLINIK für Kleintiere" — by the same rule a
   `stay` names itself after its place, degrading to "To …"/"From …" when only one end matched a POI
   (5 of the first 20 journeys had an unlabelled end).
-- On sparse days a trip's span stretches: the 25 July legs read 50.4 and 57.4 minutes for an 11 km
-  drive, against 25.6 on the densely-sampled 30th. The endpoints are right and the extent is right;
-  the *duration* inherits the sampling. Worth watching, not worth a threshold yet.
+- ~~On sparse days a trip's span stretches~~ — **this was the bug, not a quirk.** See the second
+  addendum: the spans were systematically too wide because the engine trusted the motion label, and
+  "worth watching, not worth a threshold yet" was the wrong read of a defect that ran every
+  measurable journey long. Fixed by [#44](https://github.com/rodis/inference/issues/44).
 - `trip` sees a **walk**, and none appeared in the replay window. `min_distance_m` 500 over
   bounding-box extent is calibrated against drives; the first real walk will be the test of it.
 
@@ -221,3 +222,78 @@ pre-Overland, 18 of 18 `car_trip`s had no `trip`; post-Overland, 1 of 15) and la
 changed is that #2/#23/#26/#36 are no longer *correctness* bugs for the authoritative journey: the
 span no longer depends on the pairing. Retiring `car_trip` is a separate decision with its own
 evidence.
+
+
+## Addendum 2 — displacement, not the label (issue #44)
+
+**Reported from the UI**, the day this shipped: the 2026-08-01 morning journey rendered as
+**45 minutes** for a drive of about 16. Scored against `car_trip` over 25 Jul - 1 Aug, `trip` ran
+**long on all 14 comparable journeys**, overshooting the arrival by 31 s to **1259 s**. `car_trip`'s
+bounds are the get-in/get-out signals, which already *bracket* the driving — so a span wider than
+that was not measuring the journey at all.
+
+The cause is one sentence: **the engine trusted a label over a physical fact.** Decision 1 above put
+`motion` at the top of the ladder so a red light with `vel` 0 could not end a trip early. That
+reasoning is sound about red lights and wrong about everything else:
+
+- `motion` stays `["driving"]` with `vel` 0 for minutes after you park (08:30:14 and 08:33:40 on
+  2026-08-01, stationary at the destination), so the run would not close;
+- `motion: ["walking"]` plus noisy `vel` — 14 and 18 km/h while standing in a car park — re-opened
+  the settling buffer and absorbed the walk from the car to the door, 21 minutes of it;
+- a spurious `["cycling"]` while the phone sat at home opened a run four minutes before the drive.
+
+Every one is a label contradicting the fact that the entity was not going anywhere. ADR 0009 had
+already recorded the general form — prefer a physical fact over labelled or weighted evidence — and
+this engine was written the day after it. The lesson that generalises is not about `motion`
+specifically: it is that a *detector* is exactly where a label is most tempting and least reliable,
+because a label is available per-fix while a fact needs two.
+
+### The fix makes the complement claim exact
+
+Both the open and close tests are now the running-mean centroid plus `settle_radius_m` that
+`stay_window` already uses. You are settled while fixes stay within the radius; a fix that escapes it
+means you left; a cluster that holds for `settle_seconds` means you arrived. `settle_seconds` is set
+to `stay`'s `min_dwell_seconds`, so **below it neither a stay nor a trip-end exists, and above it
+both do, at the same instant** — the "trip is the interval between two stays" claim of this ADR moves
+from a description to a property. One parameter now means both "still here" and "no longer moving",
+and slow steady movement still can't falsely close a trip, because the running-mean centroid lags and
+a fix escapes it (ADR 0007's measurement, used from the other side).
+
+| | before | after |
+|---|---|---|
+| the reported journey | 45.3 min | **15.5 min** (`car_trip`: 20) |
+| durations | 15.6 - 57.4 min | 8.4 - 28.9 min, median 16.0 |
+| end error vs get-out | med +200 s, max **+1259 s** | med **-18 s**, max +703 s |
+| start error vs get-in | med +180 s, max +1160 s | med **-58 s**, max +780 s |
+| own-car drives detected | 14 of 15 | **15 of 15** |
+
+Negative errors mean the span now sits *inside* the get-in/get-out envelope, which is the correct
+relationship. The remaining +703 s outlier is measured against the 15-second phantom `car_trip` of
+30 July (#2/#26), not against ground truth. The fix also recovered the drive the label-based version
+missed — 25 Jul 09:30, the Overland setup day, 8 fixes and **no `motion` field at all**, so a
+label-driven detector structurally could not see it.
+
+### A parameter tuned against a broken measurement encodes the breakage
+
+Correct spans **systematically exclude** both car boundaries: you get in before the phone leaves the
+departure cluster and get out after it enters the arrival one, a median 58 s before the start and
+18 s after the end. So the zero-tolerance containment rule of addendum 1 — which that addendum
+argued for on the evidence, and which measured *better* than a pad at the time — collapsed to
+evidence on 6 of 21 journeys where 15 were own-car. It had been calibrated against the wide spans,
+where the boundaries fell inside only because the geometry was wrong.
+
+`corroboration_pad_seconds: 60` recovers 14 of them; 120 s and 180 s add 1 and 3 more, all
+borrowed-car legs gaining a phantom exit. 60 s is about one sampling interval, which is the real
+uncertainty in where a span's edge sits, so it is a bound rather than a fitted constant.
+
+The pad is only safe because `interval` now derives from the **located** sources alone: a mark
+outside the span can no longer rewrite `started_at`/`ended_at` or break
+`occurred_at == interval.ended_at`. That is stated generically in `capabilities._interval` because it
+changes nothing else — `car_trip` and `phone_is_charging` have no located sources and fall through to
+the full set, `stay`'s are all located — and because the underlying claim is general: **the span of a
+journey is the span of its movement, not of whatever corroborated it.** The alternative, letting the
+boundaries set the bounds, would have quietly given `trip` two meanings, get-in→get-out for own-car
+journeys and displacement-derived for borrowed ones, decided by which peripherals happened to fire.
+
+Honest limits after the fix: own-car recall is 13 of 15 by *presence*, with 1 of 6 borrowed legs
+falsely gaining `evidence` (the 30 July phantom exit, #2). `confirmed` stays clean at 7 of 7.
