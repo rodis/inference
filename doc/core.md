@@ -103,7 +103,6 @@ Steps 2–4 are transport-agnostic. Only step 1's Neon read and step 5 know abou
 | [`runtime/definition.py`](../src/inference/runtime/definition.py) | 59 | `EventDefinition` — the YAML schema + loader | pydantic, yaml, `event` |
 | [`runtime/config.py`](../src/inference/runtime/config.py) | 45 | Env-backed settings, read lazily | `os` |
 | [`runtime/core.py`](../src/inference/runtime/core.py) | 276 | `RoutingPlan`, `Router`, `Shaper`, `StateStore` port | all of the above |
-| [`runtime/regions.py`](../src/inference/runtime/regions.py) | 85 | Neon `regions` rows → geofence definitions | psycopg (**lazy**) |
 | [`runtime/places.py`](../src/inference/runtime/places.py) | 50 | Neon POI rows → the place book | psycopg (**lazy**) |
 | [`runtime/quix.py`](../src/inference/runtime/quix.py) | 102 | **The only file that imports `quixstreams`** — adapter + composition root | everything |
 
@@ -490,8 +489,6 @@ flowchart LR
     trip["car_trip<br/><i>validated_session_window</i><br/>interval"]
     chg["phone_is_charging<br/><i>session_window</i><br/>interval"]
     stay["stay<br/><i>stay_window</i><br/>interval + place"]
-    ent["entered_&lt;slug&gt;<br/><i>geofence</i><br/>(from Neon rows)"]
-    lft["left_&lt;slug&gt;<br/><i>geofence</i>"]
 
     pwr --> gin
     cp --> gin
@@ -510,8 +507,6 @@ flowchart LR
     pwr --> chg
     upwr --> chg
     ping --> stay
-    ping --> ent
-    ping --> lft
 
     style gin fill:#1e293b,stroke:#60a5fa,color:#dbeafe
     style gout fill:#1e293b,stroke:#60a5fa,color:#dbeafe
@@ -520,12 +515,12 @@ flowchart LR
     style stay fill:#0f2a1d,stroke:#34d399,color:#d1fae5
 ```
 
-`entered_<slug>` / `left_<slug>` currently feed **nothing**. The `arrived_home_by_car` /
-`left_home_by_car` pair that consumed them was deleted 2026-08-01 (issue #6): both fired 17 times
-each and then stopped dead on 2026-07-25 when the OwnTracks waypoints were removed, and the stay/place
-pivot (ADR 0007) had already made zone-crossing the *less* useful way to detect being somewhere. The
-geofence engine itself stays — it is synthesized from `regions` rows, so seeding a zone still produces
-transitions; there is simply no derivation layered on them today.
+**Zone crossing is gone entirely.** The `arrived_home_by_car` / `left_home_by_car` pair was
+deleted 2026-08-01 (issue #6) — both fired 17 times, then stopped dead on 2026-07-25 when the
+OwnTracks waypoints were removed. The `geofence` engine and the zone half of `regions` followed the
+same day: no `kind='zone'` row was ever created, so the engine never fired in production even once,
+and ADR 0007's clustering had already made zone-crossing the *less* useful way to detect being
+somewhere. What remains of the registry is the POI half, which labels stay centroids.
 
 A single `car_lock_state_change` therefore does a lot of work in one `route` call: it may fire
 `got_into_the_car`, which is immediately re-queued, which opens `got_out_the_car`'s gate *and*
@@ -594,12 +589,12 @@ read-only. On restart or reschedule it rebuilds from the Kafka changelog. This i
 the no-in-cluster-persistence rule (K8s is elastic disposable compute; everything durable is in
 Aiven or Neon).
 
-**Changelog cost is a real constraint.** Every `state.set` is a Kafka record. `geofence` writes
-`inside` only on *change* for exactly this reason — a location stream samples every ~11 s, and an
-unconditional write per ping per region definition is a lot of records carrying no information. (See
-the honest accounting in the [geofence comment](../src/inference/engines/geofence.py#L87): `last_fix`
-still writes per accepted fix, because the plausibility reference must be fresh to catch a 700 m/1 s
-snap.)
+**Changelog cost is a real constraint.** Every `state.set` is a Kafka record, and a location
+stream samples every ~11 s — so a `decide` that writes unconditionally on every fix produces a lot
+of records carrying no information. `stay_window` keeps one `open` cluster and writes per accepted
+fix because the centroid genuinely changes; `validated_session_window` folds its bounding box into
+ten floats rather than retaining fix bodies for the same reason. Count the writes before adding
+state to anything fed by `location_ping`.
 
 ### Why one shared router instead of one pipeline per definition
 
@@ -777,17 +772,9 @@ is *for*:
 flowchart TB
     tbl[("Neon: regions<br/>user_id · name · lat · lon<br/>radius_m · kind · enabled · everyday")]
 
-    z["kind = 'zone'<br/>a region you CROSS"]
     p["kind = 'poi'<br/>a place you STOP at"]
 
-    tbl --> z
     tbl --> p
-
-    z --> reg["runtime/regions.py<br/>region_definitions(rows)"]
-    reg --> d1["entered_&lt;slug&gt; · geofence · direction=enter"]
-    reg --> d2["left_&lt;slug&gt; · geofence · direction=leave"]
-    d1 --> plan["RoutingPlan.from_definitions<br/>alongside the YAML definitions"]
-    d2 --> plan
 
     p --> plc["runtime/places.py<br/>load_places(dsn)"]
     plc --> book["capabilities.set_place_book<br/>→ label for stay centroids"]
@@ -795,14 +782,15 @@ flowchart TB
     style tbl fill:#2a1f0f,stroke:#fbbf24,color:#fef3c7
 ```
 
-**One table** because both are "a named circle on the map" and both should be editable in one place
-(the dashboard, eventually). **Two kinds** because the consumers must not overlap: a POI expanded
-into a geofence would emit `entered_<slug>` events colliding with the names the retired OwnTracks lane
-already produces, and would fire spurious edges for a radius far below what the sampling can resolve
-(ADR 0007). Each query filters on `kind` explicitly.
+**The `kind` column once had two consumers.** `kind='zone'` rows were expanded into
+`entered_`/`left_` geofence definitions; `kind='poi'` rows label stay centroids. The zone half was
+removed 2026-08-01 — **no zone row was ever created and the `geofence` engine never fired in
+production**, while ADR 0007's clustering had already replaced fences for dwell (a fence cannot see
+a visit that produces no fixes). Its last downstream consumers, `arrived_home_by_car` /
+`left_home_by_car`, went the same day.
 
-The slug rule (`lowercase`, non-alnum runs → `_`, trim edges) is kept stable from the retired OwnTracks lane,
-so a region named "Home" yields `entered_home` / `left_home` either way.
+`load_places` still filters `kind = 'poi'` explicitly rather than reading the table wholesale, so a
+future non-POI use of the registry cannot silently inherit the place book.
 
 **Both reads are best-effort.** `build_runtime` wraps each in `try/except Exception` + `logger.
 exception`. A Neon blip degrades to "no region events" or "no place labels" until the next restart —
@@ -992,7 +980,7 @@ imported lazily; filters `enabled = true AND kind = 'zone'`.
 | `is_implausible_jump(prev…, new…, max_speed_kmh)` | `True` if the transition needs impossible speed |
 | `DEFAULT_MAX_SPEED_KMH = 400.0` | well above any ground travel, low enough to catch a wifi-positioning snap |
 
-Extracted from `geofence.py` when `stay_window` appeared: distance and plausibility are properties
+Extracted when a second location engine appeared: distance and plausibility are properties
 of *location data*, not of either strategy, and both engines must agree on them.
 
 The guard exists because of a specific real failure (2026-07-25 09:32): two consecutive fixes 1 s
@@ -1025,7 +1013,7 @@ fix is skipped and the track continues from the last trustworthy position.
 
 ## 11. Engine reference
 
-Seven engines are registered; the six distinct strategies are grouped below
+Six engines are registered; the five distinct strategies are grouped below
 (`validated_session_window` subclasses the pairing one and is documented with it). All share the
 shape `(event, scoped state) -> Decision | None`, and all are selected purely by a definition's
 `engine:` string.
@@ -1041,7 +1029,6 @@ flowchart TB
         sw["session_window<br/>start + end → one span"]
     end
     subgraph geo["Geometry — read the location stream"]
-        gf["geofence<br/>containment EDGE"]
         stw["stay_window<br/>CLUSTER at departure"]
     end
 ```
@@ -1159,7 +1146,7 @@ the two guards meet exactly at duration ≤ 0.
 Live: `phone_is_charging` (`device_connected_to_power` → `device_disconnected_from_power`, 24 h max).
 `car_trip` uses the validated subclass below.
 
-> **Pairing is by name only.** This is why the geofence lane emits zone-specific names
+> **Pairing is by name only.** This is why a region lane would have to emit zone-specific names
 > (`entered_gym`, not `entered` with a payload field) — a session engine has no way to match on
 > anything else.
 
@@ -1285,34 +1272,10 @@ start.
 > simply re-fired** minutes later with a peripheral attached (issue #35). See §11's
 > `max_age_seconds` note.
 
-### `geofence`
-
-Server-side geofencing: turns the raw `location_ping` stream into region enter/leave events, moving
-the decision off the phone (where iOS region config is fragile — it was wiped whenever the producer's
-mode or endpoint changes) and onto the server, where regions are just data.
-
-| Config | Required | Default | Meaning |
-|---|---|---|---|
-| `lat`, `lon`, `radius_m` | ✓ | — | the circle |
-| `direction` | ✓ | — | `enter` \| `leave`; anything else raises at construction |
-| `owner` | — | `None` | geofences are per-user; a point only tests against its owner's regions |
-| `max_accuracy_m` | — | `radius_m` | a fix vaguer than the region tells you nothing about it |
-| `max_speed_kmh` | — | `400` | plausibility guard |
-
-Consumes `location_ping` only. State: `inside` (bool, **written only on change**), `last_fix`. Fires
-on the containment edge — one definition per (region, direction), so a steady stream of pings inside
-a region emits exactly one `entered_*`. Event-time: the ping. Lineage: the single triggering fix.
-
-Gate order matters: owner → coordinates present → accuracy → plausibility → containment. A rejected
-fix returns before touching `inside`.
-
-Known limitations, both deliberate: no dwell/hysteresis (boundary jitter can still flap), and a
-stream is coarser than CLRegion monitoring (entry time approximate, a brief in-and-out can be
-missed).
-
 ### `stay_window` (ADR 0007)
 
-Dwell detection by **clustering**, and the answer to `geofence`'s structural limit. An edge detector
+Dwell detection by **clustering**, and the answer to the structural limit of edge detection (the
+`geofence` engine this replaced was removed 2026-08-01). An edge detector
 needs a sample on each side of a boundary — but standing inside a shop produces no fixes at all (iOS
 stops sampling, the producer's min-distance filter suppresses the rest), so a 40 m circle can receive
 **zero** points and never fire. Clustering degrades a stay's *precision* with sparse data instead of
@@ -1415,14 +1378,12 @@ definitions are:
 | `session_gated_window` | `window` | `{name: {ts, event}}` (latest per name) | every contributor; **cleared on fire** |
 | | `open` | `{ts, event}` or `None` | on gate; cleared on fire or when stale |
 | | `last_fired` | `int` | on fire |
-| `geofence` | `inside` | `bool` | **only on change** |
-| | `last_fix` | `{lat, lon, ts}` | every accepted fix |
 | `stay_window` | `open` | `{clat, clon, n, first_ts, last_ts, last_lat, last_lon, events}` | every accepted fix |
 
 Concretely, for the current definition set: `stay:open`, `got_into_the_car:window`,
 `got_into_the_car:last_fired`, `got_out_the_car:window`, `got_out_the_car:open`,
 `got_out_the_car:last_fired`, `car_trip:open`, `car_trip:track`, `phone_is_charging:open`,
-`entered_home:inside`, `entered_home:last_fix`, …
+…
 
 Everything stored must be JSON-serializable — Quix `State` round-trips values through the changelog.
 This is why engines stash full event **dicts** rather than model instances.
@@ -1439,7 +1400,6 @@ What breaks, how loudly, and whether it takes the runtime down.
 | `enabled: false` | logged `info`, skipped | no |
 | No enabled definitions at all | `RuntimeError` | **yes, at startup** |
 | Unknown `engine:` string | `RuntimeError` listing registered engines | **yes, at startup** |
-| Invalid `direction` for a geofence | `ValueError` at engine construction | **yes, at startup** |
 | Zero or 2+ external source topics | `RuntimeError` with the ADR 0004 explanation | **yes, at startup** |
 | `KAFKA_BOOTSTRAP_SERVERS` unset | `KeyError` | **yes, at startup** |
 | Neon unreachable at startup | `logger.exception`, continue without regions and/or place labels | no |

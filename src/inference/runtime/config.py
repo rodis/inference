@@ -28,8 +28,8 @@ def kafka_bootstrap() -> str:
 
 
 def neon_dsn() -> str | None:
-    """Neon connection string for loading geofence regions (optional). Unset -> the
-    regions feature is off (the runtime derives no region events). Read lazily."""
+    """Neon connection string for loading the POI place book (optional). Unset -> stays
+    are still derived, they just carry no place label. Read lazily."""
     return os.environ.get("NEON_DATABASE_URL")
 
 

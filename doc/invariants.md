@@ -24,7 +24,7 @@ aspirational — five adapters already depend on it (production, the test suite,
 `trip_eval.py`, `rederive.py`), and it is what lets a weight-map change be evaluated against real
 history before it ships.
 
-*How to apply:* transport and database access live in `runtime/quix.py`, `runtime/regions.py`, and
+*How to apply:* transport and database access live in `runtime/quix.py` and
 `runtime/places.py` only. In the latter two, `import psycopg` goes **inside the function**, so the
 in-memory paths need no driver present. CI enforces the rule by installing the package with
 `pip install -e . --no-deps` — a stray transport import fails the build.
@@ -221,7 +221,7 @@ with external reference data degrades. Anything wrong with a single event is con
 
 *Why:* a fleet that silently isn't doing what you declared is worse than one that refuses to start.
 
-*How to apply:* unknown engine, bad geofence direction, no definitions, wrong source-topic count →
+*How to apply:* unknown engine, no definitions, wrong source-topic count →
 raise. Neon unreachable → log and continue. Malformed YAML → skip that definition. Bad event → return
 `None`/`[]`. See the full table in [`core.md` §14](core.md#14-failure-modes).
 
@@ -245,7 +245,8 @@ restart is cheap, which is what makes "region edits apply on next start" accepta
 
 *How to apply:* never assume state survives a reschedule, and never put anything in it that can't be
 rebuilt. **Every `state.set` is a Kafka record** — think about write frequency in a `decide` that runs
-on a location stream (see `geofence`'s write-only-on-change).
+on a location stream — `validated_session_window` folds its bounding box into ten floats rather
+than retaining fix bodies for exactly this reason.
 
 ## 21. The contract is generated, never hand-written
 

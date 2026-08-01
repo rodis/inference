@@ -3,7 +3,6 @@ each engine now carries the FULL source event bodies on the Decision (not {id,ts
 
 
 from inference.engines.decaying_window import DecayingWindowEngine
-from inference.engines.geofence import GeofenceEngine
 from inference.engines.session_gated_window import SessionGatedWindowEngine
 from inference.engines.session_window import SessionWindowEngine
 from inference.engines.stay_window import StayWindowEngine
@@ -227,78 +226,6 @@ def test_gated_consumes_session_so_sequential_trips_dont_reuse_it(state, event):
 
 
 
-
-
-# --- geofence -------------------------------------------------------------------
-
-# Region centre (a real fix the phone reported) + a point ~11km away that is clearly out.
-_IN = dict(lat=47.2069, lon=8.5748)
-_OUT = dict(lat=47.30, lon=8.70)
-
-
-def _geofence(direction, **over):
-    cfg = {"lat": 47.2069, "lon": 8.5748, "radius_m": 150, "direction": direction, "owner": "rods"}
-    cfg.update(over)
-    return GeofenceEngine(cfg)
-
-
-def _ping(event, t, **over):
-    kw = {"user_id": "rods", "acc": 10, **_IN, **over}
-    return event("location_ping", t, **kw)
-
-
-def test_geofence_enter_fires_once_on_boundary_cross(state, event):
-    eng = _geofence("enter")
-    assert eng.decide(_ping(event, T, **_OUT), state) is None          # outside -> no fire
-    # _OUT is ~14km away, so allow a plausible travel time: the engine rejects fixes implying
-    # impossible speed, and 14km in 60s (840km/h) is a bad fix, not a boundary crossing.
-    d = eng.decide(_ping(event, T + 3600), state)                      # crossed in -> fire
-    assert d is not None and d.occurred_at == T + 3600
-    assert eng.decide(_ping(event, T + 3660), state) is None           # still inside -> no re-fire
-
-
-def test_geofence_leave_fires_on_exit(state, event):
-    eng = _geofence("leave")
-    assert eng.decide(_ping(event, T), state) is None                  # inside first -> leave doesn't fire
-    assert eng.decide(_ping(event, T + 3600, **_OUT), state) is not None  # inside -> outside -> fire
-
-
-def test_geofence_ignores_other_users(state, event):
-    eng = _geofence("enter")
-    assert eng.decide(_ping(event, T, user_id="alice"), state) is None  # not the region owner
-
-
-def test_geofence_accuracy_gate_ignores_imprecise_points(state, event):
-    eng = _geofence("enter", radius_m=100)                             # max_accuracy defaults to radius
-    assert eng.decide(_ping(event, T, acc=500), state) is None         # too vague -> ignored, state untouched
-    assert eng.decide(_ping(event, T + 60, acc=10), state) is not None  # precise inside -> fires (state wasn't flipped)
-
-
-def test_geofence_rejects_a_confidently_wrong_fix(state, event):
-    """A fix can claim excellent accuracy and be a long way wrong (700m in one second,
-    observed 2026-07-25) — reported accuracy is not a safety net, so containment must also
-    reject physically impossible travel from the last accepted fix."""
-    eng = _geofence("leave")
-    assert eng.decide(_ping(event, T), state) is None                  # inside, accepted
-    # 1s later, 11km away, and it insists acc=5 -> implies ~40M km/h -> not a real move
-    assert eng.decide(_ping(event, T + 1, acc=5, **_OUT), state) is None
-    # a plausible move out later still fires: state was never corrupted by the bad fix
-    assert eng.decide(_ping(event, T + 3600, **_OUT), state) is not None
-
-
-def test_geofence_writes_state_only_on_change(state, event):
-    """A dense stream would otherwise write `inside` on every ping for every region, which is
-    pure changelog traffic (Quix State = RocksDB + changelog)."""
-    eng = _geofence("enter")
-    eng.decide(_ping(event, T, **_OUT), state)                         # outside: no change from default
-    writes = len(state._d)
-    for i in range(5):
-        eng.decide(_ping(event, T + 10 + i, **_OUT), state)            # still outside
-    inside_writes = [k for k in state._d if k.endswith("inside")]
-    assert inside_writes == []                                         # never flipped -> never written
-    assert eng.decide(_ping(event, T + 3600), state) is not None       # crossing in writes it once
-    assert [k for k in state._d if k.endswith("inside")] != []
-    assert writes <= len(state._d)
 
 
 # --- stay_window ----------------------------------------------------------------

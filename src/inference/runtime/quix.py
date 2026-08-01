@@ -32,7 +32,6 @@ from inference.capabilities import set_place_book
 from inference.runtime.core import RoutingPlan, Router, Shaper
 from inference.runtime.definition import load_definitions
 from inference.runtime.places import load_places
-from inference.runtime.regions import load_region_definitions
 
 logger = logging.getLogger("inference.quix")
 
@@ -62,18 +61,11 @@ def build_runtime() -> Application:
     if not definitions:
         raise RuntimeError(f"No enabled event definitions found under {config.EVENTS_DIR}")
 
-    # Geofence regions come from Neon (data, not code) and expand into entered_*/left_*
-    # definitions. Best-effort: a Neon blip must not take the whole runtime down — it just
-    # means no region events derive until the next restart.
-    try:
-        definitions += load_region_definitions(config.neon_dsn())
-    except Exception:
-        logger.exception("Failed to load geofence regions from Neon; continuing without them")
-
     # Known places are reference data for the `place` capability's label lookup — injected
     # into the capability seam here (the composition root), so the core never reads Neon
-    # itself. Best-effort for the same reason as regions: no labels is a degraded mode
-    # (stays still carry their centroid), a crash is not.
+    # itself. Best-effort: no labels is a degraded mode (stays still carry their centroid),
+    # a crash is not. This is now the runtime's ONLY Neon read; the geofence expansion that
+    # used to sit above it was removed 2026-08-01 (it never fired in production).
     try:
         set_place_book(load_places(config.neon_dsn()))
     except Exception:

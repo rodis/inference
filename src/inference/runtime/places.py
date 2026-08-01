@@ -1,18 +1,18 @@
 """Places-as-data: load known places from Neon for the `place` capability's label lookup.
 
-Sibling of `regions.py`, reading the SAME table for a different purpose — the `regions` table
-is the one place registry, and its `kind` column says what each row is *for*:
+The `regions` table is the one place registry. Its `kind` column once distinguished two
+consumers — `kind='zone'` rows were expanded into `entered_`/`left_` geofence definitions,
+`kind='poi'` rows label stay centroids. **The zone half was removed 2026-08-01**: no zone row
+was ever created, the `geofence` engine never fired in production, and its only downstream
+derivations (`arrived_home_by_car` / `left_home_by_car`) were deleted the same day. ADR 0007
+is why — clustering replaced fences for dwell, and a fence cannot see a visit that produces no
+fixes.
 
-    kind='zone'  a region you cross      -> expanded into entered_/left_ geofence definitions
-    kind='poi'   a place you stop at     -> a label for stay centroids (this module)
+So this module is now the table's only consumer, and `kind='poi'` is the only value in it. The
+filter is kept rather than dropped so a future non-POI use of the registry cannot silently
+inherit the place book.
 
-One table because both are "a named circle on the map" and both should be editable in one
-place (the dashboard, eventually). Two kinds because the consumers must not overlap: a POI
-expanded into a geofence would emit `entered_<slug>` events colliding with the names the
-the retired OwnTracks lane produced, and would fire spurious edges for a radius far smaller than
-the sampling can resolve (ADR 0007).
-
-Editing a place takes effect on the next runtime start, like regions.
+Editing a place takes effect on the next runtime start.
 """
 
 import logging

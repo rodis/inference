@@ -165,3 +165,28 @@ detects transit through a known place; the other detects presence at any place.
 - **A `visit_<place>` event per POI (naming inside the engine).** Rejected for now: it
   reintroduces per-place definitions, and forces a place list to exist before anything can be
   seen. Labelling belongs after detection.
+
+---
+
+## Amendment — 2026-08-01: `geofence` removed
+
+This ADR deliberately kept `geofence` alongside `stay_window`, on the grounds that a large region you
+*drive through* still produces samples on both sides of its boundary and so remains detectable by an
+edge. That case never materialised.
+
+The engine and the `kind='zone'` half of the registry were removed on 2026-08-01. The evidence:
+
+- **No `kind='zone'` row was ever created**, so `load_region_definitions` returned an empty list on
+  every startup and the engine **never fired in production, not once**.
+- Its only downstream derivations, `arrived_home_by_car` / `left_home_by_car`, were deleted the same
+  day (issue #6) after going dead on 2026-07-25 with the OwnTracks waypoints.
+- The 17 `left_*` events that survive in Neon are `left_home_by_car` (a `weighted_window`
+  derivation) plus the OwnTracks lane's own `entered_home` / `left_home` — none are geofence output.
+
+**The decision this ADR records is unchanged and was correct**: places are stays, not fences.
+Removing `geofence` is that conclusion carried to its end rather than a reversal of it — the
+"large region you drive through" exception was real in principle and simply never had an instance.
+
+Consequence worth noting: the `regions` table now has exactly one consumer (`runtime/places.py`,
+POI labels), which makes the whole reference-data path hot-swappable — nothing left in it shapes the
+topology, so nothing left in it requires a restart.

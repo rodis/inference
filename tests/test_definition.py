@@ -4,7 +4,6 @@ from pathlib import Path
 
 from inference.runtime.core import Router, RoutingPlan
 from inference.runtime.definition import load_definitions
-from inference.runtime.regions import region_definitions
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -43,37 +42,6 @@ def test_real_definitions_build_a_valid_plan():
     plan = RoutingPlan.from_definitions(defs)
     assert plan.source_topic == "raw_sensors"
     assert "high_level_events" in plan.sink_topics
-
-
-# --- regions -> geofence definitions --------------------------------------------
-
-def test_region_rows_expand_to_geofence_definitions():
-    rows = [{"user_id": "rods", "name": "Home", "lat": 47.2, "lon": 8.5, "radius_m": 150}]
-    defs = region_definitions(rows)
-    assert [d.name for d in defs] == ["entered_home", "left_home"]
-    assert all(d.engine == "geofence" and d.source_topic == "raw_sensors" for d in defs)
-    assert defs[0].engine_config["direction"] == "enter"
-    assert defs[0].engine_config["owner"] == "rods"
-
-
-def test_location_stream_cascades_through_geofence(event, state):
-    """Server-side path in-memory: a location stream crosses a Neon-defined region and the
-    geofence engine emits entered_/left_ transitions — proving regions compose into the plan
-    and fire via in-process recursion, no phone. Nothing consumes these transitions today —
-    the home-by-car pair that used to was removed 2026-08-01 — so the assertion is on the
-    transitions themselves, which is what the regions-as-data plumbing exists to produce."""
-    rows = [{"user_id": "rods", "name": "Home", "lat": 47.2069, "lon": 8.5748, "radius_m": 150}]
-    defs = load_definitions(REPO_ROOT / "events") + region_definitions(rows)
-    router = Router(RoutingPlan.from_definitions(defs))
-
-    def ping(t, lat, lon):
-        return event("location_ping", t, user_id="rods", lat=lat, lon=lon, acc=10)
-
-    router.route(ping(1000, 47.30, 8.70), state)                       # outside — establishes state
-    entered = router.route(ping(2000, 47.2069, 8.5748), state)         # cross in
-    assert "entered_home" in {i["message"]["name"] for i in entered}
-    out = router.route(ping(5000, 47.30, 8.70), state)                 # cross out
-    assert "left_home" in {i["message"]["name"] for i in out}          # left transition fires
 
 
 # --- got_into_the_car charger anchor (ADR 0005, 2026-07-17 CarPlay-flap revision) ---

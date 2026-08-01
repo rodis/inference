@@ -1,9 +1,10 @@
 """Geospatial primitives shared by the location engines.
 
-Extracted from `engines/geofence.py` when a second consumer appeared (`stay_window`):
-distance and the plausibility guard are properties of *location data*, not of either
-strategy, and both engines must agree on them. Pure functions over floats — no state, no
-transport, nothing engine-specific.
+Extracted when a second location engine appeared, on the grounds that distance and the
+plausibility guard are properties of *location data* rather than of any one strategy. The
+other consumer (`geofence`) was removed 2026-08-01; this stays a separate module because the
+reasoning still holds and `stay_window` should not own geometry primitives. Pure functions
+over floats — no state, no transport, nothing engine-specific.
 """
 
 import math
