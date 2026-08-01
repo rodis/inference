@@ -19,7 +19,6 @@ configMapGenerator:
       - ./configs/transforms/route_by_domain.yml
       - ./configs/transforms/route_by_app.yml
       - ./configs/transforms/shape_sensor.yml
-      - ./configs/transforms/owntracks_to_canonical.yml
       - ./configs/transforms/overland_to_canonical.yml
       - ./configs/transforms/enrich_sensor.yml
       - ./configs/transforms/shape_for_neon.yml

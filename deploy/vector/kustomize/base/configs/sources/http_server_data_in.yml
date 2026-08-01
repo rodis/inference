@@ -14,9 +14,7 @@ decoding:
   codec: json
 path: ""
 strict_path: false
-# Capture OwnTracks' identity headers as event fields. OwnTracks HTTP mode has no
-# body user_id; it sends X-Limit-U (username) / X-Limit-D (device). The owntracks
-# lane reads X-Limit-U -> message.user_id. Harmless for sensor traffic (absent there).
-headers:
-  - X-Limit-U
-  - X-Limit-D
+# No header capture. The X-Limit-U / X-Limit-D capture here existed solely for OwnTracks,
+# whose HTTP mode carried no body user_id — that lane was removed 2026-08-01. Every remaining
+# producer puts user_id in the body, which shape_sensor / overland_to_canonical require and
+# reject without. Re-adopting a header-identified producer means restoring this block.

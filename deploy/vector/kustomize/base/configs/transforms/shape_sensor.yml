@@ -4,7 +4,7 @@ inputs:
 # Validate + shape the STANDARD sensor payload (the {"payload":{...}} + event_name
 # contract). Path parsing already happened upstream (parse_path); this transform only
 # touches the body. Runs post-routing, so it can freely abort on a non-standard shape
-# without affecting other sources — OwnTracks took the sibling route.
+# without affecting other sources — the batched Overland body takes the sibling route.
 source: |
   # 1. Payload to message swap
   if exists(.payload) {

@@ -9,7 +9,7 @@ inputs:
 #                                 domain shares it (sensors -> raw_sensors).
 #   .source_app   (2nd segment) — SECOND level, the PRODUCER within a domain. That
 #                                 domain's route_by_app keys off it to pick the body
-#                                 adapter (owntracks vs the standard payload).
+#                                 adapter (overland vs the standard payload).
 # The Kafka topic is NOT taken from the URL — each domain has its own static-topic sink,
 # so producers can't steer traffic to arbitrary topics (no dynamic topics).
 # Payload validation/shaping is a per-source concern and lives downstream, after

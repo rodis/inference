@@ -2,15 +2,16 @@ type: remap
 inputs:
   - route_by_app.overland
 # Overland (github.com/aaronpk/Overland-iOS) -> the same canonical raw-event shape the other
-# adapters produce, so it joins enrich_sensor (id minting) and reaches raw_sensors. Third
-# sibling under route_by_app, alongside owntracks_to_canonical and shape_sensor.
+# adapters produce, so it joins enrich_sensor (id minting) and reaches raw_sensors. Sibling
+# under route_by_app alongside shape_sensor.
 #
-# WHY a second location app: OwnTracks is a REGION sensor — it reports on iOS CLRegion
-# crossings (~2 samples per crossing, ~100 pings/13d observed), which is far too sparse to
-# feed the server-side `geofence` engine or any dwell logic, and it mints place *semantics*
-# on the phone (the waypoint label becomes the event name). Overland is a MOVEMENT tracker:
-# a continuous batched point stream, so the phone stays a dumb lat/lon sensor and every
-# place decision moves server-side (regions-as-data in Neon). See doc/vector-pipeline.md.
+# WHY this replaced OwnTracks (that lane was removed 2026-08-01): OwnTracks is a REGION
+# sensor — it reported on iOS CLRegion crossings (~2 samples per crossing, ~100 pings/13d
+# observed), far too sparse to feed the server-side `geofence` engine or any dwell logic,
+# and it minted place *semantics* on the phone (the waypoint label became the event name).
+# Overland is a MOVEMENT tracker: a continuous batched point stream (~11s while moving), so
+# the phone stays a dumb lat/lon sensor and every place decision moves server-side. That is
+# what made ADR 0007's stay-clustering possible. See doc/vector-pipeline.md.
 #
 # BATCH FAN-OUT: Overland POSTs {"locations": [GeoJSON Feature, ...]} (default 200 points,
 # configurable 50-1000) plus optional "current"/"trip" objects we ignore. `remap` emits one
@@ -77,12 +78,12 @@ source: |
               "lon": lon,
           }
           if has_acc { msg.acc = acc }
-          # vel is km/h in the OwnTracks lane; iOS speed is m/s — convert so one field name
+          # vel was km/h in the retired OwnTracks lane; iOS speed is m/s — convert so one field name
           # keeps one meaning across producers. Negative = unavailable, so omit it.
           if speed >= 0 {
               msg.vel = round(speed * 3.6)
           }
-          # battery_level is a 0..1 fraction here, 0..100 percent in the OwnTracks lane.
+          # battery_level is a 0..1 fraction here; it was 0..100 percent in the OwnTracks lane.
           batt_raw = get(props, ["battery_level"]) ?? null
           batt = -1.0
           if batt_raw != null { batt = to_float(batt_raw) ?? -1.0 }

@@ -4,7 +4,6 @@ inputs:
 # SECOND-level routing, nested inside the sensors domain (consumes route_by_domain.sensors,
 # so it only ever sees sensors traffic). Keyed on the parsed .source_app (2nd URL segment)
 # to pick the body adapter — how to shape THIS producer's payload into canonical form:
-#   owntracks -> owntracks_to_canonical (bare _type body)
 #   overland  -> overland_to_canonical  ({"locations":[GeoJSON Feature,...]} batch, fanned out)
 #   standard  -> shape_sensor           ({"payload":...} + event_name contract)
 # `standard` = any sensors-domain app with no adapter of its own; it's safe to catch-all here
@@ -13,6 +12,5 @@ inputs:
 # A future domain gets its OWN second-level app router (e.g. calendar's apps), so each
 # domain's adapters only see their own traffic.
 route:
-  owntracks: .source_app == "owntracks"
   overland: .source_app == "overland"
-  standard: .source_app != "owntracks" && .source_app != "overland"
+  standard: .source_app != "overland"
