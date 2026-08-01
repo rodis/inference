@@ -48,15 +48,33 @@ PANE=$(herdr pane split --current --direction right --ratio 0.38 --cwd "$PWD" --
   | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['pane']['pane_id'])")
 ```
 
-### 2. Start a Claude agent in it
+### 2. Start a Claude agent in it — with a retry
 
 ```bash
-herdr agent start push-monitor --kind claude --pane "$PANE" --timeout 60000
+for i in 1 2 3 4 5; do
+  OUT=$(herdr agent start push-monitor --kind claude --pane "$PANE" --timeout 60000 2>&1)
+  case "$OUT" in *'"agent_started"'*) echo "$OUT"; break ;; esac
+  [ "$i" = 5 ] && { echo "FAILED: $OUT"; herdr pane close "$PANE"; exit 1; }
+  sleep 2
+done
 ```
 
-The pane must be at an interactive shell prompt — a freshly split pane is. Success returns
-`"interactive_ready": true`. If it fails, close the pane (`herdr pane close "$PANE"`) and fall back
-to reporting the SHAs inline; do not leave a dead pane behind.
+**The retry is required, not defensive.** The pane must be at an interactive shell prompt, and a
+freshly split pane is *not* one for the first second or two while zsh loads its profile. Running the
+split and the start back-to-back fails with:
+
+```
+{"error":{"code":"agent_pane_busy","message":"agent target pane w3:p4 is not an available shell"}}
+```
+
+`--timeout` does not cover this — it governs readiness *after* attaching, not waiting for the shell
+to exist. This bites only when the two commands run in one script; interactively they are far enough
+apart to mask it, which is exactly how it got missed the first time.
+
+Success returns `"interactive_ready": true`. On give-up, close the pane and fall back to reporting
+the SHAs inline — do not leave a dead pane behind.
+
+Note the error is returned as JSON on stdout with exit status 0, so check the payload, not `$?`.
 
 ### 3. Hand it the task
 
