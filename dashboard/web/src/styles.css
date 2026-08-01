@@ -218,6 +218,10 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
    their content, wrapping the row instead of clipping the text. */
 .ev-title { font-family: var(--rounded); font-weight: 650; font-size: 15px; letter-spacing: -0.01em;
             min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The own-car glyph beside a journey's title (view.ts::carCorroborated). The car_trip blue on
+   purpose — it is the same claim that event used to carry — and `flex: none` so the ellipsis
+   truncates the title, never the glyph. */
+.ev-car { color: #3d6cf7; flex: none; display: inline-flex; align-items: center; }
 
 /* semantic-zoom: gesture surface + a fixed, always-reachable +/- control */
 .dtwrap { touch-action: pan-y; }

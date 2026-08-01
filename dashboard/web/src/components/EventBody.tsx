@@ -1,5 +1,6 @@
+import { Car } from "lucide-react";
 import type { AwareEvent } from "../types";
-import { fmtTime, humanDur, intervalOf, isSpan, labelOf, routeOf } from "../view";
+import { carCorroborated, fmtTime, humanDur, intervalOf, isSpan, labelOf, routeOf } from "../view";
 import LevelChip, { OverrideFlag } from "./LevelChip";
 
 interface Props {
@@ -44,6 +45,13 @@ export default function EventBody({ event: e, level, def = null, depth, hostLabe
       <div className="ev-head">
         {/* `title=` so a truncated name is still readable on hover; the modal has it in full. */}
         <span className="ev-title" title={labelOf(e)}>{labelOf(e)}</span>
+        {/* Your own car was involved — the `vehicle` capability corroborated this journey
+            (see view.ts::carCorroborated for why evidence presence, not `confirmed`). */}
+        {carCorroborated(e) && (
+          <span className="ev-car" title="in your car — corroborated by its signals">
+            <Car size={13} aria-label="in your car" />
+          </span>
+        )}
         {Number.isFinite(amount) && amount > 0 && <span className="ev-amount">CHF {amount.toFixed(2)}</span>}
         {orphan && <span className="orphan" title="not inside any activity we infer">no host</span>}
         {level != null && <LevelChip level={level} />}

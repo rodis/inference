@@ -184,8 +184,7 @@ crash.
 **`InferredEvent` carries no `role`, no span/point/hidden, no colour, no label priority.**
 
 *Why:* how to surface an event is one consumer's view decision, not a fact about the event.
-`car_trip` and `phone_is_charging` both carry `interval`; only the dashboard decides one is drawn as
-a span.
+`car_trip` and `stay` both carry `interval`; only the dashboard decides how each is drawn.
 
 *How to apply:* if a field answers "how should this look?", it belongs in the dashboard. If it
 answers "what happened?", it belongs here. Reference data *about a place* (`everyday`) is a fact;

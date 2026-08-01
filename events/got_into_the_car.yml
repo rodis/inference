@@ -3,79 +3,59 @@
 # CarPlay-connect (an AND gate), so a missing lock-change killed the whole chain — observed
 # 2026-07-16, when entry fired CarPlay + power but no lock-change, so no trip formed.
 #
-# Charger-anchored weights (asymmetric, mirroring got_out's tuning — ADR 0005), with the two
-# DIRECTION-AMBIGUOUS signals demoted to 4 (ADR 0005 rev 2026-07-24). Not all signals are equally
-# trustworthy as an *entry* cue: device_connected_to_power (the wireless charger) is the anchor (6)
-# and CarPlay-connect is directional (5, it only means entry), but the lock-change and the BMW door
-# fire on entry *and* exit — and the charger flaps repeatedly during a drive, so an ambiguous
-# signal + a charger event is NOT evidence of entry. At 5 each they were: threshold 11:
-#   - power + CarPlay          = 11 → fires   (the 2026-07-16 case: entry with no lock-change)
-#   - power + lock             = 10 → NO fire (was 11 — the dominant phantom-entry path)
-#   - power + door             = 10 → NO fire (was 11 — same, via the BMW door)
-#   - power + lock + door      = 14 → fires   (entry with CarPlay absent/late)
-#   - CarPlay + lock (only)    = 9  → NO fire (blocks the park-and-settle CarPlay flap)
-#   - CarPlay + lock + door    = 13 → fires
-#   - all four                 = 19 → fires
-# The CarPlay+lock guard is what fixed the 2026-07-17 phantom: while parking, CarPlay bounces
-# connect/disconnect several times with a stale entry-unlock still in the window; a 2-of-3 with
-# equal weights (the previous 5/5/5, threshold 10) fired got_into on that transient pair, minting
-# an ~8s phantom trip whose got_into then cooldown-swallowed the real trip's got_into. Requiring
-# the charger for entry defers got_into to the moment you actually settle in (charger connects),
-# not the first CarPlay flicker. A single signal, or an exit (which carries the *disconnect*
-# variants — not counted here), still can't reach threshold.
+# CarPlay-anchored weights (issue #39, 2026-08-02). The wireless-charger signals
+# (device_connected_to_power / device_disconnected_from_power) were retired: the Shortcut fired on
+# every power change (~38/day, ~70% of them the phone charging at home), which was a real battery
+# cost for a signal whose in-car role the other three could carry. CarPlay-connect is the anchor
+# now (6) — it is the one remaining signal that is DIRECTIONAL (a connect only happens at entry) —
+# and the lock-change and the BMW door corroborate at 4 each, because both fire at entry AND exit
+# and so must never complete an entry between themselves. Threshold 10:
+#   - CarPlay + lock          = 10 → fires   (entry with the door signal absent/late)
+#   - CarPlay + door          = 10 → fires   (entry with no lock-change — the 2026-07-16 shape)
+#   - lock + door             = 8  → NO fire (the EXIT combination; ambiguous signals can
+#                                             corroborate but never decide — ADR 0005)
+#   - CarPlay + lock + door   = 13 → fires   (the common case: 25 of 28 replayed entries)
+#   - any single signal       < 10 → NO fire
 #
-# The 2026-07-24 demotion closes the *same* phantom class through the charger instead of CarPlay.
-# The wireless charger does not connect once per trip: it drops and re-seats every few minutes
-# while driving, and again while loading the car. So a fresh device_connected_to_power sits in the
-# window at arrival too, and at 5 either ambiguous signal completed it (power+lock / power+door =
-# 11) — minting an entry *at the exit*, which then paired with the stray exit into a 0-110s junk
-# trip. Measured over 25d of real signals (scripts/trip_eval.py): 24 of 78 car_trips were under
-# 2 minutes; in the BMW-door era it was 7 junk vs 8 real. Demoting BOTH ambiguous signals to 4
-# gives 12 junk / 64 real over 25d and 0 junk / 15 real over the door era, with no drive lost
-# (CarPlay-session proxy: 2 boundary misses, unchanged). Demoting only one leaves 17-19 junk —
-# the lock and the door are the same failure mode and have to move together.
+# Two things the charger's departure changes, both measured before landing (scripts/trip_eval.py,
+# candidate drop_charger_c_carplay_anchor, 12-day post-BMW-door window, 25 CarPlay drives):
+#
+# 1. CarPlay + lock now fires. That pair was deliberately blocked while the charger anchored
+#    (the 2026-07-17 park-and-settle phantom: CarPlay bounces connect/disconnect while parking,
+#    with a stale entry-unlock still in the window). Measured with the current signal set the
+#    phantom class did not return — 0 junk trips vs 0 for the incumbent — because the charger's
+#    own mid-drive re-seats were what kept stale completers in the window (the max_age_seconds
+#    cap existed solely to contain that, and left with it). The pre-door era shows what this
+#    pair does WITHOUT the BMW door: 2 junk trips on 07-19 alone. If the door stream dies,
+#    this tuning inherits that risk.
+#
+# 2. An entry where CarPlay fails to connect no longer fires — lock + door = 8 cannot reach 10
+#    without it. Measured at ~7% of entries (2 of 27 real trips over the window, the door+lock+
+#    charger lineages). Accepted deliberately: those journeys are still derived by `trip` from
+#    the location stream, and their car involvement still lands in its `vehicle` capability via
+#    whichever boundary DID fire (a got_out alone corroborates). What is lost is the dedicated
+#    car_trip event on those drives, not the journey.
+#
+# Boundary quality improved with the charger gone: mean car_trip end error −55s → −14s and
+# >2-min-early closes 3 → 2 over the same window, because a mid-drive charger unplug was the
+# main early-close path. See issue #39 for the full decision record, including the alternatives
+# that were measured and rejected (door-as-anchor: catastrophic, 16 junk in 8 days).
 name: got_into_the_car
 enabled: true
 
 engine: weighted_window
 engine_config:
-  threshold: 11
+  threshold: 10
   window_seconds: 600
   cooldown_seconds: 600   # 10 min — fires at most once per trip
-  # The charger has TWO roles here, and only one of them is wanted. It adds weight (below),
-  # and while it sits in the 600s window it keeps the whole entry pattern *completable* — and
-  # because it re-seats every few minutes while driving, a mid-drive re-seat is still present
-  # at the ARRIVAL, where the walk-away lock and the exit door then complete an *entry*.
-  # 2026-07-24: power@07:44:59 (a re-seat) + door@07:46:43 (the exit door) + lock@07:47:05
-  # (walk-away) = 14 minted got_into@07:47:05, fifteen seconds AFTER a correct
-  # got_out@07:46:50 — and that phantom entry stayed open until a door at 12:02:58, a 4h16m
-  # "trip". Displacement can't refute it: the phone really did move over that span, so the
-  # bounding box is large. This is the phantom class that survived every weight candidate of
-  # 2026-07-28/29 (ADR 0009) — because it is not a weighting failure.
-  #
-  # Capping freshness separates the two roles: the charger still anchors an entry when it is
-  # the thing that just happened, but stops carrying the pattern minutes later. Measured over
-  # 30d/86 drives on what car_trip actually emits (scripts/backtest_candidates/
-  # charger_freshness_60.yml, issue #35): phantom trips 7->4, fabricated trip-time 9.19h->
-  # 2.06h, with matched drives 68/86, duration error 129s and drives_missed 2/86 ALL
-  # unchanged. Monotone in the cap (30s: 1.65h; 300s: 7.91h), so it tracks a mechanism rather
-  # than fitting this sample. 60s over 30s buys ~2x tolerance for a slow settle-in (sit down,
-  # phone on the charger 40s later) for one extra phantom.
-  #
-  # Not applied to got_out_the_car: measured no-op there. session_gated_window keeps the
-  # LATEST sighting and its window is 300s, so it has no stale-carrier problem. The mechanism
-  # needs keep-earliest + a long window + a signal that repeats on its own schedule.
-  max_age_seconds:
-    device_connected_to_power: 60
   weights:
-    device_connected_to_power: 6    # anchor: settling in to drive — but it re-seats mid-drive
-    device_connected_to_carplay: 5  # DIRECTIONAL corroborator (connect only happens at entry)
+    device_connected_to_carplay: 6  # anchor: DIRECTIONAL (connect only happens at entry)
     car_lock_state_change: 4        # ambiguous: fires at entry AND exit
     # BMW car-native, phone-INDEPENDENT corroborator (ADR 0006). ~94% per-trip coverage once
     # the CarData stream settled (33%→~94%, confirmed 2026-07-24 over ~30 trips). Motion/ignition
     # never stream on this X1, so the door is the one true second source — but it is also
     # non-directional (and bursts while loading the car), so it sits at 4 with the lock: it
-    # corroborates a directional signal, it never completes an entry with the charger alone.
+    # corroborates the directional anchor, it never completes an entry with the lock alone.
     car_driver_door_opened: 4
 
 source_topic: raw_sensors

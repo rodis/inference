@@ -23,7 +23,7 @@ Deliberately absent: **presentation / role** (span vs point vs hidden). That is 
 decision — how one consumer chooses to surface an event — not an intrinsic fact about the
 event, so it lives in the consumer (the dashboard), never in this data model. A capability
 (e.g. `interval`) is data; how to render it is presentation. `car_trip` and
-`phone_is_charging` both carry `interval`; only the dashboard decides one is drawn as a span.
+`stay` both carry `interval`; only the dashboard decides how each is drawn.
 
 Also deliberately absent: a **confidence score** (removed; resolves ADR 0002's open question).
 It existed for weighted composition across derivation hops — a derived event carrying how sure
