@@ -34,30 +34,56 @@ push. Only split a new pane when it prints nothing.
 
 ## Steps
 
-### 1. Split a pane on the right
+### 1. Split, in one of two places
+
+Where the monitor goes depends on whether the right half of the window is already occupied. Never
+squeeze the conversation pane a second time — if something is already on the right, the monitor goes
+*under it*, not beside it.
 
 ```bash
-herdr pane split --current --direction right --ratio 0.38 --cwd "$PWD" --no-focus
+RIGHT=$(herdr pane neighbor --current --direction right 2>/dev/null | python3 -c "
+import sys,json
+print(json.load(sys.stdin).get('result',{}).get('neighbor',{}).get('neighbor_pane_id') or '')
+")
+
+if [ -z "$RIGHT" ]; then
+  # Nothing on the right: split the current pane in half, vertically.
+  PANE=$(herdr pane split --current --direction right --ratio 0.5 --cwd "$PWD" --no-focus \
+    | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['pane']['pane_id'])")
+else
+  # Occupied: split THAT pane horizontally; the new pane is the bottom one.
+  PANE=$(herdr pane split "$RIGHT" --direction down --ratio 0.5 --cwd "$PWD" --no-focus \
+    | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['pane']['pane_id'])")
+fi
 ```
 
-`--no-focus` matters: the user is mid-conversation in the left pane and focus should not jump. Parse
-the new id out of the JSON (`.result.pane.pane_id`, e.g. `w3:p3`):
+Two parsing traps, both of which fail *silently* rather than loudly:
 
-```bash
-PANE=$(herdr pane split --current --direction right --ratio 0.38 --cwd "$PWD" --no-focus \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['pane']['pane_id'])")
-```
+- The neighbour id is at **`result.neighbor.neighbor_pane_id`** — nested one level deeper than it
+  looks. Reading `result.neighbor_pane_id` returns `None` for every direction, so the branch above
+  would always take the "nothing on the right" path and keep halving the conversation pane.
+- When there is no neighbour the key is simply **absent** (not null, not an error, exit status still
+  0), so `or ''` is what makes the `-z` test work.
+
+`--no-focus` matters throughout: the user is mid-conversation and focus should not jump.
 
 ### 2. Start a Claude agent in it — with a retry
 
 ```bash
 for i in 1 2 3 4 5; do
-  OUT=$(herdr agent start push-monitor --kind claude --pane "$PANE" --timeout 60000 2>&1)
+  OUT=$(herdr agent start push-monitor --kind claude --pane "$PANE" --timeout 60000 \
+        -- --permission-mode auto 2>&1)
   case "$OUT" in *'"agent_started"'*) echo "$OUT"; break ;; esac
   [ "$i" = 5 ] && { echo "FAILED: $OUT"; herdr pane close "$PANE"; exit 1; }
   sleep 2
 done
 ```
+
+Everything after `--` is passed to the agent binary. **`--permission-mode auto` is what makes this
+usable unattended** — the monitor has to run `gh` repeatedly with nobody watching its pane, and a
+permission prompt would stall it silently until someone noticed. (Valid modes: `acceptEdits`, `auto`,
+`bypassPermissions`, `manual`, `dontAsk`, `plan`.) `auto` is the right level here: the monitor only
+reads CI state, so it needs to not stall, not to be unrestricted.
 
 **The retry is required, not defensive.** The pane must be at an interactive shell prompt, and a
 freshly split pane is *not* one for the first second or two while zsh loads its profile. Running the
