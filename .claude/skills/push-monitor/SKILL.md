@@ -49,10 +49,12 @@ print(json.load(sys.stdin).get('result',{}).get('neighbor',{}).get('neighbor_pan
 if [ -z "$RIGHT" ]; then
   # Nothing on the right: split the current pane in half, vertically.
   PANE=$(herdr pane split --current --direction right --ratio 0.5 --cwd "$PWD" --no-focus \
+      --env KUBECONFIG=/Users/rods/.kube/kube_prod \
     | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['pane']['pane_id'])")
 else
   # Occupied: split THAT pane horizontally; the new pane is the bottom one.
   PANE=$(herdr pane split "$RIGHT" --direction down --ratio 0.5 --cwd "$PWD" --no-focus \
+      --env KUBECONFIG=/Users/rods/.kube/kube_prod \
     | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['pane']['pane_id'])")
 fi
 ```
@@ -72,18 +74,24 @@ Two parsing traps, both of which fail *silently* rather than loudly:
 ```bash
 for i in 1 2 3 4 5; do
   OUT=$(herdr agent start push-monitor --kind claude --pane "$PANE" --timeout 60000 \
-        -- --permission-mode auto 2>&1)
+        -- --permission-mode auto --model sonnet 2>&1)
   case "$OUT" in *'"agent_started"'*) echo "$OUT"; break ;; esac
   [ "$i" = 5 ] && { echo "FAILED: $OUT"; herdr pane close "$PANE"; exit 1; }
   sleep 2
 done
 ```
 
-Everything after `--` is passed to the agent binary. **`--permission-mode auto` is what makes this
-usable unattended** — the monitor has to run `gh` repeatedly with nobody watching its pane, and a
-permission prompt would stall it silently until someone noticed. (Valid modes: `acceptEdits`, `auto`,
-`bypassPermissions`, `manual`, `dontAsk`, `plan`.) `auto` is the right level here: the monitor only
-reads CI state, so it needs to not stall, not to be unrestricted.
+Everything after `--` is passed to the agent binary.
+
+**`--permission-mode auto` is what makes this usable unattended** — the monitor runs `gh` and
+`kubectl` repeatedly with nobody watching its pane, and a permission prompt would stall it silently
+until someone noticed. (Valid modes: `acceptEdits`, `auto`, `bypassPermissions`, `manual`, `dontAsk`,
+`plan`.) `auto` is the right level: this job only *reads* CI and cluster state, so it needs to not
+stall, not to be unrestricted.
+
+**`--model sonnet`** — the work is polling two APIs and comparing strings against a checklist. It is
+long-running and repetitive rather than hard, which is what Sonnet is for; spending Opus on it buys
+nothing.
 
 **The retry is required, not defensive.** The pane must be at an interactive shell prompt, and a
 freshly split pane is *not* one for the first second or two while zsh loads its profile. Running the
@@ -118,39 +126,96 @@ polling this exists to avoid.
 
 ## The monitor prompt
 
-Fill in the SHA and branch; keep the rest, it encodes gotchas the agent will otherwise hit.
+Fill in the SHA and branch; keep the rest, it encodes gotchas the agent will otherwise hit. The job
+is **five phases** and is not done at green CI — green CI only means an image exists.
 
-> Watch the GitHub Actions run for commit `<SHA>` on `<branch>` in `rodis/inference`, then report and
-> stop.
+> Track commit `<SHA>` on `<branch>` in `rodis/inference` all the way from CI to running pods, then
+> report once and stop.
 >
-> **Tooling:** call `/opt/homebrew/bin/gh` by absolute path — the `gh` shell function is wrapped in
-> `op plugin run` and dies with "interactive IO not available" in an agent session, and
-> `gh --version` still works so it looks fine. The ambient `GH_TOKEN` is read-only, which is all you
-> need here.
+> **Tooling.** Call `/opt/homebrew/bin/gh` by absolute path — the `gh` shell function is wrapped in
+> `op plugin run` and dies with "interactive IO not available" in an agent session, while
+> `gh --version` still works so it looks fine. Ambient `GH_TOKEN` is read-only, which is all you
+> need. `KUBECONFIG=/Users/rods/.kube/kube_prod` is already exported in this pane; if a `kubectl`
+> call says "connection refused" or "no configuration", set it explicitly rather than assuming the
+> cluster is down. There is **no `argocd` CLI** — read Argo state via `kubectl` against the
+> Application CRs in the `argocd` namespace.
 >
-> **What runs:** a push touching anything outside `deploy/**` triggers `publish-images.yml` — the
-> `_ci-checks.yml` gate (ruff/pytest/typecheck/drift), then a per-component image build, a
-> `values.yml` bump to `sha-<short>`, a commit, and a force-push of `deploy-state`. A push touching
-> only `deploy/**` triggers `mirror-deploy-state.yml` instead. Both force-push `deploy-state`, so a
-> push containing *both* code and `deploy/**` races and is a bug worth flagging.
+> **Everything below is read-only. Never `kubectl apply`, `edit`, `delete`, `rollout restart`, or
+> `argocd sync`.** `selfHeal` is on, so a manual cluster change is both futile and misleading — the
+> only correct fix for a bad image is a new commit. If something is broken, report it; do not repair
+> it.
 >
-> **How to watch:** poll with `gh run list --commit <SHA>` / `gh run watch <id>`. Budget ~5–10
-> minutes. Do not spin at a tight interval — every ~30–60s is plenty.
+> ### Phase 1 — CI
+> A push touching anything outside `deploy/**` triggers `publish-images.yml`: the `_ci-checks.yml`
+> gate (ruff/pytest/typecheck/drift), then a per-component image build, a `values.yml` bump to
+> `sha-<short>`, a commit, and a force-push of `deploy-state`. A push touching only `deploy/**`
+> triggers `mirror-deploy-state.yml` instead. Both force-push `deploy-state`, so a push containing
+> *both* code and `deploy/**` races — flag that as a bug if you see it.
+> Poll `gh run list --commit <SHA>` then `gh run watch <id>`. On failure, stop here and report the
+> failing job plus only the relevant log lines.
 >
-> **Report when it finishes:**
-> - the conclusion of each workflow, and for a failure the failing job plus the relevant log lines
->   (not the whole log);
-> - whether `deploy-state` was force-pushed and to which image tag;
-> - anything that looks stuck rather than failed — Argo CD `ComparisonError` leaves an app wedged
->   with an empty revision that a hard refresh will not clear, and only a new commit fixes it.
+> ### Phase 2 — deploy-state
+> Get the new head: `gh api repos/rodis/inference/commits/deploy-state --jq .sha`.
+> Confirm it moved and note the image tag the bump commit wrote.
 >
-> Keep it short. One paragraph on success. If it is still running after 15 minutes, say so and stop
-> rather than waiting indefinitely.
+> ### Phase 3 — Argo picks it up
+> ```
+> kubectl -n argocd get applications -o custom-columns='NAME:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status,REV:.status.sync.revision,TARGET:.spec.source.targetRevision'
+> ```
+> Three apps: `inference-runtime` and `inference-dashboard` track **deploy-state**;
+> `inference-vector` tracks **main** directly.
+>
+> **The revision comparison people get wrong:** `.status.sync.revision` is the **deploy-state** sha
+> (e.g. `261c62ac…`) — *not* the commit you pushed to main. Compare it against the Phase 2 head, not
+> against `<SHA>`. For `inference-vector`, which tracks main, it *is* `<SHA>`.
+>
+> Want `Synced` + `Healthy` against the new revision. Argo polls on its own schedule, so allow a few
+> minutes before calling it stuck.
+>
+> ### Phase 4 — the change actually reached the cluster
+> **`Synced` is not proof.** A values-only change on a force-pushed branch has been observed
+> reporting `Synced` against a *stale Helm render* for ~25 minutes. So verify the thing that matters
+> — the image tag actually on the Deployment:
+> ```
+> kubectl -n inference get deploy -o custom-columns='NAME:.metadata.name,READY:.status.readyReplicas,IMAGE:.spec.template.spec.containers[0].image'
+> ```
+> Expect `ghcr.io/rodis/inference-*:sha-<short>` to match the tag from Phase 2. Deployments:
+> `application` is the **runtime** (Stakater chart names it generically), plus `aware-dashboard`,
+> `bmw-cardata`, and `vector` (upstream image, only moves on a Vector config/chart change).
+> If Argo says `Synced` but the image tag is still the old one, that is the stale-render case — say
+> so explicitly, it is the single most confusing failure here.
+>
+> ### Phase 5 — rollout
+> ```
+> kubectl -n inference rollout status deploy/application --timeout=300s
+> ```
+> and the same for any other deployment whose tag changed. Then confirm pods are actually up, not
+> just that the rollout command returned:
+> ```
+> kubectl -n inference get pods -o wide
+> ```
+> Watch for `CrashLoopBackOff`, `ImagePullBackOff`, or a new pod stuck `Pending` while an old one
+> still serves — image drift shows up exactly that way.
+>
+> ### Report
+> One short paragraph per phase that had something to say, and a single clear verdict line at the
+> end: did the commit reach running pods or not. Call out specifically:
+> - a workflow failure, with the failing job and the relevant log lines only;
+> - `Synced` with a stale image (Phase 4) — the confusing one;
+> - Argo `ComparisonError`, which wedges an app with an empty revision that a hard refresh will not
+>   clear; only a new commit fixes it;
+> - pods that rolled but are not healthy.
+>
+> Keep it tight — this is a status report, not a narrative. If the whole chain is still incomplete
+> after 20 minutes, say where it stopped and stop rather than waiting indefinitely.
 
 ## Notes
 
 - The pane persists after the run finishes so the user can read the result. Leave it; the reuse check
   in the preconditions will pick it up on the next push.
 - If the push was to a branch Argo does not track, say so in the prompt — the agent should then watch
-  only the workflow and skip the deploy-state and Argo parts.
+  only Phase 1 and skip Phases 2–5.
+- A docs-only push still fires `publish-images.yml` and still rebuilds and redeploys every image,
+  because the trigger is `paths-ignore: deploy/**` rather than a source-path allowlist. That is
+  wasteful but expected; the monitor should not report it as an anomaly.
 - Never push *in order to* trigger this. The skill reacts to a push the user asked for.
