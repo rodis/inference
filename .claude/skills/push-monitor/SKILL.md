@@ -138,6 +138,26 @@ herdr agent prompt push-monitor "<the prompt below>"
 
 Do **not** pass `--wait`. The point is to not block.
 
+**Then confirm it actually started — `prompt` does not reliably submit.** A long prompt lands in the
+input box as `[Pasted text #1 +54 lines]` and just *sits* there: `agent_status: idle`,
+`tokens: None`, `$0.00`. The pane looks alive, the agent has done nothing, and nothing ever reports.
+Observed 2026-08-01 on a ~90-line prompt.
+
+```bash
+sleep 3
+STATE=$(herdr agent get push-monitor | python3 -c "
+import sys,json; print(json.load(sys.stdin)['result']['agent']['agent_status'])")
+if [ "$STATE" != "working" ]; then
+  herdr agent send-keys push-monitor enter      # submit the pending paste
+fi
+```
+
+`send-keys ... enter` submits what is already in the box, so this is idempotent-ish and cheap. Do
+**not** re-issue `prompt` — that would paste the text a second time on top of the first.
+
+This check is not optional. Without it the failure is silent and total: the user sees a pane, the
+launching agent believes it delegated, and the push goes unwatched.
+
 ### 4. Tell the user, in one line
 
 Name the SHA, what will run, and that the pane on the right is watching it. Then continue or hand
@@ -188,9 +208,13 @@ only reliable check. Keep the two in sync if you edit the prompt.
 |---|---|---|
 | `working` | still running | nothing, unless well past its 20-min budget |
 | `idle` + a `Verdict:` line | finished | **nothing if green.** Relay only a failure, in one line |
-| `idle`, no `Verdict:` | never ran, or died mid-way | surface it — that push is unverified |
+| `idle`, no `Verdict:`, `tokens: None` | **never submitted** — the paste is still in the box | send `enter` (see step 3), then say nothing |
+| `idle`, no `Verdict:`, tokens present | ran and died mid-way | surface it — that push is unverified |
 | `blocked` | waiting on input | surface it; it will never finish on its own |
 | `gone` | pane closed before reporting | surface it — the push was never verified |
+
+`tokens` is what separates "never started" from "started and died" — an agent that has done no work
+at all reports `tokens: None` and `$0.00`. The first is fixable in one keystroke; the second is not.
 
 **Report exceptions only.** The whole point is that a green deploy costs the user zero attention. If
 the verdict is clean, do not narrate it, do not summarise the phases, do not congratulate the
