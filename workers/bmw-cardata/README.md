@@ -23,7 +23,7 @@ BMW MQTT ({gcid}/{vin})                     this worker
 We control this producer's body, so it emits the canonical
 `{"payload": {"event_name", "user_id", "timestamp", ...}}` shape directly to
 `/sensors/bmw`. The 2nd path segment (`bmw`, ≠ `owntracks`) routes to Vector's `standard`
-adapter (`shape_sensor`). OwnTracks needed a bespoke `owntracks_to_canonical` adapter only
+adapter (`shape_sensor`). The retired OwnTracks lane needed a bespoke adapter only
 because its body is a fixed 3rd-party shape; ours isn't — so **no Vector change is
 required**, and we add a producer, not a Kafka topic (stays under the Aiven 5-topic cap).
 

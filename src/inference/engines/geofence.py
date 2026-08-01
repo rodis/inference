@@ -2,7 +2,8 @@
 
 Turns a raw `location_ping` stream into region enter/leave events, moving geofencing
 OFF the phone (where iOS region-monitoring config is fragile — it's wiped whenever the
-OwnTracks mode/endpoint changes) and onto the server, where regions are just data. The
+the phone's geofence config was fragile and wiped on any producer change) and onto the
+server, where regions are just data. The
 phone drops to a dumb sensor at the bottom of the abstraction ladder (it only reports
 lat/lon); "am I inside this region?" is decided here.
 

@@ -20,7 +20,7 @@ from inference.runtime.definition import EventDefinition
 
 logger = logging.getLogger("inference.regions")
 
-# Slug rule must match the OwnTracks Vector lane (owntracks_to_canonical) so a region
+# Slug rule (kept stable since the retired OwnTracks lane used the same one) so a region
 # named "Home" yields entered_home/left_home either way: lowercase, non-alnum runs -> "_",
 # trim edge underscores.
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
@@ -75,7 +75,7 @@ def load_region_definitions(dsn: str | None) -> list[EventDefinition]:
         cur.execute(
             # kind='zone' ONLY: a POI row (kind='poi') is a label for stay centroids
             # (see places.py), and expanding it here would mint entered_/left_ events that
-            # collide with the OwnTracks lane's names and fire edges below the sampling
+            # collide with previously-emitted names and fire edges below the sampling
             # resolution (ADR 0007).
             "SELECT user_id, name, lat, lon, radius_m FROM regions "
             "WHERE enabled = true AND kind = 'zone'"

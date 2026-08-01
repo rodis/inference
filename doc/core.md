@@ -44,7 +44,7 @@ one consumer group, one keyed pipeline.
 flowchart TB
     subgraph producers["Producers (dumb sensors)"]
         ios["iOS Shortcuts"]
-        ovl["Overland / OwnTracks<br/>location fixes"]
+        ovl["Overland<br/>location fixes"]
         bmw["bmw-cardata<br/>MQTT subscriber"]
     end
 
@@ -797,11 +797,11 @@ flowchart TB
 
 **One table** because both are "a named circle on the map" and both should be editable in one place
 (the dashboard, eventually). **Two kinds** because the consumers must not overlap: a POI expanded
-into a geofence would emit `entered_<slug>` events colliding with the names the OwnTracks lane
+into a geofence would emit `entered_<slug>` events colliding with the names the retired OwnTracks lane
 already produces, and would fire spurious edges for a radius far below what the sampling can resolve
 (ADR 0007). Each query filters on `kind` explicitly.
 
-The slug rule (`lowercase`, non-alnum runs → `_`, trim edges) must match the OwnTracks Vector lane,
+The slug rule (`lowercase`, non-alnum runs → `_`, trim edges) is kept stable from the retired OwnTracks lane,
 so a region named "Home" yields `entered_home` / `left_home` either way.
 
 **Both reads are best-effort.** `build_runtime` wraps each in `try/except Exception` + `logger.
@@ -1144,7 +1144,7 @@ a declared `interval` spans exactly the session.
 Live: `phone_is_charging` (`device_connected_to_power` → `device_disconnected_from_power`, 24 h max).
 `car_trip` uses the validated subclass below.
 
-> **Pairing is by name only.** This is why the OwnTracks/geofence lanes emit zone-specific names
+> **Pairing is by name only.** This is why the geofence lane emits zone-specific names
 > (`entered_gym`, not `entered` with a payload field) — a session engine has no way to match on
 > anything else.
 
@@ -1273,7 +1273,7 @@ start.
 ### `geofence`
 
 Server-side geofencing: turns the raw `location_ping` stream into region enter/leave events, moving
-the decision off the phone (where iOS region config is fragile — it is wiped whenever the OwnTracks
+the decision off the phone (where iOS region config is fragile — it was wiped whenever the producer's
 mode or endpoint changes) and onto the server, where regions are just data.
 
 | Config | Required | Default | Meaning |

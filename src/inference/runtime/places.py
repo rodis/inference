@@ -9,7 +9,7 @@ is the one place registry, and its `kind` column says what each row is *for*:
 One table because both are "a named circle on the map" and both should be editable in one
 place (the dashboard, eventually). Two kinds because the consumers must not overlap: a POI
 expanded into a geofence would emit `entered_<slug>` events colliding with the names the
-OwnTracks lane already produces, and would fire spurious edges for a radius far smaller than
+the retired OwnTracks lane produced, and would fire spurious edges for a radius far smaller than
 the sampling can resolve (ADR 0007).
 
 Editing a place takes effect on the next runtime start, like regions.

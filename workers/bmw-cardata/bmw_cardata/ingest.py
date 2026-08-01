@@ -4,7 +4,7 @@ We reuse the EXISTING `standard` sensors lane — no new Vector transform. The s
 is a producer like any other: it POSTs `{"payload": {...}}` to `/sensors/bmw`, where the
 2nd path segment (`bmw`) routes to Vector's `standard` body adapter (shape_sensor), which
 renames `event_name`→`name`, requires `user_id`, and hands off to enrich_sensor (id
-minting) → raw_sensors. (OwnTracks needed a bespoke adapter only because its body is out
+minting) → raw_sensors. (The retired OwnTracks lane needed a bespoke adapter only because its body was out
 of our control; ours isn't.)
 
 Contract shape_sensor requires inside `payload`:
