@@ -67,4 +67,10 @@ MSG
   fi
 done
 
+# --- Rule 3: one deploy cycle at a time --------------------------------------------------
+# Acquire here, not in the monitor: this is the only choke point that fires BEFORE anything
+# leaves the machine. The push-monitor releases it on its Verdict; a TTL breaks it if that
+# agent dies. See scripts/deploy-lock.sh.
+"$(git rev-parse --show-toplevel)/scripts/deploy-lock.sh" acquire "$(git rev-parse --short HEAD)"
+
 exit 0

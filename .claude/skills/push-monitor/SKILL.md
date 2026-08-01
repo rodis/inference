@@ -37,14 +37,20 @@ It is infrastructure, not news.
 2. **In a herdr session:** `[ -n "$HERDR_PANE_ID" ]`. If unset, **skip the whole skill silently** —
    report the SHAs in the normal way and say nothing about panes. Not being in herdr is the normal
    case for CI, cron and headless runs, not an error worth narrating.
-3. **No monitor already running in this workspace.** Reuse rather than stacking panes:
+3. **No monitor already running in this workspace.** Reuse rather than stacking panes.
+
+   **Use a per-workspace agent name**: `push-monitor-$HERDR_WORKSPACE_ID`, never a bare
+   `push-monitor`. `herdr agent get|prompt <target>` resolves a name with **no workspace filter**,
+   so two worktrees each running this skill would create two agents with the same name and every
+   later `get`/`prompt` would hit an arbitrary one — including the check-back that exists to catch
+   failures. Set `NAME="push-monitor-$HERDR_WORKSPACE_ID"` once and use it throughout:
 
 ```bash
 herdr agent list | python3 -c "
 import sys,json,os
 ws=os.environ.get('HERDR_WORKSPACE_ID')
 m=[a for a in json.load(sys.stdin)['result']['agents']
-   if a.get('name')=='push-monitor' and a['workspace_id']==ws]
+   if a.get('name')==f'push-monitor-{ws}' and a['workspace_id']==ws]
 print(m[0]['pane_id'] if m else '')
 "
 ```
@@ -93,7 +99,7 @@ Two parsing traps, both of which fail *silently* rather than loudly:
 
 ```bash
 for i in 1 2 3 4 5; do
-  OUT=$(herdr agent start push-monitor --kind claude --pane "$PANE" --timeout 60000 \
+  OUT=$(herdr agent start "$NAME" --kind claude --pane "$PANE" --timeout 60000 \
         -- --permission-mode auto --model sonnet 2>&1)
   case "$OUT" in *'"agent_started"'*) echo "$OUT"; break ;; esac
   [ "$i" = 5 ] && { echo "FAILED: $OUT"; herdr pane close "$PANE"; exit 1; }
@@ -133,7 +139,7 @@ Note the error is returned as JSON on stdout with exit status 0, so check the pa
 ### 3. Hand it the task
 
 ```bash
-herdr agent prompt push-monitor "<the prompt below>"
+herdr agent prompt "$NAME" "<the prompt below>"
 ```
 
 Do **not** pass `--wait`. The point is to not block.
@@ -145,10 +151,10 @@ Observed 2026-08-01 on a ~90-line prompt.
 
 ```bash
 sleep 3
-STATE=$(herdr agent get push-monitor | python3 -c "
+STATE=$(herdr agent get "$NAME" | python3 -c "
 import sys,json; print(json.load(sys.stdin)['result']['agent']['agent_status'])")
 if [ "$STATE" != "working" ]; then
-  herdr agent send-keys push-monitor enter      # submit the pending paste
+  herdr agent send-keys "$NAME" enter      # submit the pending paste
 fi
 ```
 
@@ -185,7 +191,7 @@ Those are different thresholds on purpose. Checking is cheap and silent; talking
 attention, which is the thing this skill is protecting.
 
 ```bash
-STATE=$(herdr agent get push-monitor 2>/dev/null | python3 -c "
+STATE=$(herdr agent get "$NAME" 2>/dev/null | python3 -c "
 import sys,json
 try: print(json.load(sys.stdin)['result']['agent']['agent_status'])
 except Exception: print('gone')
@@ -341,6 +347,17 @@ is **five phases** and is not done at green CI — green CI only means an image 
 >
 > The final line must begin literally `Verdict:` — it is the completion signal the launching agent
 > greps for, and without it your run is indistinguishable from one that never started.
+>
+> ### Then release the deploy lock — always, success or failure
+>
+> ```bash
+> scripts/deploy-lock.sh release
+> ```
+>
+> `.githooks/pre-push` took a lock when this push left the machine so that one push travels the
+> whole chain before the next starts. **Release it even when the verdict is ❌** — a failed deploy
+> is exactly when someone needs to push a fix. Forgetting blocks every other agent until the
+> 30-minute TTL expires.
 >
 > In the detail for a failing phase, call out specifically:
 > - a workflow failure, with the failing job and the relevant log lines only;

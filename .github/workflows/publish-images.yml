@@ -8,7 +8,10 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: publish-images-${{ github.ref }}
+  group: deploy-state-${{ github.ref }}   # SHARED with the sibling workflow: both
+  # force-push deploy-state, so they must queue behind each other, not just behind
+  # themselves. Separate groups let a code push and a deploy/** push race, and the
+  # loser vanished with no error anywhere.
   cancel-in-progress: false
 
 jobs:

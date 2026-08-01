@@ -74,6 +74,8 @@ Env/secrets live in `workers/.env` (gitignored). The entrypoint loads it via `fi
 
 Pushing **both** code and `deploy/**` in one commit races on the `deploy-state` force-push — split them into separate pushes (code first). This is **enforced**, not conventional: `.githooks/pre-push` refuses such a push. Run `scripts/install-hooks.sh` once per clone.
 
+It also **serialises the deploy cycle**: the hook takes a lock (`scripts/deploy-lock.sh`) that the push-monitor releases on its verdict, so one push travels the whole chain — CI → deploy-state → Argo → pods — before the next starts. Otherwise Argo may only ever observe the later of two close bumps, and the earlier commit's image is built, tagged, and never runs anywhere. A 30-minute TTL breaks the lock if the monitor dies.
+
 The same hook refuses a push from a **linked worktree**. With several agents on worktrees there is still exactly one deploy target, so concurrent pushes are a coin flip over whose change ships — merge into the primary worktree and push once from there. Both rules are bypassable with `git push --no-verify` when you mean it.
 
 ## Runtime state in K8s
