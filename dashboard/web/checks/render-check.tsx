@@ -23,10 +23,11 @@ import Shell from "../src/app/Shell";
 import { AwareContext } from "../src/app/useAware";
 import type { AwareCtx } from "../src/app/useAware";
 import DayTimeline from "../src/components/DayTimeline";
+import EventBody from "../src/components/EventBody";
 import EventModal from "../src/components/EventModal";
 import LevelsDashboard from "../src/dashboards/levels/LevelsDashboard";
 import TimelineDashboard from "../src/dashboards/timeline/TimelineDashboard";
-import { catOf, dayLayout, defaultLevelOf, hostOf, inkOn, isEverydayPlace, isSpan, labelOf, laneCount, laneNames, laneOf, placeUnknown, prepare, routeOf, supersededIds } from "../src/view";
+import { carCorroborated, catOf, dayLayout, defaultLevelOf, hostOf, inkOn, isEverydayPlace, isSpan, labelOf, laneCount, laneNames, laneOf, placeUnknown, prepare, routeOf, supersededIds } from "../src/view";
 import type { AwareEvent } from "../src/types";
 
 // Both dashboards use useLayoutEffect (scroll anchoring, focus-after-move) — correct on the
@@ -466,6 +467,22 @@ check("a non-journey event has no route", routeOf(E("e14")) === null, String(rou
 check("a trip is not an anonymous dot", catOf("trip").c === catOf("car_trip").c && catOf("trip").c !== "#9298a6",
   catOf("trip").c);
 check("...but its icon differs from car_trip's", catOf("trip").Icon !== catOf("car_trip").Icon);
+
+// The own-car glyph: a journey the `vehicle` capability corroborated wears a small car beside its
+// title. Presence of evidence, not `confirmed` — one boundary inside the span already separates
+// own-car from borrowed perfectly on real data (ADR 0010), while `confirmed` (two boundaries)
+// undercounts. And it decorates rather than re-titles: a borrowed drive still reads "Drive".
+const singleBoundary = journeyEv("t8", "trip", ["21:00", "21:15"], { from: null, to: "Home" }, ["got_out_the_car"]);
+check("an own-car journey is car-corroborated", carCorroborated(ownCar));
+check("...one boundary inside the span is enough", carCorroborated(singleBoundary));
+check("a borrowed-car journey is not", !carCorroborated(borrowed));
+{
+  const card = (e: AwareEvent) => strip(renderToString(<EventBody event={e} />));
+  check("the own-car glyph renders beside the title", card(ownCar).includes("ev-car"));
+  check("...even off a single boundary", card(singleBoundary).includes("ev-car"));
+  check("a borrowed drive wears no car glyph", !card(borrowed).includes("ev-car"));
+  check("...and is still titled Drive", labelOf(borrowed) === "Drive", labelOf(borrowed));
+}
 
 console.log("\n— supersession: one drive, one capsule —");
 const pairedInside = journeyEv("c1", "car_trip", ["07:52", "08:11"]);      // inside the trip

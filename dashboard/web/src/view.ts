@@ -171,6 +171,19 @@ export const labelOf = (e: AwareEvent) =>
   (e.message.place?.label
     ? e.message.place.label
     : e.event_class === "derived" ? VERBS[e.name] || titleize(e.name) : RAW_LABEL[e.name] || titleize(e.name));
+
+/** A journey the user's own car corroborated: the `vehicle` capability holds at least one car
+ *  boundary that landed inside the span (ADR 0010). Drawn as a small car glyph beside the title.
+ *
+ *  Keyed on evidence PRESENCE, not on `confirmed`. `confirmed` requires two distinct boundaries
+ *  and undercounts real own-car drives (measured: 7 of 15 corroborated journeys in the week to
+ *  2026-08-02 — a correctly-measured span often catches only one boundary inside it), while a
+ *  single boundary inside the span has matched zero borrowed-car journeys (0 of 6, ADR 0010).
+ *  And absence stays silent — no capability means the peripherals may simply have been off, so
+ *  the glyph is a decoration on the title, never a re-titling: an un-corroborated drive still
+ *  reads "Drive", it just doesn't claim the car. Keyed on the capability rather than on
+ *  `name === "trip"` so the next vehicle-carrying event inherits the glyph for free. */
+export const carCorroborated = (e: AwareEvent) => (e.message.vehicle?.evidence?.length ?? 0) > 0;
 export const typeLabel = (n: string) => VERBS[n] || RAW_LABEL[n] || titleize(n);
 
 /** An event that knows *where* it happened but not *what* that place is: the `place` capability
