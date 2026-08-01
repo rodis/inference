@@ -9,9 +9,10 @@ lat/lon); "am I inside this region?" is decided here.
 One definition per (region, direction): `entered_<slug>` fires on the outside->inside
 edge, `left_<slug>` on inside->outside. Each keeps its own per-entity `inside` flag in
 state and fires only on the transition, so a steady stream of pings inside a region
-emits exactly one `entered_*`. The fired events feed the windowed/session engines via
-the runtime's in-process recursion — e.g. `location_ping` -> `entered_home` ->
-(weighted_window) `arrived_home_by_car` — so no engine downstream changes.
+emits exactly one `entered_*`. The fired events are available to the windowed/session engines via the runtime's
+in-process recursion — `location_ping` -> `entered_home` -> (any weighted_window that
+lists it) — so no engine downstream changes. Nothing consumes them at present: the
+home-by-car pair that did was deleted 2026-08-01 (issue #6).
 
 Region definitions come from Neon and are expanded into these definitions in the
 adapter (`inference.runtime.regions`); the engine itself only needs the geometry in its

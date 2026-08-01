@@ -492,8 +492,6 @@ flowchart LR
     stay["stay<br/><i>stay_window</i><br/>interval + place"]
     ent["entered_&lt;slug&gt;<br/><i>geofence</i><br/>(from Neon rows)"]
     lft["left_&lt;slug&gt;<br/><i>geofence</i>"]
-    arr["arrived_home_by_car<br/><i>weighted_window</i>"]
-    lhome["left_home_by_car<br/><i>weighted_window</i>"]
 
     pwr --> gin
     cp --> gin
@@ -514,10 +512,6 @@ flowchart LR
     ping --> stay
     ping --> ent
     ping --> lft
-    ent --> arr
-    gout --> arr
-    lft --> lhome
-    gin --> lhome
 
     style gin fill:#1e293b,stroke:#60a5fa,color:#dbeafe
     style gout fill:#1e293b,stroke:#60a5fa,color:#dbeafe
@@ -526,11 +520,12 @@ flowchart LR
     style stay fill:#0f2a1d,stroke:#34d399,color:#d1fae5
 ```
 
-Two of these are *structurally* live but *practically* dormant: `arrived_home_by_car` and
-`left_home_by_car` need `entered_home` / `left_home`, which only exist if the `regions` table has a
-`kind='zone'` row — so with no zone rows they never fire. They are deliberately left enabled rather
-than deleted: the stay/place pivot (ADR 0007) made zone-crossing the *less* useful way to detect
-being somewhere, but the definitions cost nothing and document the composition. Not a bug.
+`entered_<slug>` / `left_<slug>` currently feed **nothing**. The `arrived_home_by_car` /
+`left_home_by_car` pair that consumed them was deleted 2026-08-01 (issue #6): both fired 17 times
+each and then stopped dead on 2026-07-25 when the OwnTracks waypoints were removed, and the stay/place
+pivot (ADR 0007) had already made zone-crossing the *less* useful way to detect being somewhere. The
+geofence engine itself stays — it is synthesized from `regions` rows, so seeding a zone still produces
+transitions; there is simply no derivation layered on them today.
 
 A single `car_lock_state_change` therefore does a lot of work in one `route` call: it may fire
 `got_into_the_car`, which is immediately re-queued, which opens `got_out_the_car`'s gate *and*
@@ -1412,7 +1407,7 @@ definitions are:
 Concretely, for the current definition set: `stay:open`, `got_into_the_car:window`,
 `got_into_the_car:last_fired`, `got_out_the_car:window`, `got_out_the_car:open`,
 `got_out_the_car:last_fired`, `car_trip:open`, `car_trip:track`, `phone_is_charging:open`,
-`arrived_home_by_car:window`, `entered_home:inside`, `entered_home:last_fix`, …
+`entered_home:inside`, `entered_home:last_fix`, …
 
 Everything stored must be JSON-serializable — Quix `State` round-trips values through the changelog.
 This is why engines stash full event **dicts** rather than model instances.

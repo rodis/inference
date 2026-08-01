@@ -5,6 +5,8 @@ import type { AwareEvent } from "./types";
 export const VERBS: Record<string, string> = {
   car_trip: "Car trip", got_into_the_car: "Got into the car", got_out_the_car: "Got out of the car",
   car_door_opened: "Car door opened", car_door_closed: "Car door closed", phone_is_charging: "Phone charging",
+  // Retired 2026-08-01 (issue #6) — labels kept because 34 historical events are still in
+  // Neon and would otherwise render unlabelled on the timeline.
   arrived_home_by_car: "Arrived home by car", left_home_by_car: "Left home by car",
   // Fallback only: a `stay` that matched a known place is labelled with the place itself
   // (see labelOf), because "Konditorei von Rotz Baar" says more than "Stay" ever will.
@@ -65,7 +67,7 @@ export const inkOn = (hex: string): string => {
 // are the *only* thing stored — see DataProvider.
 //
 // The floor keeps the board sane before the deep derivations exist; the ladder grows on its
-// own the first time something deeper fires (arrived_home_by_car will make it 4). Growing
+// own the first time something deeper fires. Growing
 // re-points every default one lane down, which is the known cost of tying height to depth.
 export const LANE_FLOOR = 3;
 export const laneCount = (maxDepth: number) => Math.max(LANE_FLOOR, maxDepth);

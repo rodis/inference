@@ -140,7 +140,7 @@ The container is **much** larger than the 8 ADR 0006 recorded. Grouped by what t
 | descriptor | value seen | why it matters |
 |---|---|---|
 | `vehicle.vehicle.travelledDistance` | `24809` | odometer → trip **distance**; also ground truth for junk-trip adjudication (a phantom covers ~0 km) |
-| `…navigation.currentLocation.latitude` / `.longitude` / `.altitude` | `47.207…` / `8.5747…` / `663` | car-native park location → `place` on trip endpoints, phone-independent `arrived_home_by_car` |
+| `…navigation.currentLocation.latitude` / `.longitude` / `.altitude` | `47.207…` / `8.5747…` / `663` | car-native park location → `place` on trip endpoints, phone-independent arrival detection |
 | `vehicle.drivetrain.fuelSystem.level` | `18` | **not previously known to exist** — a level *jump* + a stay = refuelled |
 | `vehicle.cabin.door.status` | `'SECURED'` | the central lock — the **directional** signal (now mapped) |
 | `vehicle.body.trunk.isOpen`, `vehicle.body.trunk.door.isOpen` | `False` | loading/unloading → the "did a shop" shape |
