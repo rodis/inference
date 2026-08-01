@@ -475,8 +475,6 @@ they are just never re-consumed.
 ```mermaid
 flowchart LR
     subgraph rawsig["Raw signals — raw_sensors"]
-        pwr["device_connected_to_power"]
-        upwr["device_disconnected_from_power"]
         cp["device_connected_to_carplay"]
         ucp["device_disconnected_from_carplay"]
         lock["car_lock_state_change"]
@@ -487,26 +485,21 @@ flowchart LR
     gin["got_into_the_car<br/><i>weighted_window</i>"]
     gout["got_out_the_car<br/><i>session_gated_window</i>"]
     trip["car_trip<br/><i>validated_session_window</i><br/>interval"]
-    chg["phone_is_charging<br/><i>session_window</i><br/>interval"]
     stay["stay<br/><i>stay_window</i><br/>interval + place"]
     gtrip["trip<br/><i>trip_window</i><br/>interval + journey + vehicle"]
 
-    pwr --> gin
     cp --> gin
     lock --> gin
     door --> gin
 
     ucp --> gout
     lock --> gout
-    upwr --> gout
     door --> gout
     gin -.->|"latched GATE<br/>consumed on fire"| gout
 
     gin --> trip
     gout --> trip
     ping -.->|"displacement<br/>VETO (P1)"| trip
-    pwr --> chg
-    upwr --> chg
     ping --> stay
     ping --> gtrip
     gin -.->|"CORROBORATION<br/>evidence only, never a boundary"| gtrip
@@ -515,10 +508,18 @@ flowchart LR
     style gin fill:#1e293b,stroke:#60a5fa,color:#dbeafe
     style gout fill:#1e293b,stroke:#60a5fa,color:#dbeafe
     style trip fill:#0f2a1d,stroke:#34d399,color:#d1fae5
-    style chg fill:#0f2a1d,stroke:#34d399,color:#d1fae5
     style stay fill:#0f2a1d,stroke:#34d399,color:#d1fae5
     style gtrip fill:#0f2a1d,stroke:#34d399,color:#d1fae5
 ```
+
+**The wireless-charger signals are gone** (2026-08-02, issue #39). `device_connected_to_power` /
+`device_disconnected_from_power` — once `got_into_the_car`'s anchor — were retired along with the
+`phone_is_charging` event they solely fed: the Shortcut fired on every power change (~38/day, ~70%
+of them the phone charging at home), a battery cost out of proportion to a role the remaining three
+signals could carry. Measured before landing (12-day post-BMW-door replay): 2 of 27 real trips lost
+(the ~7% of entries where CarPlay fails — still derived by `trip`, still car-corroborated via
+`vehicle`), junk unchanged at 0, and mean `car_trip` end error improved −55s → −14s because the
+mid-drive charger unplug was the main early-close path.
 
 **`trip` and `car_trip` are not rivals.** `trip` is the generic journey, derived from motion in
 `location_ping` alone, so it sees a borrowed car, a passenger seat, a train or a walk; `car_trip` is
@@ -887,8 +888,8 @@ timestamp is ≥ every contributor's, so nothing is ever stamped earlier than it
 ### Deliberately absent
 
 **Presentation / role** (span vs point vs hidden). That is a *view* decision — how one consumer
-chooses to surface an event — not an intrinsic fact about it. `car_trip` and `phone_is_charging`
-both carry `interval`; only the dashboard decides one is drawn as a span. Role lives in the
+chooses to surface an event — not an intrinsic fact about it. `car_trip` and `stay`
+both carry `interval`; only the dashboard decides how each is drawn. Role lives in the
 dashboard's `SPAN_EVENTS`, never in this model.
 
 > **Known cost of that split, worth stating because it has already bitten twice.** `SPAN_EVENTS` is an
@@ -1114,12 +1115,19 @@ State: `window = {name: {ts, event}}`, `last_fired`. Event-time: `max(contributo
 the pattern completed and the inference first became knowable. Lineage: every contributor in the
 window at fire time.
 
-Live example — `got_into_the_car` (threshold 11, 600 s window): `device_connected_to_power` 6,
-`device_connected_to_carplay` 5, `car_lock_state_change` 4, `car_driver_door_opened` 4. Note that no
-single signal fires it, and the weights encode *directional trustworthiness*: a CarPlay connect only
-happens at entry, while a lock change fires at both entry and exit.
+Live example — `got_into_the_car` (threshold 10, 600 s window): `device_connected_to_carplay` 6,
+`car_lock_state_change` 4, `car_driver_door_opened` 4. Note that no single signal fires it, and the
+weights encode *directional trustworthiness*: a CarPlay connect only happens at entry (the anchor),
+while the lock change and the BMW door fire at both entry and exit — at 4 each they corroborate the
+anchor but can never complete an entry between themselves (lock + door = 8 < 10 is the exit
+combination).
 
 #### `max_age_seconds` — a contributor's *second* role
+
+> **No live consumer since 2026-08-02**: the wireless charger — the self-repeating signal that
+> motivated this cap — was retired with issue #39, and the cap left `got_into_the_car.yml` with it.
+> The mechanism and its record stay, because the lesson generalises to any contributor that repeats
+> on its own schedule.
 
 A contributor does two things, and the weight map can only speak about one. It adds weight, and while
 it sits in the window it **keeps the whole pattern completable**. For a signal that repeats on its own
@@ -1193,8 +1201,9 @@ that from a lost trip into a dropped phantom. Note `validated_session_window` **
 a zero-length span holds no location fixes, so it falls below `min_fixes` and correctly abstains —
 the two guards meet exactly at duration ≤ 0.
 
-Live: `phone_is_charging` (`device_connected_to_power` → `device_disconnected_from_power`, 24 h max).
-`car_trip` uses the validated subclass below.
+No direct consumer since 2026-08-02 — `phone_is_charging`, its last one, was retired with the
+charger signals (issue #39). It remains load-bearing as `validated_session_window`'s base class,
+which is what `car_trip` uses (below).
 
 > **Pairing is by name only.** This is why a region lane would have to emit zone-specific names
 > (`entered_gym`, not `entered` with a payload field) — a session engine has no way to match on
@@ -1307,9 +1316,10 @@ Tuning is the whole game (ADR 0005). Give a trustworthy signal enough weight tha
 `signal + gate_weight ≥ threshold`, but keep ambiguous or noisy signals *below* that, so
 `noisy + gate_weight < threshold`. Live `got_out_the_car`: threshold 10, gate 4 —
 `device_disconnected_from_carplay` 6 fires with the gate (6+4=10 ✓), while
-`car_lock_state_change` 5 and `device_disconnected_from_power` 5 do not (5+4=9 ✗). That is deliberate:
-it guards against a lock change right after entry and a mid-drive charger unplug, both of which would
-otherwise close a trip that hadn't happened.
+`car_lock_state_change` 5 and `car_driver_door_opened` 5 do not (5+4=9 ✗). That is deliberate: both
+are direction-ambiguous, so a lock change or the entry door right after entry would otherwise close
+a trip that hadn't happened. (Until 2026-08-02 `device_disconnected_from_power` sat at 5 for the
+same reason — a mid-drive unplug; retired with issue #39.)
 
 Lineage is the windowed signals only — the gate is *contextual* evidence, not lineage. The
 start→end relationship is captured downstream by the `session_window` that pairs this event with its
@@ -1546,7 +1556,7 @@ detection-local and never emitted. It lives in git history.
 | Derived from | the **located** sources' timestamps, else all of them | source `message.lat`/`lon` + the place book | the earliest + latest located source, the legs between them, and `message.motion` | the sources carrying **no** coordinates |
 | Needs reference data | no | yes (degrades to `label=None`) | yes (degrades to `label=None` on both endpoints) | no |
 | Yields no fragment when | never (assumes non-empty sources) | no source carries coordinates | fewer than two located sources | every source carries coordinates |
-| Declared by | `car_trip`, `phone_is_charging`, `stay`, `trip` | `stay` | `trip` | `trip` |
+| Declared by | `car_trip`, `stay`, `trip` | `stay` | `trip` | `trip` |
 
 `place` and `journey` are **not** variants of one capability. `place` answers "where did this
 happen?" with a single centroid over all the evidence; for a 24 km drive that answer is a field
@@ -1619,7 +1629,7 @@ definitions are:
 Concretely, for the current definition set: `stay:open`, `trip:run`, `trip:anchor`, `trip:marks`,
 `got_into_the_car:window`,
 `got_into_the_car:last_fired`, `got_out_the_car:window`, `got_out_the_car:open`,
-`got_out_the_car:last_fired`, `car_trip:open`, `car_trip:track`, `phone_is_charging:open`,
+`got_out_the_car:last_fired`, `car_trip:open`, `car_trip:track`,
 …
 
 Everything stored must be JSON-serializable — Quix `State` round-trips values through the changelog.

@@ -123,11 +123,13 @@ drawn opaque on top of its own capsule. It also crushed the capsule to near the 
 which hid a real overlap — the drive home starts about a minute *before* the stay's cluster
 breaks, and at 90px of stay there was nowhere for that to show.
 
-**A note on the feed's noise.** `phone_is_charging` fires ~20×/day with durations like 5s, 9s,
+**A note on the feed's noise.** `phone_is_charging` fired ~20×/day with durations like 5s, 9s,
 18s, 32s — a flaky car USB toggling power, not twenty charging sessions — and `car_trip` has
 phantom entries of the same order. They all draw as (floored) capsules in the activity lane,
 which is honest but busy. The fix is upstream in the event definitions, or a demotion on the
-levels board; it is deliberately *not* a presentation filter (see above).
+levels board; it is deliberately *not* a presentation filter (see above). (The upstream fix
+happened for the charger: the power signals and `phone_is_charging` were retired 2026-08-02,
+issue #39 — the historical spans still render.)
 
 ## Layout
 

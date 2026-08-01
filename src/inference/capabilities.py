@@ -69,8 +69,8 @@ def _interval(sources: list[dict]) -> dict:
     peripherals happened to fire.
 
     This changes nothing for any other event, which is why it is safe to state generically rather
-    than as a `trip` special case: `car_trip` and `phone_is_charging` have no located sources at
-    all and fall through to the full set, and `stay`'s sources are *all* located.
+    than as a `trip` special case: `car_trip`'s sources carry no coordinates at all and fall
+    through to the full set, and `stay`'s sources are *all* located.
     """
     located = [s for s in sources
                if (s.get("message") or {}).get("lat") is not None

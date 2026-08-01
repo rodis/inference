@@ -44,43 +44,39 @@ def test_real_definitions_build_a_valid_plan():
     assert "high_level_events" in plan.sink_topics
 
 
-# --- got_into_the_car charger anchor (ADR 0005, 2026-07-17 CarPlay-flap revision) ---
+# --- got_into_the_car CarPlay anchor (issue #39, 2026-08-02 charger retirement) ---
 
 # Event-time base far enough past epoch 0 that the first fire clears the cooldown.
 _T = 1_700_000_000
 
 
-def test_got_into_fires_on_charger_plus_carplay_without_lock(event, state):
-    """The 2026-07-16 case: entry with CarPlay + charger but no lock-change still opens a trip
-    (power 6 + CarPlay 5 = 11 >= 11)."""
+def test_got_into_fires_on_carplay_plus_door_without_lock(event, state):
+    """The 2026-07-16 shape: entry with no lock-change still opens a trip — the anchor plus one
+    corroborator reaches threshold (CarPlay 6 + door 4 = 10 >= 10)."""
     router = Router(RoutingPlan.from_definitions(load_definitions(REPO_ROOT / "events")))
     router.route(event("device_connected_to_carplay", _T, id="C"), state)
-    out = router.route(event("device_connected_to_power", _T + 20, id="P"), state)
+    out = router.route(event("car_driver_door_opened", _T + 20, id="D"), state)
     assert "got_into_the_car" in {i["message"]["name"] for i in out}
 
 
-def test_got_into_does_not_fire_on_carplay_plus_lock_without_charger(event, state):
-    """The park-and-settle CarPlay flap: a lock-change + a transient CarPlay-connect (no charger)
-    must NOT open a trip (CarPlay 5 + lock 5 = 10 < 11). Under the old 5/5/5 weights this fired a
-    phantom trip that cooldown-swallowed the real one (ADR 0005 charger-anchor revision)."""
+def test_got_into_fires_on_carplay_plus_lock(event, state):
+    """CarPlay + lock = 10 >= 10 fires. This pair was deliberately blocked in the charger-anchor
+    era (park-and-settle CarPlay flap); with the charger retired it is a legitimate entry —
+    measured 0 junk trips over the post-BMW-door window (issue #39)."""
     router = Router(RoutingPlan.from_definitions(load_definitions(REPO_ROOT / "events")))
     router.route(event("car_lock_state_change", _T, id="L"), state)
     out = router.route(event("device_connected_to_carplay", _T + 80, id="C"), state)
-    assert "got_into_the_car" not in {i["message"]["name"] for i in out}
+    assert "got_into_the_car" in {i["message"]["name"] for i in out}
 
 
-def test_carplay_flap_defers_got_into_to_charger_connect(event, state):
-    """Full park-and-settle: a lock-change then several CarPlay connect/disconnect bounces never
-    open a trip; got_into fires only once the charger connects (settled in to drive), and no
-    phantom car_trip forms in the meantime."""
+def test_got_into_does_not_fire_on_lock_plus_door(event, state):
+    """lock + door = 8 < 10: the two direction-ambiguous signals are the EXIT combination, so
+    between themselves they must never mint an entry — that is the phantom-entry-at-exit class
+    (ADR 0005; the door-as-anchor candidate that fired on this pair minted 16 junk trips in
+    8 days, issue #39)."""
     router = Router(RoutingPlan.from_definitions(load_definitions(REPO_ROOT / "events")))
     router.route(event("car_lock_state_change", _T, id="L"), state)
-    during = []
-    for i, t in enumerate((20, 40, 150, 200)):
-        during += router.route(event("device_connected_to_carplay", _T + t, id=f"C{i}"), state)
-        during += router.route(event("device_disconnected_from_carplay", _T + t + 8, id=f"D{i}"), state)
-    names = {i["message"]["name"] for i in during}
-    assert "got_into_the_car" not in names   # the flap alone never opens a trip
-    assert "car_trip" not in names           # so no phantom trip forms
-    out = router.route(event("device_connected_to_power", _T + 260, id="P"), state)
-    assert "got_into_the_car" in {i["message"]["name"] for i in out}   # charger settles it
+    out = router.route(event("car_driver_door_opened", _T + 20, id="D"), state)
+    names = {i["message"]["name"] for i in out}
+    assert "got_into_the_car" not in names
+    assert "car_trip" not in names           # so no phantom trip can form either

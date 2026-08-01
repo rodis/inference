@@ -45,7 +45,7 @@ This is what makes it acceptable for connector logic to live outside git.
 > [`events/*.yml`](../events/) and [`src/inference/`](../src/inference/).
 
 Hold it and n8n is a driver — the same class of producer as the iOS Shortcuts, which are
-already GUI-configured, not in git, and load-bearing for `device_connected_to_power`,
+already GUI-configured, not in git, and load-bearing for `device_connected_to_carplay`,
 `car_lock_state_change` and `credit_card_payment`. Break it and inference becomes
 un-testable, un-replayable, and invisible to [`backtest.py`](../scripts/backtest.py).
 

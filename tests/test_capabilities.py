@@ -250,8 +250,8 @@ def test_interval_uses_only_the_located_sources_when_any_are_present():
 
 
 def test_interval_falls_back_to_all_sources_when_none_are_located():
-    """Unchanged for every other event: `car_trip` and `phone_is_charging` have no located
-    sources at all, so they still span their full lineage."""
+    """Unchanged for every other event: `car_trip`'s sources carry no coordinates at all,
+    so it still spans its full lineage."""
     frag = derive_capability(Capability.INTERVAL, [
         _mark("got_into_the_car", 100), _mark("got_out_the_car", 700)])
     iv = frag["interval"]
