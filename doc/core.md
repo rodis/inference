@@ -792,6 +792,21 @@ a visit that produces no fixes). Its last downstream consumers, `arrived_home_by
 `load_places` still filters `kind = 'poi'` explicitly rather than reading the table wholesale, so a
 future non-POI use of the registry cannot silently inherit the place book.
 
+**The book is hot-swappable, and that is a consequence of the removal.** Zone rows became
+`EventDefinition`s and shaped the topology, so they could only ever be read at startup. POI rows are
+pure reference data, so `PlaceBookRefresher` (`runtime/places.py`) reloads them on a TTL —
+`PLACE_BOOK_TTL_SECONDS`, default 1800, 0 to disable.
+
+It runs **on the event stream, not on a thread**. The runtime has no liveness probe, so a dead
+refresher thread would be invisible: the pod stays `Running`, the book silently freezes, and stays
+keep getting labelled from stale data — wrong, quiet, and indistinguishable from working. Riding the
+pipeline means a failure surfaces where every other failure does, and it has two properties a poller
+would not: no traffic means no reads (Neon runs `suspend_timeout=0`, so a poller would wake the
+compute to answer a question nobody asked), and freshness lands exactly where it is needed, since
+the book is only read when a stay is shaped. A failed reload keeps the previous book and stamps the
+timestamp anyway, so one Neon outage cannot become a connection storm on a stream delivering a fix
+every ~11 s.
+
 **Both reads are best-effort.** `build_runtime` wraps each in `try/except Exception` + `logger.
 exception`. A Neon blip degrades to "no region events" or "no place labels" until the next restart —
 never a crash. This is the runtime's **only** Neon access, and it happens once at startup.

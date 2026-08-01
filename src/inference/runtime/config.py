@@ -21,6 +21,12 @@ EVENTS_DIR = Path(os.environ.get("EVENTS_DIR", "events"))
 CONSUMER_GROUP = os.environ.get("QUIX_CONSUMER_GROUP", "inference-quix-runtime-v2")
 STATE_DIR = os.environ.get("QUIX_STATE_DIR", "state")
 
+# How stale the POI place book may get before the next event triggers a reload. 0 disables
+# refreshing (load-once, the pre-2026-08-01 behaviour). Default 30 min: a POI added by the
+# discovery job takes effect within half an hour of traffic instead of needing a restart,
+# while keeping Neon wakeups sparse (suspend_timeout=0 means every read wakes the compute).
+PLACE_BOOK_TTL_SECONDS = int(os.environ.get("PLACE_BOOK_TTL_SECONDS", "1800"))
+
 
 def kafka_bootstrap() -> str:
     """Kafka bootstrap servers (required; read lazily so importing doesn't need it)."""

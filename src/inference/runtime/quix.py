@@ -31,12 +31,13 @@ from inference.runtime import config
 from inference.capabilities import set_place_book
 from inference.runtime.core import RoutingPlan, Router, Shaper
 from inference.runtime.definition import load_definitions
-from inference.runtime.places import load_places
+from inference.runtime.places import PlaceBookRefresher, load_places
 
 logger = logging.getLogger("inference.quix")
 
 
-def _wire_topology(app: Application, router: Router, shaper: Shaper) -> None:
+def _wire_topology(app: Application, router: Router, shaper: Shaper,
+                   refresher: PlaceBookRefresher) -> None:
     """Wire the one keyed pipeline: consume the source → `group_by` entity key → the
     stateful `router.route` (detection, expand=True) → `shaper.shape` (output shaping) →
     route each produced event to its sink topic.
@@ -50,6 +51,11 @@ def _wire_topology(app: Application, router: Router, shaper: Shaper) -> None:
     """
     sinks = {t: app.topic(t, value_serializer="json") for t in sorted(router.sink_topics)}
     sdf = app.dataframe(app.topic(router.source_topic, value_deserializer="json"))
+    # Reference-data freshness rides the stream (see PlaceBookRefresher). Placed before
+    # `group_by` so the TTL is driven by raw ingress rather than by how often something fires —
+    # derived events are rare, and a book that only refreshed when a stay fired would be stale
+    # at precisely the moment it is read.
+    sdf = sdf.apply(refresher.tick)
     sdf = sdf.group_by(router.key_for, name="entity")
     sdf = sdf.apply(router.route, stateful=True, expand=True)
     sdf = sdf.apply(shaper.shape)
@@ -86,7 +92,8 @@ def build_runtime() -> Application:
         producer_extra_config=ssl,
         state_dir=config.STATE_DIR,
     )
-    _wire_topology(app, router, shaper)
+    _wire_topology(app, router, shaper,
+                   PlaceBookRefresher(config.neon_dsn(), config.PLACE_BOOK_TTL_SECONDS))
     return app
 
 

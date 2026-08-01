@@ -12,10 +12,14 @@ So this module is now the table's only consumer, and `kind='poi'` is the only va
 filter is kept rather than dropped so a future non-POI use of the registry cannot silently
 inherit the place book.
 
-Editing a place takes effect on the next runtime start.
+Editing a place takes effect within `PLACE_BOOK_TTL_SECONDS` of the next event, via
+`PlaceBookRefresher` below — no restart, and no background thread.
 """
 
 import logging
+import time
+
+from inference.capabilities import set_place_book
 
 logger = logging.getLogger("inference.places")
 
@@ -48,3 +52,51 @@ def load_places(dsn: str | None) -> list[dict]:
     logger.info("Loaded %d known place(s) for labelling: %s",
                 len(places), [p["name"] for p in places])
     return places
+
+
+class PlaceBookRefresher:
+    """Reload the POI place book on a TTL, driven by the event stream rather than by a timer.
+
+    Lives here rather than in `quix.py` so it is testable: CI installs the package with
+    `--no-deps` and `quixstreams` is absent, so anything importing the adapter cannot be
+    covered by the suite. `loader`/`setter` are injectable for the same reason.
+
+    **No background thread, on purpose.** The runtime has no liveness or readiness probe, so a
+    thread that died would be invisible: the pod stays `Running`, the book silently freezes, and
+    stays keep getting labelled from stale reference data. That is the worst failure shape —
+    wrong, quiet, and indistinguishable from working. Running on the processing thread means a
+    failure surfaces exactly where every other failure does.
+
+    Two consequences of being stream-driven, both wanted:
+
+    - **No traffic, no reads.** Neon runs with `suspend_timeout=0`, so every query wakes the
+      compute; a poller would keep it awake to answer a question nobody asked.
+    - **Fresh exactly where it matters.** The book is only consulted when a stay is shaped, and
+      event traffic is what precedes a stay.
+
+    A failed reload keeps the previous book and logs — the same degraded-mode ethos as the initial
+    load in `build_runtime`. `set_place_book` rebinds a module-level list, which is atomic under
+    the GIL, so no locking is needed even though `shape` reads it on the same thread.
+    """
+
+    def __init__(self, dsn: str | None, ttl_seconds: int, loader=None,
+                 setter=set_place_book, clock=time.monotonic) -> None:
+        self._dsn, self._ttl, self._clock = dsn, ttl_seconds, clock
+        self._loader, self._setter = loader or load_places, setter
+        self._last = clock()               # build_runtime already loaded it once
+
+    def tick(self, value):
+        """Identity step: reloads when the book is older than the TTL, then passes `value` on."""
+        if self._ttl <= 0 or self._clock() - self._last < self._ttl:
+            return value
+        # Stamp BEFORE attempting. If Neon is unreachable this must not retry on every event —
+        # a location stream would turn one outage into a connection storm.
+        self._last = self._clock()
+        try:
+            book = self._loader(self._dsn)
+        except Exception:
+            logger.warning("Place book refresh failed; keeping the previous book", exc_info=True)
+            return value
+        self._setter(book)
+        logger.info("Place book refreshed: %d place(s)", len(book))
+        return value
