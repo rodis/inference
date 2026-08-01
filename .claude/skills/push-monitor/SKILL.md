@@ -121,8 +121,52 @@ Do **not** pass `--wait`. The point is to not block.
 ### 4. Tell the user, in one line
 
 Name the SHA, what will run, and that the pane on the right is watching it. Then continue or hand
-back. **Do not** check on the monitor afterwards unless the user asks — that would reintroduce the
-polling this exists to avoid.
+back — do **not** wait for it.
+
+### 5. Check back — once, later, and only report the exceptions
+
+Handing off is not the same as forgetting. A monitor whose pane was closed, or that stalled, leaves
+a push nobody verified — and the user should hear about *that*, while a clean green run needs no
+comment at all because they already have the pane.
+
+**When to check.** Opportunistically, **at most once per turn**, at a natural moment:
+
+- before launching a new monitor (the reuse lookup in the preconditions already reads this);
+- when the user asks;
+- when you are about to hand back and a monitor from an earlier push has not reported yet.
+
+**Never** on a timer, never twice in a turn, never in a loop. One check is a glance; repeated checks
+are the polling this skill exists to remove.
+
+```bash
+STATE=$(herdr agent get push-monitor 2>/dev/null | python3 -c "
+import sys,json
+try: print(json.load(sys.stdin)['result']['agent']['agent_status'])
+except Exception: print('gone')
+")
+VERDICT=$(herdr pane read "$PANE" 2>/dev/null | grep -E '^\s*Verdict:' | tail -1)
+```
+
+**`agent_status` alone cannot tell you whether it finished.** A monitor that completed and reported
+sits at **`idle`** — exactly like one that was started and never prompted. That is why the prompt
+mandates a final line beginning `Verdict:`: it is the completion signal, and grepping for it is the
+only reliable check. Keep the two in sync if you edit the prompt.
+
+| state | meaning | say |
+|---|---|---|
+| `working` | still running | nothing, unless well past its 20-min budget |
+| `idle` + a `Verdict:` line | finished | **nothing if green.** Relay only a failure, in one line |
+| `idle`, no `Verdict:` | never ran, or died mid-way | surface it — that push is unverified |
+| `blocked` | waiting on input | surface it; it will never finish on its own |
+| `gone` | pane closed before reporting | surface it — the push was never verified |
+
+**Report exceptions only.** The whole point is that a green deploy costs the user zero attention. If
+the verdict is clean, do not narrate it, do not summarise the phases, do not congratulate the
+pipeline. Mention it only if the user asked, or if something in it needs action.
+
+Known wrinkle: `--permission-mode auto` is not total. A monitor has been observed parked on
+"Let me wait for permission to run the gh command…" mid-run — it recovered on its own, but that is
+what a `blocked` state will look like if it does not.
 
 ## The monitor prompt
 
@@ -198,8 +242,10 @@ is **five phases** and is not done at green CI — green CI only means an image 
 > still serves — image drift shows up exactly that way.
 >
 > ### Report
-> One short paragraph per phase that had something to say, and a single clear verdict line at the
-> end: did the commit reach running pods or not. Call out specifically:
+> One short paragraph per phase that had something to say, then **a final line beginning literally
+> `Verdict:`** — did the commit reach running pods or not. That prefix is the completion signal the
+> launching agent greps for; without it your run is indistinguishable from one that never started.
+> Call out specifically:
 > - a workflow failure, with the failing job and the relevant log lines only;
 > - `Synced` with a stale image (Phase 4) — the confusing one;
 > - Argo `ComparisonError`, which wedges an app with an empty revision that a hard refresh will not
