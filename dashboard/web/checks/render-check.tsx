@@ -10,9 +10,11 @@
  *     that contains it), which no type signature can enforce.
  *
  * The fixture mirrors shapes that actually occur in the feed, including the awkward ones: a
- * 6-hour charge spanning a 15-minute trip (concurrent activities), a payment inside both (the
- * innermost must win), a 60-second charge whose capsule has to be floored to stay legible, and a
- * café stay whose end lands a minute *after* the drive home began (a handoff, not concurrency).
+ * 6-hour span concurrent with a 15-minute trip (originally a phone charge — retired with the
+ * charger signals, #39 — now a stay at the same instants, because the layout must keep handling
+ * concurrency whatever type expresses it), a payment inside both (the innermost must win), a
+ * 60-second phantom car_trip whose capsule has to be floored to stay legible, and a café stay
+ * whose end lands a minute *after* the drive home began (a handoff, not concurrency).
  *
  * Adding a case is one `check(...)` line. Throws at the end if anything failed, which is what
  * makes `npm run check` exit non-zero for CI.
@@ -67,17 +69,18 @@ const ev = (
 };
 
 const rows = [
-  ev("device_connected_to_power", "raw", "05:20"),                              // e1
+  ev("location_ping", "raw", "05:20"),                                          // e1
   ev("car_lock_state_change", "raw", "07:52"),                                  // e2
   ev("device_connected_to_carplay", "raw", "07:53"),                            // e3
   ev("got_into_the_car", "derived", "07:53", { parents: ["e2", "e3"] }),         // e4  D2
-  ev("credit_card_payment", "raw", "08:00", { amount: 6.2 }),                   // e5  inside trip AND charge
+  ev("credit_card_payment", "raw", "08:00", { amount: 6.2 }),                   // e5  inside trip AND the 6h stay
   ev("device_disconnected_from_carplay", "raw", "08:10"),                        // e6
   ev("got_out_the_car", "derived", "08:11", { parents: ["e6"] }),                // e7  D2
   ev("car_trip", "derived", "08:11", { parents: ["e4", "e7"], span: ["07:52", "08:11"] }),   // e8  D3, 19 min
-  ev("device_disconnected_from_power", "raw", "11:22"),                          // e9
-  ev("phone_is_charging", "derived", "11:22", { parents: ["e1", "e9"], span: ["05:20", "11:22"] }), // e10 D2, 6h
-  ev("phone_is_charging", "derived", "14:16", { parents: ["e1", "e9"], span: ["14:15", "14:16"] }), // e11 60s — junk
+  ev("location_ping", "raw", "11:22"),                                           // e9
+  ev("stay", "derived", "11:22", { parents: ["e1", "e9"], span: ["05:20", "11:22"],
+                                   place: { label: "Grandma's" } }),             // e10 D2, 6h
+  ev("car_trip", "derived", "14:16", { parents: ["e4", "e7"], span: ["14:15", "14:16"] }), // e11 60s — junk
   ev("credit_card_payment", "raw", "19:00", { amount: 62.4 }),                   // e12 orphan
   ev("location_ping", "raw", "09:00"),                                           // e13
   ev("stay", "derived", "10:36", { parents: ["e13"], span: ["09:00", "10:36"],
@@ -131,7 +134,6 @@ check("maxDepth is 3", prepared.maxDepth === 3, `got ${prepared.maxDepth}`);
 check("ladder is 3 lanes", lanes === 3, `got ${lanes}`);
 check("lanes are Headlines/Activity/Signals", laneNames(3).join("/") === "Headlines/Activity/Signals", laneNames(3).join("/"));
 check("car_trip (D3) defaults to lane 1", defaultOf("car_trip") === 1, `got ${defaultOf("car_trip")}`);
-check("phone_is_charging (D2) defaults to lane 2", defaultOf("phone_is_charging") === 2, `got ${defaultOf("phone_is_charging")}`);
 check("a raw signal (D1) defaults to lane 3", defaultOf("car_lock_state_change") === 3, `got ${defaultOf("car_lock_state_change")}`);
 check("credit_card_payment defaults to 3 and the override lifts it to 1",
   defaultOf("credit_card_payment") === 3 && levelOf("credit_card_payment") === 1,
@@ -142,11 +144,11 @@ check("types are deepest-first", prepared.types[0] === "car_trip", prepared.type
 
 console.log("\n— lanes: what draws as a duration —");
 check("a 19-minute trip is a span", isSpan(E("e8")));
-check("a 6-hour charge is a span", isSpan(E("e10")));
-// Lane is about KIND, not data quality: a 60-second charge is still a charge, and a 32-second
-// car_trip is still a trip. Filing short intervals as moments put car_trip in both lanes on the
+check("a 6-hour stay is a span", isSpan(E("e10")));
+// Lane is about KIND, not data quality: a 60-second car_trip is a phantom, but it is still a
+// trip. Filing short intervals as moments put car_trip in both lanes on the
 // same day, which read as a broken categorisation rather than the bad inference it is.
-check("a 60-second charge is still a span", isSpan(E("e11")));
+check("a 60-second phantom car_trip is still a span", isSpan(E("e11")));
 check("a payment is never a span", !isSpan(E("e5")));
 check("a stay is a span", isSpan(E("e14")));
 // The label IS the place when one matched — the whole point of naming places, and the reason a
@@ -169,31 +171,29 @@ check("a stay defaults to a deep lane despite being headline-worthy",
 
 console.log("\n— containment —");
 const spansAll = all.filter(isSpan);
-check("the innermost host wins (trip, not the 6h charge)",
+check("the innermost host wins (trip, not the 6h stay)",
   hostOf(E("e5"), spansAll)?.id === "e8", hostOf(E("e5"), spansAll)?.name);
 check("a moment outside every span has no host", hostOf(E("e12"), spansAll) === null);
 
 console.log("\n— layout geometry —");
 const L = dayLayout(all, () => 1, (nm) => catOf(nm).c);
-const trip = L.spans.get("e8")!, charge = L.spans.get("e10")!;
-check("both concurrent activities got a box", !!trip && !!charge);
+const trip = L.spans.get("e8")!, morning = L.spans.get("e10")!;
+check("both concurrent activities got a box", !!trip && !!morning);
 check("two sub-columns are needed", L.cols === 2, `got ${L.cols}`);
-check("they sit in different sub-columns", trip.col !== charge.col, `trip ${trip.col} / charge ${charge.col}`);
-check("the trip nests inside the charge vertically",
-  trip.top >= charge.top && trip.top + trip.height <= charge.top + charge.height,
-  `trip ${trip.top}..${trip.top + trip.height} vs charge ${charge.top}..${charge.top + charge.height}`);
-check("the 6h charge is taller than the 19min trip", charge.height > trip.height, `${charge.height} vs ${trip.height}`);
+check("they sit in different sub-columns", trip.col !== morning.col, `trip ${trip.col} / stay ${morning.col}`);
+check("the trip nests inside the 6h stay vertically",
+  trip.top >= morning.top && trip.top + trip.height <= morning.top + morning.height,
+  `trip ${trip.top}..${trip.top + trip.height} vs stay ${morning.top}..${morning.top + morning.height}`);
+check("the 6h stay is taller than the 19min trip", morning.height > trip.height, `${morning.height} vs ${trip.height}`);
 const payY = L.pos.get("e5")!;
 check("the payment renders inside its host's vertical range",
   payY >= trip.top && payY <= trip.top + trip.height, `${payY} not in ${trip.top}..${trip.top + trip.height}`);
 check("the payment's band is its innermost host", L.hosts.get("e5") === "e8", L.hosts.get("e5"));
-// Both activities host something at full detail: the power events fall inside the charge, the
+// Both activities host something at full detail: the morning pings fall inside the 6h stay, the
 // carplay/lock signals inside the trip. Bands go longest-first so the innermost paints on top.
-// 3 since stays joined the fixture: the trip, the 6h charge, and the named stay (which hosts the
-// 09:00 ping). A stay overlapping a charge — being home while the phone charges — is a real
-// concurrency shape, so it belongs here rather than in a fixture of its own.
+// 3 hosts: the trip, the 6h stay, and the named café stay (which hosts the 09:00 ping).
 check("a band per hosting activity", L.bands.length === 3, `${L.bands.length} bands`);
-// 6h charge, then the 96-minute stay, then the 19-minute trip — i.e. the same order as their
+// 6h stay, then the 96-minute stay, then the 19-minute trip — i.e. the same order as their
 // durations, which only holds because a span's own quiet stretch no longer collapses (see below).
 check("bands are ordered longest host first",
   L.bands.map((b) => b.hostId).join(",") === "e10,e14,e8", L.bands.map((b) => b.hostId).join(","));
@@ -259,7 +259,7 @@ check("…though each interior moment still earns its own row", chopped > plain,
 // A second sub-column is earned by genuine concurrency only. A stay ends when the fix that broke
 // its cluster arrives — after the drive away has begun — so the café visit and the trip home
 // overlap by a minute. That's a handoff: one lane, capsules stacked, not two columns reading as
-// "two things at once". (The 6h charge over the 19min trip above is the real thing, and still fans.)
+// "two things at once". (The 6h stay over the 19min trip above is the real thing, and still fans.)
 const cafe = L.spans.get("e16")!, home = L.spans.get("e17")!;
 check("a stay and the drive away from it share one sub-column", cafe.col === home.col,
   `stay ${cafe.col} / trip ${home.col}`);
@@ -327,7 +327,7 @@ check("the trip shows its duration", dt.includes("19 min"));
 
 check("a payment shows its amount", dt.includes("CHF 6.20"));
 // "no host" appears exactly on the moments the layout found no container for — here the
-// orphan payment and the junk charge that fell out of the activity lane. A hosted moment says
+// orphan payment. A hosted moment says
 // nothing, because its band already does.
 const orphans = all.filter((e) => !isSpan(e) && !L.hosts.has(e.id));
 check("the orphan payment is flagged", dt.includes("no host"));
@@ -488,9 +488,9 @@ console.log("\n— supersession: one drive, one capsule —");
 const pairedInside = journeyEv("c1", "car_trip", ["07:52", "08:11"]);      // inside the trip
 const pairedEarly = journeyEv("c2", "car_trip", ["07:48", "08:05"]);       // starts BEFORE it
 const otherDay = journeyEv("c3", "car_trip", ["20:00", "20:30"]);          // no trip covers it
-const overlapCharge = journeyEv("c4", "phone_is_charging", ["07:00", "12:00"]); // merely overlaps
+const overlapStay = journeyEv("c4", "stay", ["07:00", "12:00"]);            // merely overlaps
 {
-  const sup = supersededIds([ownCar, borrowed, pairedInside, pairedEarly, otherDay, overlapCharge]);
+  const sup = supersededIds([ownCar, borrowed, pairedInside, pairedEarly, otherDay, overlapStay]);
   check("a car_trip inside the trip is suppressed", sup.has("c1"));
   // Overlap, not containment: measured over 25 Jul - 1 Aug, on 2 of 14 own-car drives the entry
   // boundary preceded the journey's first settled fix by ~105s. Containment would draw those twice.
@@ -498,14 +498,14 @@ const overlapCharge = journeyEv("c4", "phone_is_charging", ["07:00", "12:00"]); 
   // Preference, not deletion — every drive before the Overland lane landed has a car_trip and no
   // trip, and suppressing the type outright would blank those days.
   check("a car_trip no trip covers survives", !sup.has("c3"));
-  // The reason this is name-keyed: a charge has an interval and overlaps the drive without
+  // The reason this is name-keyed: a stay has an interval and overlaps the drive without
   // restating it, so a structural "interval superseded by an overlapping journey" rule would eat it.
-  check("an overlapping charge is NOT superseded", !sup.has("c4"));
+  check("an overlapping stay is NOT superseded", !sup.has("c4"));
   check("the trips themselves are never superseded", !sup.has("t1") && !sup.has("t2"));
 }
 {
   // With no trip present nothing is suppressed — the pre-Overland shape of every day.
-  const sup = supersededIds([pairedInside, otherDay, overlapCharge]);
+  const sup = supersededIds([pairedInside, otherDay, overlapStay]);
   check("no trip on the day means no suppression at all", sup.size === 0, `${sup.size} suppressed`);
 }
 

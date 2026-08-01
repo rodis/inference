@@ -1,4 +1,4 @@
-import { Car, Route, LogIn, LogOut, DoorOpen, DoorClosed, KeyRound, Smartphone, Plug, BatteryCharging, CreditCard, House, MapPin, Circle } from "lucide-react";
+import { Car, Route, LogIn, LogOut, DoorOpen, KeyRound, Smartphone, CreditCard, MapPin, Circle } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { AwareEvent } from "./types";
 
@@ -7,31 +7,27 @@ export const VERBS: Record<string, string> = {
   // A `trip` titles itself by its MODE (see labelOf / MODE_NOUN); this is the fallback for a
   // journey where no fix claimed one.
   trip: "Trip",
-  car_door_opened: "Car door opened", car_door_closed: "Car door closed", phone_is_charging: "Phone charging",
-  // Retired 2026-08-01 (issue #6) — labels kept because 34 historical events are still in
-  // Neon and would otherwise render unlabelled on the timeline.
-  arrived_home_by_car: "Arrived home by car", left_home_by_car: "Left home by car",
   // Fallback only: a `stay` that matched a known place is labelled with the place itself
   // (see labelOf), because "Konditorei von Rotz Baar" says more than "Stay" ever will.
   stay: "Stay",
 };
 export const RAW_LABEL: Record<string, string> = {
-  device_connected_to_power: "Power connected", device_disconnected_from_power: "Power disconnected",
   device_connected_to_carplay: "CarPlay connected", device_disconnected_from_carplay: "CarPlay disconnected",
   car_lock_state_change: "Car lock changed",
   credit_card_payment: "Card payment",
   location_ping: "Location ping",
   car_driver_door_opened: "Driver door opened",
 };
+// Retired types (the charger pair + phone_is_charging #39, the car_door_* intermediates, the
+// OwnTracks arrived/left_home_by_car) are deliberately ABSENT: whatever history remains in the
+// trailing window falls through catOf to the anonymous grey circle and a titleized name, then
+// ages out. The entered_/left_ prefixes below are the one exception, and say why.
 export const CAT: Record<string, { c: string; Icon: LucideIcon }> = {
   car_trip: { c: "#3d6cf7", Icon: Car }, got_into_the_car: { c: "#18b26b", Icon: LogIn }, got_out_the_car: { c: "#12a89b", Icon: LogOut },
-  car_door_opened: { c: "#7a5bff", Icon: DoorOpen }, car_door_closed: { c: "#9b7bff", Icon: DoorClosed }, car_lock_state_change: { c: "#e0567f", Icon: KeyRound },
+  car_lock_state_change: { c: "#e0567f", Icon: KeyRound },
   device_connected_to_carplay: { c: "#6b5bff", Icon: Smartphone }, device_disconnected_from_carplay: { c: "#8a7cff", Icon: Smartphone },
-  device_connected_to_power: { c: "#f5a524", Icon: Plug }, device_disconnected_from_power: { c: "#e0892a", Icon: Plug },
-  phone_is_charging: { c: "#27ae60", Icon: BatteryCharging },
   credit_card_payment: { c: "#14b8a6", Icon: CreditCard },
   car_driver_door_opened: { c: "#7a5bff", Icon: DoorOpen },
-  arrived_home_by_car: { c: "#c2557f", Icon: House }, left_home_by_car: { c: "#d1719b", Icon: House },
   // Warm brown, and deliberately the only warm colour: a stay is where the day actually
   // happened, so it should stand out on a board of blues and teals. Lifted from the
   // coffee-shop capsule in the parallel-lanes design sketch, which is what a stay turned out
@@ -211,7 +207,7 @@ export const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 // Which derived events render as a time *span* (a duration capsule on the day timeline).
 // The backend emits the `interval` capability as data; whether to *draw* an event as a
 // span is a view decision, so it lives here, not in the event definition. Every event that
-// carries an interval today (a journey, a charge, a stay) reads naturally as a duration, so
+// carries an interval today (a journey, a stay) reads naturally as a duration, so
 // each renders as a capsule whose length is proportional to how long it lasted.
 //
 // This list is an allowlist, so a NEW interval-carrying event defaults to being drawn as a
@@ -219,7 +215,7 @@ export const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 // `interval` correct in Neon on all 20 events and still drew as a disc next to
 // `credit_card_payment`. If you add a definition with `capabilities: [interval, …]`, add it
 // here in the same change.
-export const SPAN_EVENTS = new Set<string>(["car_trip", "trip", "phone_is_charging", "stay"]);
+export const SPAN_EVENTS = new Set<string>(["car_trip", "trip", "stay"]);
 export const intervalOf = (e: AwareEvent) => e.message.interval ?? null;
 
 /** Spans that another span on the same day re-expresses more completely — mapped
@@ -241,9 +237,9 @@ export const intervalOf = (e: AwareEvent) => e.message.interval ?? null;
  *  capabilities so the next place-carrying event inherits the treatment for free. There is no
  *  capability to key on here: `car_trip` says nothing structurally that distinguishes it from
  *  any other bare-interval event, so a rule like "an interval superseded by an overlapping
- *  `journey`" would also swallow `phone_is_charging`, which merely *overlaps* a drive rather
- *  than restating it. Supersession is an editorial claim that one event replaces another, so it
- *  is written down as one. */
+ *  `journey`" would also swallow the stay the drive departed from, which merely *overlaps* it
+ *  at the boundary rather than restating it. Supersession is an editorial claim that one event
+ *  replaces another, so it is written down as one. */
 export const SUPERSEDED_BY = new Map<string, string>([["car_trip", "trip"]]);
 
 /** Ids of spans suppressed because their replacement is present and covers the same episode.
@@ -309,8 +305,8 @@ export const endOf = (e: AwareEvent) => (isSpan(e) ? intervalOf(e)!.ended_at : e
  *
  *  Time containment, not lineage: a card payment is not `derived_from` the trip it happened
  *  during, it merely happened during it. That distinction is the whole point of the second
- *  lane, and it's why this can't be read off `derived_from`. Innermost (shortest) wins so a
- *  6-hour charge doesn't claim a payment that fell inside a 15-minute trip. */
+ *  lane, and it's why this can't be read off `derived_from`. Innermost (shortest) wins so an
+ *  all-morning span doesn't claim a payment that fell inside a 15-minute trip. */
 export function hostOf(moment: AwareEvent, spans: AwareEvent[]): AwareEvent | null {
   let best: AwareEvent | null = null;
   for (const s of spans) {
@@ -360,9 +356,10 @@ export function humanDur(sec: number): string {
  *  exactly-proportional bar was tried on the card and removed; see `EventBody` for why.
  *
  *  **Lanes.** `laneOf` puts intervals left and points right. Concurrent spans are packed into
- *  sub-columns (greedy, by start) rather than interlocked with a notch: on a true time scale a
- *  6-hour charge genuinely *does* span a 15-minute trip, and the real feed has exactly that,
- *  so they need to sit side by side instead of colliding in one 40px column. Consecutive
+ *  sub-columns (greedy, by start) rather than interlocked with a notch: on a true time scale two
+ *  spans genuinely can cover the same stretch — the case that forced this was a 6-hour charge
+ *  spanning a 15-minute trip (the charger signals retired 2026-08-02, #39; the shape must keep
+ *  working) — so they need to sit side by side instead of colliding in one 40px column. Consecutive
  *  capsules within a column are joined by a dotted `link` across the dead time between them,
  *  so the lane reads as a track rather than as capsules floating on a background.
  *
@@ -475,7 +472,7 @@ export function dayLayout(
   // (216px) rather than the size its interruptions earn.
   //
   // A stretch under several spans is priced by the most generous claim on it, so a nested activity
-  // still gets its own room: a 15-minute trip inside a 6-hour charge is charged against the trip's
+  // still gets its own room: a 15-minute trip inside a 6-hour span is charged against the trip's
   // fresh budget, not squeezed into the tail of the charge's. An *uncovered* stretch has no budget
   // to draw on and simply pays the curve.
   const dwell = new Map<string, number>();

@@ -26,8 +26,9 @@ with its own header:
 
 - **Activities** (left) — events with a duration, as capsules whose length tracks how long they
   lasted (roughly — the scale is elastic; see below). Concurrent activities sit in
-  **sub-columns**, because on a true time scale a 6-hour
-  charge genuinely does span a 15-minute trip and the real feed has exactly that. A brief
+  **sub-columns**, because on a true time scale two activities genuinely can cover the same
+  stretch — the case that forced this was a 6-hour phone charge spanning a 15-minute trip (the
+  charger signals are retired, #39, but the shape has to keep working). A brief
   overlap does *not* earn one: a stay ends when the fix that broke its cluster arrives, which is
   after the drive away has already started, so a café visit and the trip home overlap by about a
   minute. That's a **handoff**, not concurrency — within `HANDOFF` the column is reused and the
@@ -59,8 +60,8 @@ visit stay legible).
 
 Containment is **time containment, not lineage** (`hostOf`): a payment is not
 `derived_from` the trip it happened during, it merely happened during it. That distinction is
-the point of the second lane. The innermost (shortest) container wins, so a long charge doesn't
-claim a payment that fell inside a short trip.
+the point of the second lane. The innermost (shortest) container wins, so an all-morning span
+doesn't claim a payment that fell inside a short trip.
 
 The scale is deliberately "broken": steps are proportional to elapsed minutes but floored so
 labels have room, log-compressed past `MAX_STEP` so a lull doesn't run off-screen (`compress`),
@@ -76,7 +77,7 @@ them into three and 166px when undisturbed — a café visit drawn tall because 
 tapped, which tells a reader nothing. With one budget per span the later stretches pay only the
 curve's tail, so the same stay draws 216px. A stretch under several spans is priced by the most
 generous claim on it, so a nested activity still gets its own room (a 15-minute trip inside a
-6-hour charge is charged against the trip's fresh budget, not squeezed into the charge's tail).
+6-hour span is charged against the trip's fresh budget, not squeezed into the longer one's tail).
 
 **A capsule is only *roughly* proportional, and that is a floor rather than a bug.** The error is
 worst for the longest activity on the board: it absorbs all the compression, while short spans are
@@ -129,7 +130,8 @@ phantom entries of the same order. They all draw as (floored) capsules in the ac
 which is honest but busy. The fix is upstream in the event definitions, or a demotion on the
 levels board; it is deliberately *not* a presentation filter (see above). (The upstream fix
 happened for the charger: the power signals and `phone_is_charging` were retired 2026-08-02,
-issue #39 — the historical spans still render.)
+issue #39, and the dashboard dropped the type with them — what remains in the trailing window
+renders as anonymous grey moments until it ages out.)
 
 ## Layout
 
