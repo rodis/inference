@@ -1,0 +1,69 @@
+# A trip: you went somewhere (Activity level). The generic journey — derived from MOTION in
+# the raw location stream, with no car peripherals involved, so it sees a drive in a borrowed
+# car, a ride as a passenger, a train, or a walk. `car_trip` is then the car-EVIDENCED
+# specialisation of this, not a competitor to it.
+#
+# Why it exists (issue #41): `car_trip` pairs boundaries inferred from YOUR car's lock /
+# CarPlay / BMW door, so a journey in anyone else's car is not mistuned there — it is
+# invisible. On 2026-07-30 a 24km drive to the vet in a borrowed car was recorded by Overland
+# in full (123 fixes out, 104 back, max 119km/h, bounding-box extent 13.9km each way) and
+# bracketed by two real `stay` events, Home then ENNETSeeKLINIK — and nothing derived fired.
+# Over the 14 days around it, 6 of 26 movement segments had no `car_trip`.
+#
+# This is the structural complement of `stay`: same stream, same geometry primitives, keyed on
+# the cluster BREAKING rather than holding. ADR 0007 measured what that leaves behind — a
+# 13-minute drive "fragmented into ~35 singleton clusters", correctly producing no stay. Those
+# singletons are this event. See ADR 0010 and the engine docstring.
+name: trip
+enabled: true
+
+engine: trip_window
+engine_config:
+  # Only consulted when `motion` makes no claim (23% of fixes carry no motion array), so this
+  # does not model walking — it clears the 4-7km/h `vel` noise real fixes report while the
+  # phone sits still at home.
+  min_speed_kmh: 10
+
+  # 3 min of not moving = arrived, rather than stopped at a light. Below stay.yml's
+  # min_dwell_seconds (300), so a trip closes before the stay it leads into opens. On the
+  # 30-07 vet trip the two legs' internal stops were 11-71s, well inside this.
+  settle_seconds: 180
+
+  # Bounding-box EXTENT, not net displacement: a drive out and back is still a drive
+  # (the reasoning validated_session_window records). Measured on the 14 days to 2026-08-01:
+  # real journeys spanned 611m-13.9km, while 15 minutes of wandering the vet car park covered
+  # ~100m over 510m of walking path — so 500m clears the noise with room on both sides and
+  # keeps car-park drift from becoming a journey.
+  min_distance_m: 500
+  min_duration_seconds: 180
+  min_fixes: 4                 # the fixes are the ONLY evidence here, so sparse = nothing to report
+
+  # A sampling outage this long ends the trip where it was last seen: no evidence, no claim.
+  max_gap_seconds: 1800
+  # A `motion` array stuck on `driving` must not accumulate an unbounded run. 6h mirrors
+  # car_trip's max_duration_seconds.
+  max_duration_seconds: 21600
+  max_accuracy_m: 100          # a fix vaguer than this can't place you (mirrors stay.yml)
+
+  # Events that CORROBORATE a journey without defining it. They never open, extend or close a
+  # run — the span comes from motion alone — they only ride along as evidence when they fall
+  # strictly inside one, and the `vehicle` capability reports what was found. This is what
+  # makes `car_trip` expressible as "a trip with a got_into and a got_out in it", and it is
+  # why the direction ambiguity of #2/#23 stops mattering here: a lock on the wrong side of
+  # the boundary still proves the car was involved, because it no longer has to BE the
+  # boundary. Measured 25 Jul-1 Aug: all 14 own-car journeys carried at least one of these
+  # inside the span (12 both), all 6 borrowed-car ones carried none.
+  corroborating_events: [got_into_the_car, got_out_the_car]
+
+source_topic: raw_sensors
+sink_topic: high_level_events
+
+# interval: departure -> arrival, projected from the lineage extent — and both bounds are
+#   SETTLED fixes, not moving ones, so the span covers the whole journey.
+# journey: origin + destination as labelled places (this trip reads Home -> ENNETSeeKLINIK),
+#   straight-line and path distance, and the mode from the stream's own classification.
+#   `place` would be wrong here: the centroid of a 24km drive is a field beside the motorway.
+# vehicle: which corroborating signals landed inside the span, so "was this my own car?" is a
+#   property of the journey rather than a separate event. Absent when nothing corroborated —
+#   the peripherals may simply have been off, so absence asserts nothing (see inference.event).
+capabilities: [interval, journey, vehicle]

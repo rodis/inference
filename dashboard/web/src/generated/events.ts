@@ -18,6 +18,11 @@ export type SpreadM = number;
 export type Label = string | null;
 export type DistanceM = number | null;
 export type Everyday = boolean | null;
+export type StraightLineM = number;
+export type PathM = number;
+export type Mode = string | null;
+export type Evidence = string[];
+export type Confirmed = boolean;
 
 /**
  * A derived event's `message` payload — the unit shared across Python and TS.
@@ -35,6 +40,8 @@ export interface InferredEvent {
   derived_from: DerivedFrom;
   interval?: Interval | null;
   place?: Place | null;
+  journey?: Journey | null;
+  vehicle?: Vehicle | null;
 }
 /**
  * One source event in the lineage graph (an entry in `derived_from`).
@@ -86,4 +93,65 @@ export interface Place {
   label?: Label;
   distance_m?: DistanceM;
   everyday?: Everyday;
+}
+/**
+ * The *journey capability*: an event that went **from somewhere to somewhere**.
+ *
+ * `place` answers "where did this happen?" with one centroid over all the evidence. For a
+ * trip that answer is meaningless — the centroid of a 24km drive is a field beside the
+ * motorway. A journey's geography is two points and what lies between them, which is a
+ * different fact, not a variant of the same one, so it is its own capability.
+ *
+ * Both endpoints are full `Place`s, so they get labelled against the same reference data a
+ * stay does: the trip that motivated this engine reads **Home → ENNETSeeKLINIK für
+ * Kleintiere**. They are single fixes by construction (the settled fix on each side of the
+ * movement, see `trip_window`), hence `spread_m` 0.0 — one fix has no spread, and claiming
+ * otherwise would dress a GPS accuracy figure up as evidence precision.
+ *
+ * Two distances, because they answer different questions and a loop separates them: a drive
+ * out to a shop and back has `straight_line_m` ~0 and `path_m` of 20km, and reporting only
+ * the first would call it a non-journey.
+ *
+ * `mode` is the stream's own majority motion classification (`driving`/`walking`/…), not an
+ * inference from speed — the phone already ran that classifier, and it is how a `trip` stays
+ * generic instead of assuming a car. None when no fix made a claim, which is honest: the
+ * journey happened, we just can't say how.
+ */
+export interface Journey {
+  origin: Place;
+  destination: Place;
+  straight_line_m: StraightLineM;
+  path_m: PathM;
+  mode?: Mode;
+}
+/**
+ * The *vehicle capability*: a journey **corroborated by evidence that isn't locational**.
+ *
+ * This is the answer to "was this drive in *my* car?" — and it exists because that question
+ * stopped needing its own event. `car_trip` derives a journey by *pairing* two
+ * direction-ambiguous boundaries, which is the root of a whole family of defects (a lock
+ * means "locked or unlocked", so a boundary can land on the wrong side and invert the span).
+ * Once the span comes from motion instead, those boundaries no longer have to be
+ * directionally correct — they only have to fall **inside** a journey that is already known.
+ * A lock at entry rather than exit still proves the car was involved.
+ *
+ * Measured over 25 July - 1 August: of 20 replayed journeys, all 14 in the user's own car
+ * had at least one boundary strictly inside the span (12 had both), and all 6 in a borrowed
+ * car had **none**. Perfect separation, with no threshold — which is why the rule is simply
+ * containment, and why the pad is zero (see `_vehicle`).
+ *
+ * `evidence` names the corroborating events, and is deliberately whatever the data contained
+ * rather than a fixed vocabulary — the deriver classifies structurally (a source with no
+ * coordinates is not part of the movement), so this capability never learns a concrete event
+ * name. `confirmed` marks the stronger case of two distinct corroborating signals.
+ *
+ * **Presence is the claim, and absence asserts nothing.** No fragment is emitted when there
+ * is no corroboration, rather than `Vehicle(known=False)`, because the peripherals could
+ * simply have been off — the codebase's standing asymmetry between absence of evidence and
+ * evidence of absence. A consumer may read "no vehicle capability" as "probably not my car";
+ * the data model does not say so.
+ */
+export interface Vehicle {
+  evidence: Evidence;
+  confirmed: Confirmed;
 }

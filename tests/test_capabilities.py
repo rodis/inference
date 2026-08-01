@@ -100,3 +100,134 @@ def test_place_survives_a_malformed_reference_row():
     capabilities.set_place_book([{"name": "Broken"}, {"name": "Home", "lat": 47.206985,
                                                       "lon": 8.574798, "radius_m": 80}])
     assert derive_capability(Capability.PLACE, [_fix(*_H1)])["place"].label == "Home"
+
+
+# --- journey --------------------------------------------------------------------
+
+# The 2026-07-30 vet trip, abridged: home -> two points down the road -> the clinic.
+_VET = (47.160316, 8.441387)
+_MID1, _MID2 = (47.19, 8.52), (47.17, 8.47)
+
+
+def _leg_fix(pt, ts, motion=None):
+    msg = {"id": f"i{ts}", "name": "location_ping", "timestamp": ts, "lat": pt[0], "lon": pt[1]}
+    if motion is not None:
+        msg["motion"] = motion
+    return {"message": msg}
+
+
+def test_journey_labels_both_endpoints_against_the_place_book():
+    """The whole point: the trip that motivated the engine reads Home -> the clinic, which is
+    what `place` (one centroid over a 24km drive) structurally cannot say."""
+    capabilities.set_place_book([
+        {"name": "Home", "lat": 47.206985, "lon": 8.574798, "radius_m": 80, "everyday": True},
+        {"name": "ENNETSeeKLINIK", "lat": 47.16031, "lon": 8.44138, "radius_m": 80},
+    ])
+    j = derive_capability(Capability.JOURNEY, [
+        _leg_fix(_H1, 100), _leg_fix(_MID1, 200), _leg_fix(_MID2, 300), _leg_fix(_VET, 400),
+    ])["journey"]
+    assert j.origin.label == "Home" and j.origin.everyday is True
+    assert j.destination.label == "ENNETSeeKLINIK"
+    assert j.origin.spread_m == 0.0                      # an endpoint is one fix, not a cluster
+
+
+def test_journey_endpoints_come_from_event_time_not_list_order():
+    """The order an engine appended in is an implementation detail; earliest/latest is a fact
+    about the evidence (the same reasoning as _interval)."""
+    capabilities.set_place_book([])
+    shuffled = [_leg_fix(_MID2, 300), _leg_fix(_VET, 400), _leg_fix(_H1, 100), _leg_fix(_MID1, 200)]
+    j = derive_capability(Capability.JOURNEY, shuffled)["journey"]
+    assert (j.origin.lat, j.origin.lon) == _H1
+    assert (j.destination.lat, j.destination.lon) == _VET
+
+
+def test_journey_distinguishes_a_loop_from_a_transfer():
+    """A drive out and back has ~zero straight-line distance and a large path. Reporting only
+    the first would call a real journey a non-journey."""
+    capabilities.set_place_book([])
+    j = derive_capability(Capability.JOURNEY, [
+        _leg_fix(_H1, 100), _leg_fix(_VET, 200), _leg_fix(_H1, 300),
+    ])["journey"]
+    assert j.straight_line_m == 0.0
+    assert j.path_m > 20_000
+
+
+def test_journey_mode_is_the_streams_majority_moving_claim():
+    """Read from the phone's own classifier, and `stationary` excluded — a journey's endpoints
+    are settled by construction, so counting them would let a traffic jam relabel a drive."""
+    capabilities.set_place_book([])
+    sources = [
+        _leg_fix(_H1, 100, ["stationary"]),
+        _leg_fix(_MID1, 200, ["driving"]),
+        _leg_fix(_MID2, 300, ["driving"]),
+        _leg_fix(_VET, 400, ["stationary"]),
+    ]
+    assert derive_capability(Capability.JOURNEY, sources)["journey"].mode == "driving"
+
+
+def test_journey_mode_is_none_when_nothing_claimed_one():
+    """Honest: the journey happened, we just can't say how."""
+    capabilities.set_place_book([])
+    j = derive_capability(Capability.JOURNEY, [_leg_fix(_H1, 100), _leg_fix(_VET, 200)])["journey"]
+    assert j.mode is None
+
+
+def test_journey_needs_two_fixes():
+    """A single point is not a journey; no fragment beats a fabricated one."""
+    capabilities.set_place_book([])
+    assert derive_capability(Capability.JOURNEY, [_leg_fix(_H1, 100)]) == {}
+    assert derive_capability(Capability.JOURNEY, [{"message": {"timestamp": 1}}]) == {}
+
+
+# --- vehicle --------------------------------------------------------------------
+#
+# The deriver classifies STRUCTURALLY: a source with coordinates is movement, one without is
+# corroboration. So these fixtures never have to match a real event name for it to work.
+
+
+def _mark(name, ts):
+    """A corroborating source — no coordinates, which is what makes it corroboration."""
+    return {"message": {"id": f"m{ts}", "name": name, "timestamp": ts}}
+
+
+def test_vehicle_reports_the_corroborating_names_it_actually_found():
+    v = derive_capability(Capability.VEHICLE, [
+        _leg_fix(_H1, 100), _mark("got_into_the_car", 110),
+        _leg_fix(_VET, 400), _mark("got_out_the_car", 390),
+    ])["vehicle"]
+    assert v.evidence == ["got_into_the_car", "got_out_the_car"]   # chronological
+    assert v.confirmed is True
+
+
+def test_vehicle_is_absent_without_corroboration():
+    """The borrowed-car case: 6 of 6 such journeys had no boundary inside the span. No fragment
+    rather than known=False — the peripherals could simply have been off."""
+    assert derive_capability(Capability.VEHICLE, [_leg_fix(_H1, 100), _leg_fix(_VET, 400)]) == {}
+
+
+def test_vehicle_one_signal_is_evidence_but_not_confirmed():
+    """2 of the 14 own-car journeys had only an exit boundary inside the span."""
+    v = derive_capability(Capability.VEHICLE, [
+        _leg_fix(_H1, 100), _leg_fix(_VET, 400), _mark("got_out_the_car", 390),
+    ])["vehicle"]
+    assert v.evidence == ["got_out_the_car"] and v.confirmed is False
+
+
+def test_vehicle_counts_distinct_signals_not_repeats():
+    """A lock burst while unloading groceries is one kind of evidence, not three."""
+    v = derive_capability(Capability.VEHICLE, [
+        _leg_fix(_H1, 100),
+        _mark("got_out_the_car", 300), _mark("got_out_the_car", 320), _mark("got_out_the_car", 340),
+        _leg_fix(_VET, 400),
+    ])["vehicle"]
+    assert v.evidence == ["got_out_the_car"] and v.confirmed is False
+
+
+def test_vehicle_never_learns_a_concrete_event_name():
+    """Framework code must not name concrete signals — the deriver reports whatever it found,
+    so a future corroborating source needs no change here."""
+    v = derive_capability(Capability.VEHICLE, [
+        _leg_fix(_H1, 100), _mark("bicycle_unlocked", 150), _mark("helmet_paired", 160),
+        _leg_fix(_VET, 400),
+    ])["vehicle"]
+    assert v.evidence == ["bicycle_unlocked", "helmet_paired"] and v.confirmed is True

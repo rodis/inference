@@ -6,6 +6,7 @@ from inference.engines.decaying_window import DecayingWindowEngine
 from inference.engines.session_gated_window import SessionGatedWindowEngine
 from inference.engines.session_window import SessionWindowEngine
 from inference.engines.stay_window import StayWindowEngine
+from inference.engines.trip_window import TripWindowEngine
 from inference.engines.validated_session_window import ValidatedSessionWindowEngine
 from inference.engines.weighted_window import WeightedWindowEngine
 
@@ -470,3 +471,318 @@ def test_validated_coverage_is_a_true_fraction_of_the_session(state, event):
     for off in (10, 20, 30):
         eng.decide(_fix(event, T + off), state)                       # 3 fixes, coverage 20/3600
     assert eng.decide(event("out", T + 3600), state) is not None       # abstains on coverage
+
+
+# --- trip_window ----------------------------------------------------------------
+#
+# Mirrors trip.yml. _HOME -> _AWAY is 4025m, so a run between them clears min_distance_m 500;
+# _HOME -> _NEAR is 9.4m (a parked phone jittering), which must not become a journey.
+
+
+def _trip(**over):
+    cfg = {"min_speed_kmh": 10, "settle_seconds": 180, "min_distance_m": 500,
+           "min_duration_seconds": 180, "min_fixes": 4, "max_gap_seconds": 1800,
+           "max_duration_seconds": 21600, "max_accuracy_m": 100}
+    cfg.update(over)
+    return TripWindowEngine(cfg)
+
+
+def _still(event, t, **over):
+    """A fix the stream itself calls stationary."""
+    return _fix(event, t, motion=["stationary"], vel=0, **over)
+
+
+def _drive(event, t, **over):
+    return _fix(event, t, motion=["driving"], vel=60, **over)
+
+
+def _between(a, b, frac):
+    """A point `frac` of the way from a to b, so a run has intermediate fixes to accumulate."""
+    return dict(lat=a["lat"] + (b["lat"] - a["lat"]) * frac,
+                lon=a["lon"] + (b["lon"] - a["lon"]) * frac)
+
+
+def _leg(eng, state, event, t0, *, frm=_HOME, to=_AWAY, n=6, step=60):
+    """Drive `frm`->`to` in n moving fixes. Returns the timestamp of the last one."""
+    for i in range(n):
+        eng.decide(_drive(event, t0 + i * step, **_between(frm, to, (i + 1) / n)), state)
+    return t0 + (n - 1) * step
+
+
+def _arrive(eng, state, event, t, *, at=_AWAY, settle=240, **over):
+    """Stop at `at` and stay stopped. Arrival is only KNOWABLE once settle_seconds have
+    passed, so this takes two fixes: the first is the arrival, the second confirms it and is
+    the one that closes the trip. Returns that second fix's decision.
+    """
+    assert eng.decide(_still(event, t, **at, **over), state) is None
+    return eng.decide(_still(event, t + settle, **at, **over), state)
+
+
+def test_trip_consumes_only_the_location_stream():
+    assert _trip().input_event_names() == {"location_ping"}
+
+
+def test_trip_spans_departure_to_arrival_using_the_settled_fixes(state, event):
+    """Both bounds are SETTLED fixes, not moving ones. Clipping to the first/last moving fix
+    would have put the 30-07 vet trip's origin ~600m down the road, outside Home's POI radius,
+    losing the origin label — so the anchor is the point of the design."""
+    eng = _trip()
+    eng.decide(_still(event, T, **_HOME), state)                       # the departure anchor
+    last = _leg(eng, state, event, T + 60)
+    d = _arrive(eng, state, event, last + 60)
+    assert d is not None
+    assert d.occurred_at == last + 60                                  # arrival: the FIRST settled fix
+    assert d.sources[0]["message"]["timestamp"] == T                   # departure: the anchor
+    assert d.sources[-1]["message"]["timestamp"] == last + 60          # not the confirming fix
+    assert d.score == 6                                                # six moving fixes
+    assert all("message" in s for s in d.sources)
+
+
+def test_trip_keeps_a_traffic_light_inside_the_journey(state, event):
+    """A stop shorter than settle_seconds is not an arrival, and its fixes belong to the trip."""
+    eng = _trip()
+    eng.decide(_still(event, T, **_HOME), state)
+    eng.decide(_drive(event, T + 60, **_between(_HOME, _AWAY, 0.2)), state)
+    mid = _between(_HOME, _AWAY, 0.3)
+    assert eng.decide(_still(event, T + 120, **mid), state) is None     # red light
+    assert eng.decide(_still(event, T + 180, **mid), state) is None     # still red (60s < 180s)
+    last = _leg(eng, state, event, T + 240, frm=mid, n=4)              # moves off again
+    d = _arrive(eng, state, event, last + 60)
+    assert d is not None
+    # One journey, and the two red-light fixes were spliced back into its lineage.
+    assert [s["message"]["timestamp"] for s in d.sources][:4] == [T, T + 60, T + 120, T + 180]
+
+
+def test_trip_ignores_wandering_that_covers_no_ground(state, event):
+    """15 minutes and 510m of walking path around the vet car park covered a ~100m box. A
+    journey needs EXTENT, which is what keeps drift from becoming a trip."""
+    eng = _trip()
+    eng.decide(_still(event, T, **_HOME), state)
+    for i in range(6):
+        eng.decide(_fix(event, T + 60 + i * 60, motion=["walking"],
+                        **(_NEAR if i % 2 else _HOME)), state)
+    assert _arrive(eng, state, event, T + 500, at=_HOME) is None
+
+
+def test_trip_ignores_a_run_too_short_to_be_a_journey(state, event):
+    eng = _trip()
+    eng.decide(_still(event, T, **_HOME), state)
+    _leg(eng, state, event, T + 10, n=6, step=5)                       # 4km but only 45s
+    assert _arrive(eng, state, event, T + 60) is None
+
+
+def test_trip_ignores_a_run_with_too_few_fixes(state, event):
+    """The fixes are the ONLY evidence here, so sparse sampling has nothing to report — the
+    opposite polarity to validated_session_window, where sparse fixes abstain."""
+    eng = _trip()
+    eng.decide(_still(event, T, **_HOME), state)
+    last = _leg(eng, state, event, T + 60, n=3, step=120)               # 3 < min_fixes 4
+    assert _arrive(eng, state, event, last + 60) is None
+
+
+def test_trip_motion_beats_a_zero_velocity(state, event):
+    """`motion: driving` with vel 0 is a car at a light. Reading vel first would end the trip
+    there and fragment one journey into two."""
+    eng = _trip()
+    eng.decide(_still(event, T, **_HOME), state)
+    mid = _between(_HOME, _AWAY, 0.5)
+    eng.decide(_fix(event, T + 60, motion=["driving"], vel=0, **mid), state)
+    last = _leg(eng, state, event, T + 120, frm=mid, n=4)
+    d = _arrive(eng, state, event, last + 60)
+    assert d is not None and d.score == 5                               # the vel-0 fix counted
+
+
+def test_trip_falls_back_to_implied_speed_when_the_fix_claims_nothing(state, event):
+    """~23% of real fixes carry no motion array and ~13% no vel; geometry is the last rung."""
+    eng = _trip()
+    eng.decide(_still(event, T, **_HOME), state)
+    for i in range(6):
+        eng.decide(_fix(event, T + 60 + i * 60, **_between(_HOME, _AWAY, (i + 1) / 6)), state)
+    d = _arrive(eng, state, event, T + 480)
+    assert d is not None and d.score == 6
+
+
+def test_trip_stationary_claim_beats_a_noisy_velocity(state, event):
+    """Real fixes report vel 4-7 while the phone sits at home; `motion` says stationary."""
+    eng = _trip()
+    eng.decide(_still(event, T, **_HOME), state)
+    for i in range(6):
+        eng.decide(_fix(event, T + 60 + i * 60, motion=["stationary"], vel=7,
+                        **(_NEAR if i % 2 else _HOME)), state)
+    assert _arrive(eng, state, event, T + 500, at=_HOME) is None
+
+
+def test_trip_gap_ends_the_trip_where_it_was_last_seen(state, event):
+    """A trip cannot be claimed across a blackout it has no evidence for."""
+    eng = _trip(max_gap_seconds=600)
+    eng.decide(_still(event, T, **_HOME), state)
+    last = _leg(eng, state, event, T + 60)
+    d = eng.decide(_still(event, last + 5000, **_FAR), state)            # 5000s of silence
+    assert d is not None
+    assert d.occurred_at == last                                        # the last MOVING fix
+    assert d.sources[-1]["message"]["timestamp"] == last                # no arrival fix to point at
+
+
+def test_trip_closes_a_buffered_arrival_across_a_later_gap(state, event):
+    """iOS stops sampling once you are still, so the fix that would CONFIRM settling may never
+    come. The arrival is already buffered, so the next fix — whenever it lands — closes the
+    trip at it rather than losing the journey."""
+    eng = _trip(max_gap_seconds=600)
+    eng.decide(_still(event, T, **_HOME), state)
+    last = _leg(eng, state, event, T + 60)
+    assert eng.decide(_still(event, last + 60, **_AWAY), state) is None  # arrival, unconfirmed
+    d = eng.decide(_still(event, last + 5000, **_AWAY), state)           # silence, then one fix
+    assert d is not None and d.occurred_at == last + 60                  # closed AT the arrival
+
+
+def test_trip_starts_a_second_journey_after_closing_one(state, event):
+    eng = _trip()
+    eng.decide(_still(event, T, **_HOME), state)
+    last = _leg(eng, state, event, T + 60)
+    assert _arrive(eng, state, event, last + 60) is not None
+    back = _leg(eng, state, event, last + 600, frm=_AWAY, to=_HOME)
+    d = _arrive(eng, state, event, back + 60, at=_HOME)
+    assert d is not None
+    # The arrival fix of trip 1 became the departure anchor of trip 2.
+    assert d.sources[0]["message"]["timestamp"] == last + 60
+
+
+def test_trip_skips_out_of_order_and_implausible_fixes(state, event):
+    eng = _trip()
+    eng.decide(_still(event, T, **_HOME), state)
+    last = _leg(eng, state, event, T + 60)
+    assert eng.decide(_drive(event, T + 30, **_AWAY), state) is None     # late arrival: ignored
+    assert eng.decide(_drive(event, last + 1, acc=5, **_FAR), state) is None  # 3km in 1s: bad fix
+    d = _arrive(eng, state, event, last + 60)
+    assert d is not None and d.score == 6                               # neither fix counted
+
+
+def test_trip_ignores_vague_fixes(state, event):
+    eng = _trip()
+    eng.decide(_still(event, T, **_HOME), state)
+    last = _leg(eng, state, event, T + 60)
+    # Too vague to place, so it cannot become the arrival — the run stays open.
+    assert eng.decide(_still(event, last + 60, acc=500, **_AWAY), state) is None
+    d = _arrive(eng, state, event, last + 120)
+    assert d is not None and d.sources[-1]["message"]["timestamp"] == last + 120
+
+
+def test_trip_without_an_anchor_starts_at_its_first_moving_fix(state, event):
+    """Cold start: the runtime rebuilds state from the changelog, so a run can begin with no
+    settled fix behind it. Degraded (the origin is clipped), not wrong."""
+    eng = _trip()
+    last = _leg(eng, state, event, T)
+    d = _arrive(eng, state, event, last + 60)
+    assert d is not None and d.sources[0]["message"]["timestamp"] == T
+
+
+def test_trip_ignores_a_stale_anchor(state, event):
+    """A settled fix from hours ago is not a departure point, it is a stale one."""
+    eng = _trip()
+    eng.decide(_still(event, T, **_HOME), state)
+    last = _leg(eng, state, event, T + 5000)             # anchor 5000s old vs max_gap 1800
+    d = _arrive(eng, state, event, last + 60)
+    assert d is not None and d.sources[0]["message"]["timestamp"] == T + 5000
+
+
+# --- trip_window: corroboration (the `vehicle` capability's evidence) -----------
+
+
+def _corroborated(**over):
+    return _trip(corroborating_events=["got_into_the_car", "got_out_the_car"], **over)
+
+
+def test_trip_consumes_the_corroborating_events_too():
+    assert _corroborated().input_event_names() == {
+        "location_ping", "got_into_the_car", "got_out_the_car"}
+
+
+def test_trip_folds_corroboration_that_falls_inside_the_span(state, event):
+    eng = _corroborated()
+    eng.decide(_still(event, T, **_HOME), state)
+    eng.decide(event("got_into_the_car", T + 30), state)                # after departure
+    last = _leg(eng, state, event, T + 60)
+    eng.decide(event("got_out_the_car", last - 10), state)              # before arrival
+    d = _arrive(eng, state, event, last + 60)
+    assert d is not None
+    names = [s["message"]["name"] for s in d.sources]
+    assert names.count("got_into_the_car") == 1 and names.count("got_out_the_car") == 1
+    assert [s["message"]["timestamp"] for s in d.sources] == \
+        sorted(s["message"]["timestamp"] for s in d.sources)            # lineage stays chronological
+
+
+def test_corroboration_never_widens_the_interval(state, event):
+    """A mark outside the span would rewrite the interval capability, which projects from the
+    lineage extent — and on the end side would break occurred_at == interval.ended_at."""
+    eng = _corroborated()
+    eng.decide(_still(event, T, **_HOME), state)
+    eng.decide(event("got_into_the_car", T - 300), state)               # before the departure
+    last = _leg(eng, state, event, T + 60)
+    d = _arrive(eng, state, event, last + 60)
+    assert d is not None
+    ts = [s["message"]["timestamp"] for s in d.sources]
+    assert min(ts) == T and max(ts) == last + 60 == d.occurred_at       # span untouched
+    assert "got_into_the_car" not in [s["message"]["name"] for s in d.sources]
+
+
+def test_corroboration_after_arrival_is_excluded(state, event):
+    """The measured case: a phantom exit 31s past a borrowed-car arrival claimed the vehicle at
+    a 2-minute pad, and was correctly excluded at zero."""
+    eng = _corroborated()
+    eng.decide(_still(event, T, **_HOME), state)
+    last = _leg(eng, state, event, T + 60)
+    eng.decide(event("got_out_the_car", last + 91), state)              # 31s past the arrival fix
+    d = _arrive(eng, state, event, last + 60)
+    assert d is not None and "got_out_the_car" not in [s["message"]["name"] for s in d.sources]
+
+
+def test_corroboration_latches_before_the_run_exists(state, event):
+    """The entry boundary fires when you get in — BEFORE the first moving fix, so before the run
+    opens. It led the span's first moving fix by up to 15 min on sparsely-sampled mornings, so a
+    latch is required or `confirmed` is unreachable."""
+    eng = _corroborated()
+    eng.decide(_still(event, T, **_HOME), state)
+    eng.decide(event("got_into_the_car", T + 5), state)                 # no run open yet
+    last = _leg(eng, state, event, T + 600)                             # motion starts 10 min later
+    d = _arrive(eng, state, event, last + 60)
+    assert d is not None and "got_into_the_car" in [s["message"]["name"] for s in d.sources]
+
+
+def test_corroboration_never_opens_or_closes_a_run(state, event):
+    """A journey is detected from motion alone; corroboration only rides along."""
+    eng = _corroborated()
+    assert eng.decide(event("got_into_the_car", T), state) is None
+    assert eng.decide(event("got_out_the_car", T + 60), state) is None
+    assert state.get("run") is None                                     # nothing opened
+
+
+def test_corroboration_does_not_rescue_a_journey_that_went_nowhere(state, event):
+    """Evidence rides along, it does not shape the verdict — the guardrails still judge on
+    movement, so a car-flavoured non-journey is still not a journey."""
+    eng = _corroborated()
+    eng.decide(_still(event, T, **_HOME), state)
+    eng.decide(event("got_into_the_car", T + 30), state)
+    for i in range(6):
+        eng.decide(_fix(event, T + 60 + i * 60, motion=["walking"],
+                        **(_NEAR if i % 2 else _HOME)), state)
+    eng.decide(event("got_out_the_car", T + 450), state)
+    assert _arrive(eng, state, event, T + 500, at=_HOME) is None
+
+
+def test_a_second_journey_cannot_reuse_the_first_ones_evidence(state, event):
+    eng = _corroborated()
+    eng.decide(_still(event, T, **_HOME), state)
+    eng.decide(event("got_into_the_car", T + 30), state)
+    last = _leg(eng, state, event, T + 60)
+    assert _arrive(eng, state, event, last + 60) is not None             # consumes the mark
+    back = _leg(eng, state, event, last + 600, frm=_AWAY, to=_HOME)
+    d = _arrive(eng, state, event, back + 60, at=_HOME)
+    assert d is not None and "got_into_the_car" not in [s["message"]["name"] for s in d.sources]
+
+
+def test_stale_marks_do_not_accumulate(state, event):
+    """Bounded state: a mark older than max_duration_seconds can't belong to the next journey."""
+    eng = _corroborated(max_duration_seconds=600)
+    eng.decide(event("got_into_the_car", T), state)
+    eng.decide(event("got_out_the_car", T + 5000), state)                # prunes the first
+    assert [m["ts"] for m in state.get("marks")] == [T + 5000]

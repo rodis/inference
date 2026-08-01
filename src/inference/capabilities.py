@@ -15,9 +15,10 @@ Import-clean (pure Python + the domain model); importing this module registers t
 built-ins, the same side-effect pattern as `inference.engines`.
 """
 
+from collections import Counter
 from collections.abc import Callable
 
-from inference.event import Capability, Interval, Place
+from inference.event import Capability, Interval, Journey, Place, Vehicle
 from inference.geo import haversine_m
 
 # capability → deriver(sources) -> fragment of InferredEvent fields
@@ -104,6 +105,36 @@ def _match_place(lat: float, lon: float) -> tuple[dict, float] | None:
     return min(hits, key=lambda h: h[1]) if hits else None
 
 
+def _fixes(sources: list[dict]) -> list[tuple[float, float]]:
+    """The (lat, lon) of every source that carries coordinates, in source order. Malformed or
+    non-geo sources are skipped rather than fatal — one bad row must not break shaping.
+    """
+    out = []
+    for s in sources:
+        msg = s.get("message") or {}
+        lat, lon = msg.get("lat"), msg.get("lon")
+        if lat is None or lon is None:
+            continue
+        try:
+            out.append((float(lat), float(lon)))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _place_at(lat: float, lon: float, spread_m: float) -> Place:
+    """A `Place` at a point, labelled against the known-place book. The one place the
+    reference-data lookup is applied, so `place` and `journey`'s endpoints label identically.
+    """
+    match = _match_place(lat, lon)
+    return Place(
+        lat=lat, lon=lon, spread_m=round(spread_m, 1),
+        label=str(match[0].get("name", "")) if match else None,
+        distance_m=round(match[1], 1) if match else None,
+        everyday=bool(match[0].get("everyday", False)) if match else None,
+    )
+
+
 @register_capability(Capability.PLACE)
 def _place(sources: list[dict]) -> dict:
     """Where the event happened: the centroid of its contributing fixes, plus the known place
@@ -113,26 +144,114 @@ def _place(sources: list[dict]) -> dict:
     yields NO place fragment rather than a fabricated point — declaring the capability on a
     definition whose sources aren't geo is then visibly a no-op instead of a lie.
     """
-    fixes = []
-    for s in sources:
-        msg = s.get("message") or {}
-        lat, lon = msg.get("lat"), msg.get("lon")
-        if lat is None or lon is None:
-            continue
-        try:
-            fixes.append((float(lat), float(lon)))
-        except (TypeError, ValueError):
-            continue
+    fixes = _fixes(sources)
     if not fixes:
         return {}
 
     clat = sum(f[0] for f in fixes) / len(fixes)
     clon = sum(f[1] for f in fixes) / len(fixes)
     spread = max((haversine_m(clat, clon, la, lo) for la, lo in fixes), default=0.0)
-    match = _match_place(clat, clon)
-    return {"place": Place(
-        lat=clat, lon=clon, spread_m=round(spread, 1),
-        label=str(match[0].get("name", "")) if match else None,
-        distance_m=round(match[1], 1) if match else None,
-        everyday=bool(match[0].get("everyday", False)) if match else None,
+    return {"place": _place_at(clat, clon, spread)}
+
+
+@register_capability(Capability.JOURNEY)
+def _journey(sources: list[dict]) -> dict:
+    """Where the event went: two labelled endpoints, two distances, and the mode.
+
+    Endpoints come from the **event-time order** of the sources, not their list order. The
+    order an engine happened to append in is an implementation detail, whereas the earliest
+    and latest fix are facts about the evidence — the same reasoning that has `_interval`
+    take min/max rather than first/last.
+
+    `path_m` sums the consecutive legs in that same order, so it measures the route actually
+    sampled; sparse sampling shortens it (a cut corner), which is a known and acceptable
+    under-estimate. `straight_line_m` is origin→destination and is NOT a substitute: a loop
+    journey has one near zero and the other large.
+
+    Fewer than two distinct fixes yields no fragment — a single point is not a journey, and
+    fabricating one would be worse than the capability visibly not applying.
+    """
+    located = []
+    for s in sources:
+        msg = s.get("message") or {}
+        lat, lon = msg.get("lat"), msg.get("lon")
+        if lat is None or lon is None:
+            continue
+        try:
+            located.append((int(msg.get("timestamp", 0)), float(lat), float(lon), msg))
+        except (TypeError, ValueError):
+            continue
+    if len(located) < 2:
+        return {}
+
+    located.sort(key=lambda f: f[0])
+    _, olat, olon, _ = located[0]
+    _, dlat, dlon, _ = located[-1]
+    path = sum(
+        haversine_m(a[1], a[2], b[1], b[2])
+        for a, b in zip(located, located[1:], strict=False)
+    )
+    return {"journey": Journey(
+        # spread 0.0: each endpoint is one fix by construction (see `trip_window`), so it has
+        # no spread — the endpoints are boundaries, not clusters.
+        origin=_place_at(olat, olon, 0.0),
+        destination=_place_at(dlat, dlon, 0.0),
+        straight_line_m=round(haversine_m(olat, olon, dlat, dlon), 1),
+        path_m=round(path, 1),
+        mode=_mode([f[3] for f in located]),
     )}
+
+
+@register_capability(Capability.VEHICLE)
+def _vehicle(sources: list[dict]) -> dict:
+    """Was this journey corroborated by something other than the movement itself?
+
+    The classification is **structural, not by name**: a source carrying coordinates is part of
+    the movement, and a source carrying none is corroboration. So this deriver reports whatever
+    event names the evidence actually contained and never learns that a car boundary is called
+    `got_into_the_car` — which definitions the corroboration comes from is the engine's config,
+    and framework code stays free of concrete event names.
+
+    There is no tolerance window: the engine folds a corroborating source only when it lies
+    strictly inside the span, so anything reaching this deriver is already contained. That
+    matters twice over. It keeps `interval` exact — a source outside the span would silently
+    rewrite `started_at`/`ended_at`, the trap `validated_session_window` documents for its own
+    fixes — and it measured *better*: at a 2-minute pad a phantom `got_out` 31 s past a
+    borrowed-car arrival leaked in, while at zero the separation was perfect.
+
+    Names are deduplicated in first-seen event-time order, so `evidence` reads chronologically
+    and `confirmed` counts distinct signals rather than repeats (a lock burst while unloading
+    groceries is one kind of evidence, not three).
+    """
+    seen: dict[str, int] = {}
+    for s in sources:
+        msg = s.get("message") or {}
+        if msg.get("lat") is not None and msg.get("lon") is not None:
+            continue                                   # part of the movement, not corroboration
+        name = msg.get("name")
+        if not isinstance(name, str):
+            continue
+        ts = msg.get("timestamp", 0)
+        if name not in seen or ts < seen[name]:
+            seen[name] = ts
+    if not seen:
+        return {}                                      # no corroboration — assert nothing
+    evidence = sorted(seen, key=lambda n: (seen[n], n))
+    return {"vehicle": Vehicle(evidence=evidence, confirmed=len(evidence) >= 2)}
+
+
+def _mode(messages: list[dict]) -> str | None:
+    """The majority *moving* motion classification across the evidence.
+
+    Read from the stream's own `motion` array rather than inferred from speed — the phone
+    already ran that classifier. `stationary` is excluded: every journey contains stopped
+    fixes (its two endpoints are settled by construction), so counting them would let a long
+    traffic jam relabel a drive. Ties break on the first-seen label, which is arbitrary but
+    stable; None when nothing claimed a mode.
+    """
+    counts = Counter(
+        m for msg in messages
+        for m in (msg.get("motion") or [])
+        if isinstance(m, str) and m != "stationary"
+    )
+    return counts.most_common(1)[0][0] if counts else None

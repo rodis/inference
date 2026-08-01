@@ -95,11 +95,11 @@ Steps 2–4 are transport-agnostic. Only step 1's Neon read and step 5 know abou
 
 | File | Lines | Role | May import |
 |---|---|---|---|
-| [`event.py`](../src/inference/event.py) | 148 | The domain model — `InferredEvent`, `Capability`, `Interval`, `Place`, `Contributor` | pydantic only |
-| [`capabilities.py`](../src/inference/capabilities.py) | 138 | The **enricher seam** — capability registry + derivers | `event`, `geo` |
+| [`event.py`](../src/inference/event.py) | 220 | The domain model — `InferredEvent`, `Capability`, `Interval`, `Place`, `Journey`, `Vehicle`, `Contributor` | pydantic only |
+| [`capabilities.py`](../src/inference/capabilities.py) | 257 | The **enricher seam** — capability registry + derivers | `event`, `geo` |
 | [`geo.py`](../src/inference/geo.py) | 55 | Haversine + the implausible-jump guard | `math` |
 | [`engines/base.py`](../src/inference/engines/base.py) | 102 | `Engine` protocol, `Decision`, `ScopedState`, the registry | stdlib |
-| [`engines/*.py`](../src/inference/engines/) | 53–107 ea. | Six strategies | `engines.base`, `geo` |
+| [`engines/*.py`](../src/inference/engines/) | 66–355 ea. | Seven strategies | `engines.base`, `geo` |
 | [`runtime/definition.py`](../src/inference/runtime/definition.py) | 59 | `EventDefinition` — the YAML schema + loader | pydantic, yaml, `event` |
 | [`runtime/config.py`](../src/inference/runtime/config.py) | 45 | Env-backed settings, read lazily | `os` |
 | [`runtime/core.py`](../src/inference/runtime/core.py) | 276 | `RoutingPlan`, `Router`, `Shaper`, `StateStore` port | all of the above |
@@ -404,7 +404,7 @@ Two `apply` steps, two concerns, deliberately not one function.
 | Question answered | *Did* something fire, and with what identity? | What *data* does the fired event carry? |
 | Stateful | yes — per-entity `State` | no — pure map |
 | Knows about | the consumer graph, engines, recursion | the domain model, capabilities, lineage |
-| Mints | `id`, `name`, `inference_type`, `user_id`, `timestamp` | `derived_from`, `interval`, `place`, the wrapper |
+| Mints | `id`, `name`, `inference_type`, `user_id`, `timestamp` | `derived_from`, `interval`, `place`, `journey`, `vehicle`, the wrapper |
 | Never touches | lineage, capabilities, the wrapper | state, engines, routing |
 
 This split is what lets the inference logic and the data model evolve independently. Adding the
@@ -489,6 +489,7 @@ flowchart LR
     trip["car_trip<br/><i>validated_session_window</i><br/>interval"]
     chg["phone_is_charging<br/><i>session_window</i><br/>interval"]
     stay["stay<br/><i>stay_window</i><br/>interval + place"]
+    gtrip["trip<br/><i>trip_window</i><br/>interval + journey + vehicle"]
 
     pwr --> gin
     cp --> gin
@@ -507,13 +508,29 @@ flowchart LR
     pwr --> chg
     upwr --> chg
     ping --> stay
+    ping --> gtrip
+    gin -.->|"CORROBORATION<br/>evidence only, never a boundary"| gtrip
+    gout -.->|"CORROBORATION"| gtrip
 
     style gin fill:#1e293b,stroke:#60a5fa,color:#dbeafe
     style gout fill:#1e293b,stroke:#60a5fa,color:#dbeafe
     style trip fill:#0f2a1d,stroke:#34d399,color:#d1fae5
     style chg fill:#0f2a1d,stroke:#34d399,color:#d1fae5
     style stay fill:#0f2a1d,stroke:#34d399,color:#d1fae5
+    style gtrip fill:#0f2a1d,stroke:#34d399,color:#d1fae5
 ```
+
+**`trip` and `car_trip` are not rivals.** `trip` is the generic journey, derived from motion in
+`location_ping` alone, so it sees a borrowed car, a passenger seat, a train or a walk; `car_trip` is
+the car-*evidenced* specialisation, and the two overlap wherever the drive was in your own car. The
+graph shows why: `car_trip` sits behind two derived detectors that only exist because your car's
+peripherals talk to your phone, while `trip` hangs directly off the raw stream. See ADR 0010.
+
+The dotted edges into `trip` are the *same* two detectors in a different role. `car_trip` consumes
+them as **boundaries** — it pairs them, so their direction has to be right. `trip` consumes them as
+**evidence** — they only have to fall inside a span motion already established, so a boundary that
+fired on the wrong side still proves the car was involved. That is why "a `car_trip` is a journey with
+a `got_into` and a `got_out` in it" is now expressible as a capability rather than an event.
 
 **Zone crossing is gone entirely.** The `arrived_home_by_car` / `left_home_by_car` pair was
 deleted 2026-08-01 (issue #6) — both fired 17 times, then stopped dead on 2026-07-25 when the
@@ -846,7 +863,7 @@ wrapper or the Neon row columns; those are shaping concerns owned by `Shaper` an
 |---|---|---|
 | wrapper | `name`, `source_app`, `source_type`, `message` | `Shaper.shape` (derived) / Vector (raw) |
 | envelope | `id`, `name`, `inference_type`, `user_id`, `timestamp`, `derived_from` | `InferredEvent` |
-| capabilities | `interval?`, `place?` | `InferredEvent` + the deriver registry |
+| capabilities | `interval?`, `place?`, `journey?`, `vehicle?` | `InferredEvent` + the deriver registry |
 | row columns | `ingested_at`, … | Neon / Vector's persister |
 
 `InferredEvent` is strict (`extra="forbid"`): derived events are wholly minted by the runtime, so
@@ -1028,7 +1045,7 @@ fix is skipped and the track continues from the last trustworthy position.
 
 ## 11. Engine reference
 
-Six engines are registered; the five distinct strategies are grouped below
+Seven engines are registered; the six distinct strategies are grouped below
 (`validated_session_window` subclasses the pairing one and is documented with it). All share the
 shape `(event, scoped state) -> Decision | None`, and all are selected purely by a definition's
 `engine:` string.
@@ -1045,8 +1062,13 @@ flowchart TB
     end
     subgraph geo["Geometry — read the location stream"]
         stw["stay_window<br/>CLUSTER at departure"]
+        tw["trip_window<br/>MOVEMENT between two settled fixes"]
     end
 ```
+
+The two geometry engines are **complements over one stream**: `stay_window` emits what
+`trip_window` discards and vice versa. A day of `location_ping` decomposes into stays and the
+journeys between them, with no third category — which is why neither needs the other's output.
 
 ### Shared window semantics — and the differences that matter
 
@@ -1347,7 +1369,118 @@ Two deliberate omissions keep this a *strategy* rather than a policy: no POI nam
 generic `stay` carrying its centroid; labelling happens in the `place` capability), and no re-opening
 of a closed stay if you return (that is a second stay, correctly).
 
-### The retired seventh
+### `trip_window` (ADR 0010)
+
+Journey detection from **motion**, and the structural complement of `stay_window`. `car_trip` pairs
+boundaries inferred from *your* car's peripherals (lock / CarPlay / the BMW door), so a journey in
+someone else's car, as a passenger, by train or on foot is not mistuned there — it is **invisible**.
+The motivating case (2026-07-30, issue #41): a 24 km drive to the vet in a borrowed car, recorded by
+Overland in full (123 fixes out, 104 back, max 119 km/h, bounding-box extent 13.9 km each way — 46x
+`car_trip`'s displacement guardrail) and bracketed by two real `stay` events, **Home** then
+**ENNETSeeKLINIK für Kleintiere**. Nothing derived fired.
+
+| Config | Default | Meaning |
+|---|---|---|
+| `min_speed_kmh` | `10` | speed at which the *numeric* rungs call a fix moving (see the ladder below) |
+| `settle_seconds` | `180` | how long stopped counts as **arrived** rather than at a light; below `stay`'s `min_dwell_seconds` |
+| `min_distance_m` | `500` | bounding-box **extent** below which the entity went nowhere |
+| `min_duration_seconds` | `180` | shorter than this is not a journey |
+| `min_fixes` | `4` | moving fixes needed; the fixes are the *only* evidence here |
+| `max_gap_seconds` | `1800` | a sampling outage ends the trip where it was last seen |
+| `max_duration_seconds` | `21600` | a `motion` array stuck on `driving` can't accumulate forever |
+| `max_accuracy_m` | `100` | vaguer fixes are dropped entirely (mirrors `stay_window`) |
+| `max_speed_kmh` | `400` | plausibility guard |
+| `location_event` | `location_ping` | named, so this stays a strategy rather than a location policy |
+| `corroborating_events` | `()` | events that ride along as **evidence** without defining the span (see below) |
+
+State: one `run` (`{sources, la0, la1, lo0, lo1, first_ts, n_moving, last, still}`), one `settled`
+fix (the departure anchor) and a `marks` list (latched corroboration). `run`/`settled` are `None`
+between trips; `marks` is bounded by `max_duration_seconds`.
+
+**Is this fix moving? A three-rung ladder, and the order is load-bearing in both directions.**
+
+1. `motion` — iOS's own classification, present on 77% of real fixes. `driving`/`walking`/`running`/
+   `cycling` → moving; `stationary` → not; absent or empty is **no claim**, which falls through.
+2. `vel` — present on 87%. Compared against `min_speed_kmh`.
+3. speed implied against the last accepted fix — pure geometry, the last resort.
+
+Reading `vel` first would end a trip at a red light where a car reports `vel` 0 and `motion` still
+says `driving`, fragmenting one journey into two. Reading `motion` as authoritative-when-absent would
+lose the ~10 fixes per leg carrying neither field. And `min_speed_kmh` never has to model walking,
+because rung 1 already caught it — it only has to clear the 4-7 km/h `vel` noise real fixes report
+while the phone sits still at home.
+
+**Both bounds are settled fixes, not moving ones.** A trip is bounded by the last settled fix before
+departure (kept as `settled`, the anchor) and the first settled fix after arrival. Clipping to the
+first/last *moving* fix instead would have put the vet trip's origin ~600 m down the road, outside
+Home's POI radius — so the journey would have lost its origin label. A stale anchor (older than
+`max_gap_seconds`) is not a departure point, and a cold start with no anchor at all simply begins at
+the first moving fix: degraded, not wrong.
+
+```mermaid
+flowchart TB
+    fix["location_ping"] --> g1{"lat/lon + acc ≤ max_accuracy_m?"}
+    g1 -->|no| drop1["ignore"]
+    g1 -->|yes| g2{"in order AND plausible jump?"}
+    g2 -->|no| drop2["skip — late or confidently-wrong fix"]
+    g2 -->|yes| g3{"run open AND<br/>gap > max_gap_seconds?"}
+    g3 -->|yes| close1["CLOSE at the last fix seen —<br/>no evidence across a blackout"]
+    g3 -->|no| g4{"moving? (motion → vel → geometry)"}
+    g4 -->|"no, no run"| anchor["remember as the departure anchor"]
+    g4 -->|"yes, no run"| open["OPEN a run at the anchor"]
+    g4 -->|"yes, run open"| ext["splice any buffered stop back in,<br/>append, widen the box"]
+    g4 -->|"no, run open"| buf{"stopped ≥ settle_seconds?"}
+    buf -->|no| hold["buffer it — a light, not an arrival"]
+    buf -->|yes| close2["CLOSE at the FIRST buffered fix"]
+    close1 --> judge
+    close2 --> judge{"n_moving ≥ min_fixes AND<br/>duration ≥ min_duration AND<br/>extent ≥ min_distance_m?"}
+    judge -->|no| drop3["emit nothing — the run is consumed"]
+    judge -->|yes| fire["FIRE trip<br/>occurred_at = arrival"]
+
+    style fire fill:#0f2a1d,stroke:#34d399,color:#d1fae5
+```
+
+**Extent, not net displacement** — the same reasoning `validated_session_window` records: a drive out
+and back is still a drive. It is also what keeps drift from becoming a journey: at the vet, 15 minutes
+and 510 m of walking path covered a bounding box ~100 m across.
+
+`min_fixes` here is the **opposite polarity** to `validated_session_window`'s. There the fixes
+*refute* a session detected from other evidence, so sparse sampling must abstain and emit. Here they
+are the only evidence, so sparse sampling has nothing to report and emitting would be a fabrication.
+
+Replayed over 25 Jul - 1 Aug (the era with real ping density — before 25 Jul the lane produced 2-12
+fixes a day and no `motion` at all): **20 trips, all `mode=driving`, shortest 15.6 min**, against 14
+`car_trip`s of which one was a 15-second phantom. Six of the 20 have no `car_trip` at all — the vet
+legs of 25, 26 and 30 July. One `car_trip` (25 Jul 09:30, the lane's setup day, 8 fixes in 30 minutes
+including the 700 m-wrong `acc: 5` fix) has no `trip`, correctly: below `min_fixes` there is nothing
+to conclude.
+
+**Corroboration rides along; it never defines the span.** `corroborating_events` are consumed but
+can never open, extend or close a run — a journey is detected from motion alone, and the guardrails
+judge it identically whether or not any corroboration is configured. A corroborating event is folded
+into the decision's sources only when it lies **strictly inside** the closing span, and the `vehicle`
+capability reports what was found. This is what makes `car_trip` expressible as *"a trip with a
+`got_into` and a `got_out` in it"*, and it is why the direction ambiguity of issues #2/#23 stops
+mattering here: a boundary that fired on the wrong side still proves the car was involved, because it
+no longer has to **be** the boundary. On real data most trips' evidence reads `[got_out, got_into]` —
+the exit preceding the entry, i.e. issue #2's phantom, visible in the lineage and harmless.
+
+Two mechanics carry it. A **latch**, because the entry boundary fires when you get in — before the
+first moving fix, so before the run exists (measured: up to 15 minutes ahead of it on
+sparsely-sampled mornings); marks are therefore recorded whether or not a run is open, and consumed
+on close so a later journey can't reuse them. And **zero tolerance** on containment, for two
+independent reasons: a mark outside the span would widen the `interval` capability (which projects
+from the lineage extent — the corruption `validated_session_window` refuses its own fixes for) and on
+the `ended_at` side would break `occurred_at == interval.ended_at`; and containment measured *better*
+than a pad, since at ±2 min a phantom exit 31 s past a borrowed-car arrival leaked in and claimed the
+vehicle, while at zero the separation was perfect (all 14 own-car journeys kept evidence, all 6
+borrowed-car ones had none).
+
+Two deliberate omissions keep this a strategy: it says nothing about **mode** or about **where** the
+trip went — origin, destination and mode are derived from the same evidence by the `journey`
+capability. And a closed trip is never re-opened; going out again is a second trip, correctly.
+
+### The retired eighth
 
 `naive_bayes_window` was removed 2026-07-27. `car_door_closed` was its only consumer, gone since ADR
 0005, and its one distinguishing feature — emitting a *calibrated posterior* rather than an arbitrary
@@ -1358,14 +1491,43 @@ detection-local and never emitted. It lives in git history.
 
 ## 12. Capability reference
 
-| | `interval` | `place` |
-|---|---|---|
-| Enum member | `Capability.INTERVAL` | `Capability.PLACE` |
-| Model | `Interval(started_at, ended_at, +duration_seconds)` | `Place(lat, lon, spread_m, label?, distance_m?, everyday?)` |
-| Derived from | source `message.timestamp` values | source `message.lat`/`lon` + the place book |
-| Needs reference data | no | yes (degrades to `label=None`) |
-| Yields no fragment when | never (assumes non-empty sources) | no source carries coordinates |
-| Declared by | `car_trip`, `phone_is_charging`, `stay` | `stay` |
+| | `interval` | `place` | `journey` | `vehicle` |
+|---|---|---|---|---|
+| Enum member | `Capability.INTERVAL` | `Capability.PLACE` | `Capability.JOURNEY` | `Capability.VEHICLE` |
+| Model | `Interval(started_at, ended_at, +duration_seconds)` | `Place(lat, lon, spread_m, label?, distance_m?, everyday?)` | `Journey(origin, destination, straight_line_m, path_m, mode?)` | `Vehicle(evidence, confirmed)` |
+| Derived from | source `message.timestamp` values | source `message.lat`/`lon` + the place book | the earliest + latest located source, the legs between them, and `message.motion` | the sources carrying **no** coordinates |
+| Needs reference data | no | yes (degrades to `label=None`) | yes (degrades to `label=None` on both endpoints) | no |
+| Yields no fragment when | never (assumes non-empty sources) | no source carries coordinates | fewer than two located sources | every source carries coordinates |
+| Declared by | `car_trip`, `phone_is_charging`, `stay`, `trip` | `stay` | `trip` | `trip` |
+
+`place` and `journey` are **not** variants of one capability. `place` answers "where did this
+happen?" with a single centroid over all the evidence; for a 24 km drive that answer is a field
+beside the motorway. A journey's geography is two endpoints and what lies between them — a different
+fact, so it is its own capability, and `trip` declares `journey` rather than `place`.
+
+Both of `journey`'s endpoints are full `Place`s, sharing `place`'s reference-data lookup, so they
+label identically: the vet trip reads **Home → ENNETSeeKLINIK für Kleintiere**. They carry
+`spread_m` 0.0 because each is a single fix by construction (`trip_window`'s settled bounds) — a
+boundary, not a cluster. Both distances are reported because a loop separates them: out to a shop and
+back has `straight_line_m` ≈ 0 and `path_m` of 20 km, and reporting only the first would call a real
+journey a non-journey. `mode` is the majority *moving* `motion` claim, excluding `stationary` —
+every journey contains stopped fixes (its two endpoints are settled by construction), so counting
+them would let a long traffic jam relabel a drive.
+
+`vehicle` answers **"was this drive in *my* car?"** — the question that stopped needing its own event.
+It classifies **structurally, not by name**: a source with coordinates is part of the movement, one
+without is corroboration. So the deriver reports whatever event names the evidence contained and never
+learns that a car boundary is called `got_into_the_car` — which signals corroborate is the engine's
+`corroborating_events` config, and framework code stays free of concrete event names (a bicycle lock
+would work with no change here). `confirmed` marks two *distinct* corroborating signals, deduplicated
+so a lock burst while unloading groceries counts once rather than three times.
+
+**Presence is the claim; absence asserts nothing.** No fragment is emitted without corroboration,
+rather than `Vehicle(known=False)`, because the peripherals could simply have been off — the standing
+asymmetry between absence of evidence and evidence of absence. A consumer may read "no `vehicle`" as
+"probably not my car"; the data model does not say so. Measured over 25 July - 1 August: of 20
+journeys, the 14 in the user's own car all carried evidence (12 `confirmed`) and the 6 in a borrowed
+car carried none — perfect separation with no threshold.
 
 `derive_capability(capability, sources)` raises `RuntimeError` listing the registered capabilities if
 a declared one has no deriver. Since `Capability` is a pydantic-validated enum, a YAML *typo* is
@@ -1394,8 +1556,12 @@ definitions are:
 | | `open` | `{ts, event}` or `None` | on gate; cleared on fire or when stale |
 | | `last_fired` | `int` | on fire |
 | `stay_window` | `open` | `{clat, clon, n, first_ts, last_ts, last_lat, last_lon, events}` | every accepted fix |
+| `trip_window` | `run` | `{sources, la0, la1, lo0, lo1, first_ts, n_moving, last, still}` or `None` | every accepted fix while moving; cleared on close |
+| | `settled` | `{lat, lon, ts, event}` or `None` — the departure anchor | every accepted non-moving fix; cleared when a trip closes without an arrival fix |
+| | `marks` | `[{ts, event}]` — latched corroboration, pruned to `max_duration_seconds` | every corroborating event; those inside the span consumed on close |
 
-Concretely, for the current definition set: `stay:open`, `got_into_the_car:window`,
+Concretely, for the current definition set: `stay:open`, `trip:run`, `trip:settled`, `trip:marks`,
+`got_into_the_car:window`,
 `got_into_the_car:last_fired`, `got_out_the_car:window`, `got_out_the_car:open`,
 `got_out_the_car:last_fired`, `car_trip:open`, `car_trip:track`, `phone_is_charging:open`,
 …
