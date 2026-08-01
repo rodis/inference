@@ -1,0 +1,7 @@
+# Gitignored files a fresh worktree checkout needs (gitignore syntax, root-anchored).
+# Honored natively by Claude Code for worktrees it creates; applied manually by the
+# worktree-handoff skill for herdr-created ones. Never list .venv/ or node_modules/ —
+# they embed absolute paths / platform binaries and must be rebuilt in the worktree.
+/.claude/settings.local.json
+/workers/.env
+/workers/certs/

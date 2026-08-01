@@ -16,7 +16,13 @@ SAFETY, because this writes to the production topic:
   - `--only NAME` is REQUIRED, so you must name exactly which derived events to emit. Every
     definition fires during a replay, and most of those already exist in Neon from the live
     runtime — producing them all would duplicate history rather than repair it;
-  - it prints every event it will produce, and refuses to run without a time window.
+  - it prints every event it will produce, and refuses to run without a time window;
+  - it REFUSES to produce into a window that already holds those events. Re-derivation mints
+    fresh uuids, so a repeat inserts cleanly and silently doubles the history — nothing
+    downstream rejects or even notices it. `--replace` deletes them (and their lineage) first.
+    Note a LOCK would not have caught this: the likelier mistake is the same window rebuilt
+    twice in SEQUENCE, which mutual exclusion permits. The lock (scripts/lock.sh `history`)
+    is the second line, closing only the simultaneous case.
 
 It replays through the real `Router`/`Shaper` over the real definitions (same code path as
 production, minus Kafka), so what it emits is what the runtime would have emitted.
@@ -30,6 +36,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -86,6 +93,45 @@ def fetch_signals(dsn: str, user: str, since: str, until: str | None, names: set
     ]
 
 
+def existing_counts(dsn: str, user: str, since: str, until: str | None,
+                    names: set[str]) -> dict[str, int]:
+    """How many of each `names` event already sit in the window. The idempotency pre-flight.
+
+    Producing into a window that already holds these events DUPLICATES history rather than
+    repairing it — and the duplicates are semantic, not key collisions, because every run mints
+    fresh uuids. Nothing downstream notices: `events.id` is unique, so the rows insert cleanly
+    and the timeline quietly gains a second copy of every stay.
+    """
+    with psycopg.connect(dsn) as conn:
+        rows = conn.execute(
+            "SELECT name, count(*) FROM events "
+            "WHERE user_id = %s AND name = ANY(%s) AND occurred_at >= %s::timestamptz "
+            "  AND (%s::timestamptz IS NULL OR occurred_at < %s::timestamptz) "
+            "GROUP BY name",
+            (user, sorted(names), since, until, until),
+        ).fetchall()
+    return dict(rows)
+
+
+def delete_existing(dsn: str, user: str, since: str, until: str | None,
+                    names: set[str]) -> tuple[int, int]:
+    """Delete those events AND their lineage rows, returning (events, lineage_rows).
+
+    Deleting DERIVED events is sound: invariant 19 makes them a cache over retained raws. The
+    lineage half is not optional — dropping events while leaving `event_lineage` behind is how
+    263 orphan rows accumulated (issue #25), and they are invisible until something joins on
+    them.
+    """
+    with psycopg.connect(dsn) as conn, conn.transaction():
+        args = (user, sorted(names), since, until, until)
+        target = ("SELECT id FROM events WHERE user_id = %s AND name = ANY(%s) "
+                  "AND occurred_at >= %s::timestamptz "
+                  "AND (%s::timestamptz IS NULL OR occurred_at < %s::timestamptz)")
+        lin = conn.execute(f"DELETE FROM event_lineage WHERE child_id IN ({target})", args).rowcount
+        ev = conn.execute(f"DELETE FROM events WHERE id IN ({target})", args).rowcount
+    return ev, lin
+
+
 def main() -> None:
     if _p := find_dotenv(usecwd=True, raise_error_if_not_found=False):
         load_dotenv(_p)                      # NEON_DATABASE_URL + KAFKA_* for producing
@@ -99,6 +145,9 @@ def main() -> None:
     ap.add_argument("--events-dir", default=os.environ.get("EVENTS_DIR", "events"))
     ap.add_argument("--produce", action="store_true",
                     help="actually produce to the sink topic (default: dry run)")
+    ap.add_argument("--replace", action="store_true",
+                    help="delete the existing events (and their lineage) in the window first. "
+                         "Without this, producing into a non-empty window is refused.")
     args = ap.parse_args()
 
     dsn = os.environ.get("NEON_DATABASE_URL")
@@ -146,6 +195,45 @@ def main() -> None:
     if not emit:
         print("\nnothing to produce")
         return
+
+    # --- serialise history rewrites (second line of defence) -------------------------------
+    # The pre-flight below closes the SEQUENTIAL hole: the same window rebuilt twice. This
+    # closes the SIMULTANEOUS one, where two runs both pre-check, both see the same counts, and
+    # both produce. Held only across the produce, and released in `finally` so a crash mid-run
+    # cannot wedge every other agent (a 30-min TTL is the backstop if even that is skipped).
+    lock_sh = str(Path(__file__).resolve().parent / "lock.sh")
+    detail = f"rederive --only {','.join(sorted(wanted))} --since {args.since}"
+    if subprocess.run([lock_sh, "history", "acquire", detail]).returncode != 0:
+        raise SystemExit(1)                      # lock.sh already explained itself on stderr
+    try:
+        _produce(dsn, args, wanted, emit, plan)
+    finally:
+        subprocess.run([lock_sh, "history", "release"], stdout=subprocess.DEVNULL)
+
+
+def _produce(dsn, args, wanted, emit, plan) -> None:
+    # --- idempotency pre-flight ----------------------------------------------------------
+    # A lock would stop two SIMULTANEOUS runs. It would not stop the likelier mistake: the same
+    # window rebuilt twice in SEQUENCE. Since re-derivation mints fresh uuids there is no key to
+    # collide on, so a repeat inserts cleanly and silently doubles the history. Refuse instead,
+    # and make --replace the explicit way through.
+    #
+    # Stable ids would be the textbook fix and are WRONG here: Vector's postgres sink has no
+    # ON CONFLICT and one violation fails a whole 500-event batch, so a colliding id would wedge
+    # persistence rather than dedupe. The check has to happen before producing.
+    present = existing_counts(dsn, args.user, args.since, args.until, wanted)
+    if present:
+        listing = ", ".join(f"{n}={c}" for n, c in sorted(present.items()))
+        if not args.replace:
+            raise SystemExit(
+                f"\nrefusing to produce: the window already holds {listing}.\n"
+                f"Producing now would DUPLICATE those, not repair them — every run mints fresh\n"
+                f"uuids, so nothing downstream would reject or notice them.\n\n"
+                f"  rebuild it:   add --replace   (deletes those events + their lineage first)\n"
+                f"  narrow it:    move --since / --until off the existing range\n"
+            )
+        ev, lin = delete_existing(dsn, args.user, args.since, args.until, wanted)
+        print(f"--replace: deleted {ev} event(s) and {lin} lineage row(s) [{listing}]")
 
     # Produce through the real sink so the persist lane (Vector -> Neon) handles them exactly
     # as it handles live derived events: same wrapper, same topic, DB-set ingested_at.

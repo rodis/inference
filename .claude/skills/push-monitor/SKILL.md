@@ -351,7 +351,7 @@ is **five phases** and is not done at green CI — green CI only means an image 
 > ### Then release the deploy lock — always, success or failure
 >
 > ```bash
-> scripts/deploy-lock.sh release
+> scripts/lock.sh deploy release
 > ```
 >
 > `.githooks/pre-push` took a lock when this push left the machine so that one push travels the

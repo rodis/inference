@@ -76,7 +76,7 @@ Both workflows check out the **triggering commit**, not `main`, and share one co
 
 Pushing **both** code and `deploy/**` in one commit races on the `deploy-state` force-push — split them into separate pushes (code first). This is **enforced**, not conventional: `.githooks/pre-push` refuses such a push. Run `scripts/install-hooks.sh` once per clone.
 
-It also **serialises the deploy cycle**: the hook takes a lock (`scripts/deploy-lock.sh`) that the push-monitor releases on its verdict, so one push travels the whole chain — CI → deploy-state → Argo → pods — before the next starts. Otherwise Argo may only ever observe the later of two close bumps, and the earlier commit's image is built, tagged, and never runs anywhere. A 30-minute TTL breaks the lock if the monitor dies.
+It also **serialises the deploy cycle**: the hook takes a lock (`scripts/lock.sh`) that the push-monitor releases on its verdict, so one push travels the whole chain — CI → deploy-state → Argo → pods — before the next starts. Otherwise Argo may only ever observe the later of two close bumps, and the earlier commit's image is built, tagged, and never runs anywhere. A 30-minute TTL breaks the lock if the monitor dies.
 
 The same hook refuses a push from a **linked worktree**. With several agents on worktrees there is still exactly one deploy target, so concurrent pushes are a coin flip over whose change ships — merge into the primary worktree and push once from there. Both rules are bypassable with `git push --no-verify` when you mean it.
 
@@ -121,7 +121,16 @@ NEON_DATABASE_URL=... uv run python scripts/connector_eval.py --days 7 [--source
 # REQUIRED because every definition fires in a replay and most already exist in Neon.
 # Run from inside workers/ so find_dotenv picks up the Kafka creds.
 (cd workers && NEON_DATABASE_URL=... uv run python ../scripts/rederive.py \
-    --since '2026-07-25 00:00' --only stay --events-dir $PWD/../events [--produce])
+    --since '2026-07-25 00:00' --only stay --events-dir $PWD/../events [--produce] [--replace])
+# Producing into a window that ALREADY holds those events is refused: re-derivation mints fresh
+# uuids, so a repeat inserts cleanly and silently doubles history. --replace deletes them (and
+# their event_lineage rows) first. A lock would not have caught this — the likely mistake is a
+# sequential repeat, which mutual exclusion permits.
+
+# Named locks shared across every worktree (scripts/lock.sh NAME acquire|release|status).
+# `deploy`  — taken by .githooks/pre-push, released by the push-monitor on its verdict.
+# `history` — taken by rederive.py --produce, released in a finally.
+# Both break after a 30-min TTL, because a holder can be an agent in a pane that dies silently.
 
 # Validate Vector config/VRL locally BEFORE deploying (vector 0.57.0 = the pinned chart version)
 vector vrl -i sample.json -p program.vrl                 # run one transform's `source:` program
