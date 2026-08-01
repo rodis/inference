@@ -94,9 +94,11 @@ export const LANE_BLURB: Record<string, string> = {
 };
 
 /** Category colour + icon for an event type. The `entered_<slug>` / `left_<slug>` prefixes are
- *  kept for HISTORY: the geofence engine that produced them was removed 2026-08-01, but ~50 such
- *  events from the retired OwnTracks lane are still in Neon and would otherwise render as
- *  anonymous dots. Nothing new arrives under these names. */
+ *  kept for HISTORY. Nothing produces them any more — the OwnTracks lane that minted them and the
+ *  geofence engine that would have were both removed 2026-08-01 — but the raw events are retained
+ *  in Neon deliberately (invariant 19), and for 07-11..07-25 they are the only record of those
+ *  visits: `stay` had almost no coverage before Overland's dense sampling. Without this they would
+ *  render as anonymous dots. */
 export const catOf = (name: string): { c: string; Icon: LucideIcon } => {
   if (CAT[name]) return CAT[name];
   if (name.startsWith("entered_")) return { c: "#2f9e8f", Icon: MapPin };
