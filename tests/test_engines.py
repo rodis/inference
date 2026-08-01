@@ -120,6 +120,49 @@ def test_session_end_without_start_does_not_fire(state, event):
     assert eng.decide(event("out", 1000), state) is None
 
 
+# --- issue #38: a session cannot end before it starts ---------------------------
+
+def test_session_rejects_a_time_inverted_end(state, event):
+    """Arrival order can invert event-time: the runtime processes in arrival order, so a late
+    phone signal can deliver an `out` whose event-time PRECEDES an already-processed `in`.
+    Live 2026-07-30: got_out@11:11:06 processed after got_into@11:11:21, minting a 0.0-minute
+    car_trip."""
+    eng = SessionWindowEngine({"start_event": "in", "end_event": "out"})
+    eng.decide(event("in", 2000, id="S"), state)
+    assert eng.decide(event("out", 1985, id="E"), state) is None
+
+
+def test_session_rejects_a_zero_length_pairing(state, event):
+    eng = SessionWindowEngine({"start_event": "in", "end_event": "out"})
+    eng.decide(event("in", 2000, id="S"), state)
+    assert eng.decide(event("out", 2000, id="E"), state) is None
+
+
+def test_session_keeps_the_start_open_after_an_inverted_end(state, event):
+    """The guard must DROP THE END, not consume the start — the real end is still to come.
+    Consuming it would turn a phantom exit into a lost trip."""
+    eng = SessionWindowEngine({"start_event": "in", "end_event": "out"})
+    eng.decide(event("in", 2000, id="S"), state)
+    assert eng.decide(event("out", 1985, id="PHANTOM"), state) is None
+    d = eng.decide(event("out", 2600, id="REAL"), state)                  # the genuine exit
+    assert d is not None and d.occurred_at == 2600
+    assert [s["message"]["id"] for s in d.sources] == ["S", "REAL"]
+
+
+def test_validated_keeps_the_track_across_an_inverted_end(state, event):
+    """The bounding box must survive a rejected end. Clearing it would hand the eventual real
+    end an empty track, which reads as 'went nowhere' and would veto a genuine trip."""
+    eng = ValidatedSessionWindowEngine(
+        {"start_event": "in", "end_event": "out", "min_displacement_m": 300,
+         "min_fixes": 3, "min_coverage_ratio": 0.5})
+    eng.decide(event("in", T), state)
+    for off, lat in ((10, 47.20), (20, 47.21), (30, 47.22)):              # ~2.2km of travel
+        eng.decide(event("location_ping", T + off, lat=lat, lon=8.57, acc=10), state)
+    assert eng.decide(event("out", T - 5, id="PHANTOM"), state) is None   # inverted — rejected
+    assert state.get("car_trip:track") or state.get("track"), "track must survive"
+    assert eng.decide(event("out", T + 40, id="REAL"), state) is not None  # displacement passes
+
+
 # --- session_gated_window -------------------------------------------------------
 
 # Mirrors got_out_the_car: carplay-disconnect (6) is the reliable single signal, lock (5)

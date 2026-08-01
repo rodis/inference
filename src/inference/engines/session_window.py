@@ -44,12 +44,28 @@ class SessionWindowEngine:
             start = state.get("open")
             if not start:
                 return None                       # end with no known start — can't form a session
-            state.set("open", None)               # close it either way (consume the start)
+            if now <= start["ts"]:
+                # TIME-INVERTED (issue #38): this end happened at or before the start, so it is
+                # not an end for THIS session. A session cannot have zero or negative duration —
+                # a physical fact, so this is a hard guard with nothing to tune (ADR 0009).
+                #
+                # Leave the start OPEN rather than consuming it: the real end is still to come.
+                # Live case 2026-07-30 — the phone was offline ~2min, its Shortcuts arrived with
+                # ~123s lag, and a #2 phantom got_out (event-time 11:11:06) was *processed after*
+                # the real got_into (event-time 11:11:21) because the runtime works in arrival
+                # order. Consuming the start there would have thrown away the real trip; instead
+                # the phantom is dropped and the session stays open for the genuine exit.
+                #
+                # Note the displacement guardrail in ValidatedSessionWindowEngine cannot cover
+                # this: a zero-length span holds no location fixes, so it falls below `min_fixes`
+                # and correctly abstains. The two guards meet exactly here.
+                return None
+            state.set("open", None)               # close it (consume the start)
             if now - start["ts"] > self.max_duration:
                 return None                       # stale start — don't pair across an implausible gap
-            # event-time = the later of the two, keeping lineage monotonic (derived ts >= contributors)
-            occurred_at = max(now, start["ts"])
+            # event-time = the end, which the guard above proves is the later of the two —
+            # keeping lineage monotonic (derived ts >= every contributor).
             sources = (start["event"], event)     # start then end; the shaper projects lineage + interval from these
-            return Decision(occurred_at=occurred_at, score=1.0, sources=sources)
+            return Decision(occurred_at=now, score=1.0, sources=sources)
 
         return None

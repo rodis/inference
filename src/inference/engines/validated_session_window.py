@@ -114,8 +114,16 @@ class ValidatedSessionWindowEngine(SessionWindowEngine):
         if name != self.end_event:
             return decision
 
-        # An end always settles the session, so the tracker is cleared whether or not a
+        # An end normally settles the session, so the tracker is cleared whether or not a
         # decision came back (a stale start returns None and must not leak its track).
+        #
+        # EXCEPT a time-inverted end (issue #38), which the base engine rejects while leaving
+        # the start OPEN. `open` still being set is the signal that nothing was settled — and
+        # the track must survive, because it holds the displacement evidence gathered so far
+        # for a session that is still running. Clearing it would hand the eventual real end an
+        # empty bounding box, which reads as "went nowhere" and would veto a genuine trip.
+        if state.get("open") is not None:
+            return decision                          # session still open — keep tracking
         track = state.get("track")
         state.set("track", None)
         if decision is None:

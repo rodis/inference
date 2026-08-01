@@ -1136,10 +1136,25 @@ Pairs a start with the next end into one span. Doesn't score anything.
 | `end_event` | ✓ | — |
 | `max_duration_seconds` | — | `21600` (6 h) |
 
-State: `open = {ts, event}`. On start: stash (latest wins). On end: if no open start, nothing fires;
-otherwise the start is **consumed either way**, and the pair is emitted unless the gap exceeded
-`max_duration_seconds`. Event-time: the later of the two. Lineage: `(start, end)` in that order, so
-a declared `interval` spans exactly the session.
+State: `open = {ts, event}`. On start: stash (latest wins). On end, in order:
+
+1. **No open start** → nothing fires.
+2. **`end_ts <= start_ts`** → nothing fires, and the start is **left open** (issue #38). A session
+   cannot have zero or negative duration — a physical fact, so this is a hard guard with nothing to
+   tune (ADR 0009). The start is *not* consumed because the real end is still to come.
+3. Otherwise the start **is** consumed, and the pair emits unless the gap exceeded
+   `max_duration_seconds`.
+
+Event-time: the end, which rule 2 proves is the later of the two. Lineage: `(start, end)` in that
+order, so a declared `interval` spans exactly the session.
+
+Rule 2 exists because **the runtime processes in arrival order while pairing on event-time**, and
+the two can disagree. On 2026-07-30 the phone was offline ~2 min; its Shortcuts arrived with ~123 s
+lag, so a #2 phantom `got_out` (event-time 11:11:06) was processed *after* the real `got_into`
+(event-time 11:11:21) and minted a **0.0-minute** `car_trip`. Leaving the start open is what turns
+that from a lost trip into a dropped phantom. Note `validated_session_window` **cannot** cover this:
+a zero-length span holds no location fixes, so it falls below `min_fixes` and correctly abstains —
+the two guards meet exactly at duration ≤ 0.
 
 Live: `phone_is_charging` (`device_connected_to_power` → `device_disconnected_from_power`, 24 h max).
 `car_trip` uses the validated subclass below.
