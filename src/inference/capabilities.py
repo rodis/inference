@@ -56,8 +56,26 @@ def _interval(sources: list[dict]) -> dict:
     """The interval spans the lineage's extent — earliest source to latest. Pure function
     of the evidence; no engine-specific knowledge, so any event declaring INTERVAL gets it
     the same way. Callers guarantee non-empty sources (a declared capability with none is a
-    misconfiguration)."""
-    timestamps = _source_timestamps(sources)
+    misconfiguration).
+
+    **When the evidence contains located fixes, the span is the fixes' extent.** The span of a
+    journey is the span of the *movement*, not of whatever corroborated it: `trip` carries both
+    the location fixes that define where it went and (issue #41) the car boundaries that prove
+    whose car it was, and those boundaries sit *outside* a correctly-measured journey — you get
+    in before the phone leaves the departure cluster and get out after it enters the arrival one
+    (measured: median 58 s before the start and 18 s after the end). Letting them set the bounds
+    would quietly redefine `trip`'s span as get-in→get-out for own-car journeys while leaving it
+    displacement-derived for borrowed ones — two meanings for one field, decided by which
+    peripherals happened to fire.
+
+    This changes nothing for any other event, which is why it is safe to state generically rather
+    than as a `trip` special case: `car_trip` and `phone_is_charging` have no located sources at
+    all and fall through to the full set, and `stay`'s sources are *all* located.
+    """
+    located = [s for s in sources
+               if (s.get("message") or {}).get("lat") is not None
+               and (s.get("message") or {}).get("lon") is not None]
+    timestamps = _source_timestamps(located or sources)
     return {"interval": Interval(started_at=min(timestamps), ended_at=max(timestamps))}
 
 

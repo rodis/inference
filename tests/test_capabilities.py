@@ -231,3 +231,28 @@ def test_vehicle_never_learns_a_concrete_event_name():
         _leg_fix(_VET, 400),
     ])["vehicle"]
     assert v.evidence == ["bicycle_unlocked", "helmet_paired"] and v.confirmed is True
+
+
+# --- interval: the span of a journey is the span of the MOVEMENT -----------------
+
+def test_interval_uses_only_the_located_sources_when_any_are_present():
+    """A `trip` carries both the fixes that define where it went and the car boundaries that
+    prove whose car it was — and those boundaries sit OUTSIDE a correctly-measured journey
+    (issue #44). Letting them set the bounds would redefine the span as get-in→get-out for
+    own-car journeys while leaving it displacement-derived for borrowed ones."""
+    frag = derive_capability(Capability.INTERVAL, [
+        _mark("got_into_the_car", 50),          # 50s before the first fix
+        _leg_fix(_H1, 100), _leg_fix(_VET, 400),
+        _mark("got_out_the_car", 460),          # 60s after the last fix
+    ])
+    iv = frag["interval"]
+    assert (iv.started_at, iv.ended_at, iv.duration_seconds) == (100, 400, 300)
+
+
+def test_interval_falls_back_to_all_sources_when_none_are_located():
+    """Unchanged for every other event: `car_trip` and `phone_is_charging` have no located
+    sources at all, so they still span their full lineage."""
+    frag = derive_capability(Capability.INTERVAL, [
+        _mark("got_into_the_car", 100), _mark("got_out_the_car", 700)])
+    iv = frag["interval"]
+    assert (iv.started_at, iv.ended_at) == (100, 700)
