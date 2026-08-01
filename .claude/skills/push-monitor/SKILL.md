@@ -73,18 +73,27 @@ It is infrastructure, not news.
    case for CI, cron and headless runs, not an error worth narrating.
 3. **No monitor already running in this workspace.** Reuse rather than stacking panes.
 
-   **Use a per-workspace agent name**: `push-monitor-$HERDR_WORKSPACE_ID`, never a bare
-   `push-monitor`. `herdr agent get|prompt <target>` resolves a name with **no workspace filter**,
-   so two worktrees each running this skill would create two agents with the same name and every
-   later `get`/`prompt` would hit an arbitrary one — including the check-back that exists to catch
-   failures. Set `NAME="push-monitor-$HERDR_WORKSPACE_ID"` once and use it throughout:
+   **Use a per-workspace agent name, lowercased**: herdr agent names reject uppercase (observed
+   2026-08-02: workspace id `wB` → `invalid_agent_name`), and workspace ids are mixed-case, so the
+   raw `push-monitor-$HERDR_WORKSPACE_ID` fails on any workspace past `wz`. Never use a bare
+   `push-monitor` either: `herdr agent get|prompt <target>` resolves a name with **no workspace
+   filter**, so two worktrees each running this skill would create two agents with the same name and
+   every later `get`/`prompt` would hit an arbitrary one — including the check-back that exists to
+   catch failures. Set the name once and use it throughout:
+
+```bash
+NAME="push-monitor-$(printf '%s' "$HERDR_WORKSPACE_ID" | tr '[:upper:]' '[:lower:]')"
+```
+
+   The lookup filters on `workspace_id` exactly (unmodified), so lowercasing the *name* cannot
+   collide two workspaces whose ids differ only by case:
 
 ```bash
 herdr agent list | python3 -c "
 import sys,json,os
 ws=os.environ.get('HERDR_WORKSPACE_ID')
 m=[a for a in json.load(sys.stdin)['result']['agents']
-   if a.get('name')==f'push-monitor-{ws}' and a['workspace_id']==ws]
+   if a.get('name')==f'push-monitor-{ws.lower()}' and a['workspace_id']==ws]
 print(m[0]['pane_id'] if m else '')
 "
 ```
