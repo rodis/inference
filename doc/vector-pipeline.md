@@ -22,7 +22,6 @@ flowchart TD
     RBD -.->|"_unmatched<br/>unknown domain · dropped"| DROP(["∅"]):::drop
 
     RBD -->|"sensors"| RBA{{"route_by_app<br/><i>route · 2nd level</i><br/>keys off source_app<br/>(sensors-scoped)"}}
-    RBA -->|"owntracks"| OT["owntracks_to_canonical<br/><i>remap</i><br/>_type→name · tst→timestamp<br/>X-Limit-U→user_id"]:::xf
     RBA -->|"overland"| OL["overland_to_canonical<br/><i>remap · fan-out</i><br/>GeoJSON batch → N location_ping<br/>device_id→user_id"]:::xf
     RBA -->|"standard"| SS["shape_sensor<br/><i>remap</i><br/>payload→message · validate<br/>event_name→name · user_id"]:::xf
 
@@ -63,30 +62,41 @@ HTTP in → `parse_path` decodes the `/<domain>/<app>/…` URL **once** into two
 routing levels. **First level**, `route_by_domain` keys off `event_domain` to pick the
 destination — `sensors` opens the sensors-domain subtree (unknown domains drop).
 **Second level**, that domain's `route_by_app` keys off `source_app` to pick the body
-adapter: OwnTracks (a bare `_type` body) → `owntracks_to_canonical`, Overland (a batched
-GeoJSON body) → `overland_to_canonical`, everything else → `shape_sensor` (the standard
-`payload` + `event_name` contract). All three rejoin at `enrich_sensor` (`message.id`
-minting) → Aiven Kafka `raw_sensors`. `console` taps `enrich_sensor` for debug.
+adapter: Overland (a batched GeoJSON body) → `overland_to_canonical`, everything else →
+`shape_sensor` (the standard `payload` + `event_name` contract). Both rejoin at
+`enrich_sensor` (`message.id` minting) → Aiven Kafka `raw_sensors`. `console` taps
+`enrich_sensor` for debug.
 
 ### The two location apps have different jobs
 
 Both post to the `sensors` domain and both end up as `location_ping`, but they are not
-redundant — they sit at opposite ends of the sample-density trade-off:
+### Why Overland, and why OwnTracks was removed
 
-| | **OwnTracks** (`/sensors/owntracks`) | **Overland** (`/sensors/overland`) |
+There were two location lanes until 2026-08-01. They sat at opposite ends of the
+sample-density trade-off, and the sparse one lost:
+
+| | **OwnTracks** (`/sensors/owntracks`, **removed**) | **Overland** (`/sensors/overland`) |
 |---|---|---|
 | role | **region sensor** — iOS `CLRegion` crossings | **movement tracker** — continuous point stream |
 | body | bare `_type` object, one event | `{"locations": [GeoJSON Feature, …]}`, up to 1000 |
 | identity | `X-Limit-U` header | `properties.device_id` (set it to the `user_id`) |
-| density | ~2 samples per crossing (~100 pings / 13 d observed) | batched stream, `motion` + `speed` per point |
-| decides places | **on the phone** (waypoint label → event name) | **nowhere** — server-side `geofence` decides |
+| density | ~2 samples per crossing (~100 pings / 13 d observed) | ~1 fix per 11 s while moving |
+| decides places | **on the phone** (waypoint label → event name) | **nowhere** — the server decides |
 
-The Overland lane exists because the OwnTracks stream is far too sparse to feed the
-[`geofence`](../src/inference/engines/geofence.py) engine or any dwell logic, and because a
-waypoint label minted on the phone is a *semantic* decision made by a dumb sensor: it names a
-~100 m iOS-floor ring after a shop, it can't be renamed or re-radiused without the phone, and
-it mints an unbounded `entered_<anything>` namespace on `raw_sensors`. Overland keeps the
-phone at lat/lon and moves every place decision to regions-as-data in Neon.
+OwnTracks was too sparse to feed the [`geofence`](../src/inference/engines/geofence.py) engine
+or any dwell logic, and a waypoint label minted on the phone is a *semantic* decision made by a
+dumb sensor: it named a ~100 m iOS-floor ring after a shop, could not be renamed or re-radiused
+without the phone, and minted an unbounded `entered_<anything>` namespace on `raw_sensors`.
+
+It went quiet on 2026-07-25 when the waypoints were removed (an ablation had shown `stay` was
+unaffected — post-Overland stays are 100 % Overland fixes) and the lane was deleted on
+2026-08-01 along with its last consumers, `arrived_home_by_car` / `left_home_by_car` (issue #6).
+
+**What replaced it is not the `geofence` engine.** Zone-crossing detection has still never run
+in production — the `regions` table holds only `kind='poi'` rows. Place detection is
+[ADR 0007](adr/0007-stays-not-fences.md)'s `stay_window`: cluster Overland's dense fixes into a
+dwell, then label the centroid from a POI row. That needs no region declared in advance, and it
+is why the dense lane was the one worth keeping.
 
 Two integration facts worth keeping visible:
 
@@ -130,7 +140,6 @@ second-level app-router → adapter(s) → a static-topic sink. No other compone
 
 | `app` segment | Body adapter | Producer |
 |---|---|---|
-| `owntracks` | `owntracks_to_canonical` | iOS OwnTracks — region crossings |
 | `overland` | `overland_to_canonical` | iOS Overland — batched GeoJSON point stream |
 | `shortcut` | `shape_sensor` (standard) | iOS Shortcuts — power, CarPlay, lock, card payments |
 | `bmw` | `shape_sensor` (standard) | [`workers/bmw-cardata/`](../workers/bmw-cardata/) — car telemetry ([ADR 0006](adr/0006-car-native-trip-signals.md)) |
@@ -170,9 +179,9 @@ growing buffer means that sink is the bottleneck.
 - **The two lanes meet only through Kafka** — Vector writes `raw_sensors`, then reads it
   back on the persist lane. The `high_level_events` feedback enters Vector *only* on the
   persist side; the inference runtime produces it, Vector never emits it.
-- **`user_id` is required on ingest** — `shape_sensor` (standard), `owntracks_to_canonical`
-  (from the `X-Limit-U` header) and `overland_to_canonical` (from each point's `device_id`)
-  all reject events without it, mirroring the runtime's per-user keying
+- **`user_id` is required on ingest** — `shape_sensor` (standard) and
+  `overland_to_canonical` (from each point's `device_id`) both reject events without it,
+  mirroring the runtime's per-user keying
   ([ADR 0004](adr/0004-scaling-model.md)). The batch lane rejects **per point**, not per POST.
 - **VRL is validated locally before deploy** — `vector` 0.57.0 is on the dev box, matching the
   pinned chart version, so there is no excuse for a crash-looping program:
