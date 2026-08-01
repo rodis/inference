@@ -64,6 +64,16 @@ A new **strategy** is a new `Engine` class in [`src/inference/engines/`](src/inf
 
 Env/secrets live in `workers/.env` (gitignored). The entrypoint loads it via `find_dotenv(usecwd=True)`, which walks upward from the CWD — **run from inside the `workers/` tree**. In K8s the same vars come from the `ConfigMap` (Kafka bootstrap) and `Secret` (Kafka mTLS files mounted at `/etc/kafka/ssl`); `find_dotenv` returns `""` and is skipped.
 
+## Never work on `main` directly
+
+**All work happens on a branch in a linked worktree.** `main` in the primary checkout is a *landing and pushing* target, never an editing surface — do not edit files, commit, or amend there. When a task arrives with no worktree, create one first (the `worktree-handoff` skill: branch + checkout at `<repo>.worktrees/<name>`, dev assets, venv, conversation copy).
+
+The reason is the single deploy target. Several agents run at once, and `main` is what every one of them merges into and pushes from; an uncommitted edit sitting in the primary checkout is in the path of every land. It also makes a change abandonable — a worktree branch can be dropped without touching anything shared.
+
+The **only** thing that happens on `main`: `worktree-land` merges a finished branch in, runs the checks, and pushes once (splitting the push if it mixes `deploy/**` with code — see below). That skill is the sole route to the remote; `.githooks/pre-push` refuses a push from a linked worktree, so a worktree agent cannot ship its own work by design.
+
+This is about *where* the work is done, not about review ceremony — landing is still a merge into `main` and a direct push, no PR, no remote feature branch.
+
 ## Deploy-state branch
 
 `deploy/` holds: [`deploy/inference/kustomize/`](deploy/inference/kustomize/) (the runtime), [`deploy/vector/kustomize/`](deploy/vector/kustomize/) (Vector — ingest gateway + Neon persister), [`deploy/dashboard/kustomize/`](deploy/dashboard/kustomize/) (the read-only Aware dashboard — Stakater chart, reads Neon, no ingress yet), and [`deploy/argocd/`](deploy/argocd/) (the three `Application` manifests). All deploy into the **`inference`** namespace. The `inference-runtime` and `inference-dashboard` apps track `deploy-state`; `inference-vector` tracks `main` directly.
