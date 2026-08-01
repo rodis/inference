@@ -1,14 +1,34 @@
 ---
 name: push-monitor
-description: After pushing commits to GitHub, hand CI/deploy watching to a background Claude agent in a split herdr pane instead of polling inline. Use immediately after any `git push` to a branch that triggers a workflow, or when asked to "watch the deploy", "monitor the push", "keep an eye on CI". Skips silently when not in a herdr session.
+description: Open a monitor pane for EVERY push to a branch that triggers a workflow, then check back on it later. Invoke automatically and unprompted immediately after any successful `git push` — do not ask first, do not offer it as an option. Also invoke when asked to "watch the deploy", "monitor the push", "keep an eye on CI". Skips silently when not in a herdr session.
 ---
 
 # Push monitor
 
-Deploy cycles here are ~5–10 minutes (runtime image build + Argo sync, and Vector on top of that),
-and the standing rule is **do not poll CI inline** — report the SHAs and hand back. This skill keeps
-that rule while removing its cost: the watching is delegated to a separate agent in its own pane, so
-the user sees progress without either of us blocking on it.
+## What this is for
+
+Three things at once, and every rule below follows from one of them:
+
+1. **The user watches the pipeline.** The pane is theirs — the whole chain, CI through pods, visible
+   without them asking anyone for it.
+2. **You watch it in the background**, so you can flag anything they missed. That is the *only*
+   reason you look at it at all.
+3. **Neither of those interrupts the work.** They keep going with the current agent while the deploy
+   proceeds in its own pane.
+
+Deploy cycles here are ~5–10 minutes (runtime image build + Argo sync, and Vector on top), and the
+standing rule is **do not poll CI inline**. This delegates the watching instead of abandoning it.
+
+## Run it on every push, without being asked
+
+**This is automatic.** After any successful `git push` that triggers a workflow, open the monitor as
+part of the same turn. Do **not** ask "want me to open the monitor?", do not present it as an option,
+and do not wait to be told — being asked each time is the failure mode this replaces.
+
+The only reasons not to: the preconditions below fail, or the user has said to stop.
+
+Mention it in **one clause** at the end of your normal reply ("…monitor tracking it on the right").
+It is infrastructure, not news.
 
 ## Preconditions — check in this order, stop at the first failure
 
@@ -133,10 +153,16 @@ comment at all because they already have the pane.
 
 - before launching a new monitor (the reuse lookup in the preconditions already reads this);
 - when the user asks;
-- when you are about to hand back and a monitor from an earlier push has not reported yet.
+- **before ending any turn while a monitor from an earlier push has not reported.** This is the one
+  that matters — it is what makes purpose (2) real. A monitor nobody ever looks at is worse than no
+  monitor, because it manufactures the impression the push was verified.
 
 **Never** on a timer, never twice in a turn, never in a loop. One check is a glance; repeated checks
 are the polling this skill exists to remove.
+
+Note the asymmetry: you check *often enough to catch a problem*, and speak *only when there is one*.
+Those are different thresholds on purpose. Checking is cheap and silent; talking costs the user
+attention, which is the thing this skill is protecting.
 
 ```bash
 STATE=$(herdr agent get push-monitor 2>/dev/null | python3 -c "
