@@ -19,6 +19,40 @@ Three things at once, and every rule below follows from one of them:
 Deploy cycles here are ~5–10 minutes (runtime image build + Argo sync, and Vector on top), and the
 standing rule is **do not poll CI inline**. This delegates the watching instead of abandoning it.
 
+## Two panes: a dashboard the agent draws, and the agent
+
+The status display is **not** the agent's chat output. It cannot be, for a reason worth stating once:
+
+- A Claude agent's **tool output is collapsed in its own pane** — the pane shows `Ran 1 shell command`
+  with nothing under it. So anything a script prints *from inside the agent* is invisible, and no
+  amount of prettier tooling in its hands changes that. Its only visible surface is its final message.
+- **That message is prose, and prose drifts.** On 2026-08-01 the mandated summary box was dropped
+  entirely, `✅` came out as `✓` and once as the bare word `OK`, and the ~70-col pane wrapped each
+  one-line-per-phase row into three. Every one of those destroys the glanceability the format exists
+  for — and the `OK` also defeated the emoji grep this skill used to decide whether to speak.
+
+So the display is a **second, plain pane** — no agent in it, no tokens — running
+[`scripts/deploy_status.py`](../../../scripts/deploy_status.py) `watch`, which draws a live rich
+panel from a small JSON state file. The agent's job shrinks to calling `set` after each phase. The
+visual is then deterministic, correctly sized at any width, and identical on every run.
+
+```
+╭─ 344b0cb · main ──────────────────────╮
+│ ✅ 1 CI            #140 · 142 tests   │   dashboard pane (top, ~25%)
+│ ✅ 2 deploy-state  b9a4eda · sha-…    │   plain shell, rich Live
+│ ⠹  3 Argo          polling… 2m        │
+│ ·  4 image                            │
+│ ·  5 rollout                          │
+╰──────────────── 4m12s ────────────────╯
+  ── agent transcript below (~75%) ──
+```
+
+The state file is `~/.cache/inference-deploy/<sha>.json`, and `deploy_status.py check --sha <sha>`
+turns it into an exit code — **0 green, 1 trouble, 2 incomplete** — which is what step 5 uses instead
+of grepping glyphs out of a scrollback. The script carries its dependency in a PEP 723 header, so
+`uv run` installs rich into an ephemeral env; nothing to set up, and it never touches the project's
+dependencies.
+
 ## Run it on every push, without being asked
 
 **This is automatic.** After any successful `git push` that triggers a workflow, open the monitor as
@@ -55,16 +89,27 @@ print(m[0]['pane_id'] if m else '')
 "
 ```
 
-If that prints a pane id, **reuse it** — skip to step 3 and prompt the existing agent with the new
-push. Only split a new pane when it prints nothing.
+If that prints a pane id, **reuse it** — skip to step 2 and prompt the existing agent with the new
+push. Only split new panes when it prints nothing. The dashboard pane is found the same way, by the
+label this skill gives it:
+
+```bash
+DASH=$(herdr pane list | python3 -c "
+import sys,json,os
+ws=os.environ.get('HERDR_WORKSPACE_ID')
+m=[p for p in json.load(sys.stdin)['result']['panes']
+   if p.get('label')==f'deploy-dash-{ws}' and p['workspace_id']==ws]
+print(m[0]['pane_id'] if m else '')
+")
+```
 
 ## Steps
 
-### 1. Split, in one of two places
+### 1. Split twice: dashboard on top, agent below
 
-Where the monitor goes depends on whether the right half of the window is already occupied. Never
-squeeze the conversation pane a second time — if something is already on the right, the monitor goes
-*under it*, not beside it.
+Where the monitor area goes depends on whether the right half of the window is already occupied.
+Never squeeze the conversation pane a second time — if something is already on the right, the
+monitor goes *under it*, not beside it.
 
 ```bash
 RIGHT=$(herdr pane neighbor --current --direction right 2>/dev/null | python3 -c "
@@ -74,26 +119,56 @@ print(json.load(sys.stdin).get('result',{}).get('neighbor',{}).get('neighbor_pan
 
 if [ -z "$RIGHT" ]; then
   # Nothing on the right: split the current pane in half, vertically.
-  PANE=$(herdr pane split --current --direction right --ratio 0.5 --cwd "$PWD" --no-focus \
+  DASH=$(herdr pane split --current --direction right --ratio 0.5 --cwd "$PWD" --no-focus \
       --env KUBECONFIG=/Users/rods/.kube/kube_prod \
     | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['pane']['pane_id'])")
 else
   # Occupied: split THAT pane horizontally; the new pane is the bottom one.
-  PANE=$(herdr pane split "$RIGHT" --direction down --ratio 0.5 --cwd "$PWD" --no-focus \
+  DASH=$(herdr pane split "$RIGHT" --direction down --ratio 0.5 --cwd "$PWD" --no-focus \
       --env KUBECONFIG=/Users/rods/.kube/kube_prod \
     | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['pane']['pane_id'])")
 fi
+herdr pane rename "$DASH" "deploy-dash-$HERDR_WORKSPACE_ID"
+
+# Now carve the agent out of the BOTTOM of that pane, leaving the dashboard a slim strip on top.
+sleep 1
+PANE=$(herdr pane split "$DASH" --direction down --ratio 0.25 --cwd "$PWD" --no-focus \
+    --env KUBECONFIG=/Users/rods/.kube/kube_prod \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['pane']['pane_id'])")
 ```
 
-Two parsing traps, both of which fail *silently* rather than loudly:
+**`--ratio` is the share kept by the pane being split, not the share given to the new one.** Verified
+2026-08-01: `--ratio 0.25` on a 46-row pane left the original at 11 rows and gave the new one 35. So
+`0.25` here means *dashboard 25%, agent 75%*, which is what you want — the panel needs 7 rows plus a
+shell prompt, and 11 is comfortable. On a short window raise it to `0.35` rather than letting the
+panel clip.
+
+Three parsing traps, all of which fail *silently* rather than loudly:
 
 - The neighbour id is at **`result.neighbor.neighbor_pane_id`** — nested one level deeper than it
   looks. Reading `result.neighbor_pane_id` returns `None` for every direction, so the branch above
   would always take the "nothing on the right" path and keep halving the conversation pane.
 - When there is no neighbour the key is simply **absent** (not null, not an error, exit status still
   0), so `or ''` is what makes the `-z` test work.
+- The second split needs the `sleep` for the same reason the agent start does (see step 2) — herdr
+  is still settling the first one.
 
 `--no-focus` matters throughout: the user is mid-conversation and focus should not jump.
+
+### 1b. Start the dashboard
+
+Seed the state file first so the panel opens with the right sha, branch and clock, then run the
+watcher in the plain pane. No agent, no permissions, no tokens.
+
+```bash
+REPO=$(git rev-parse --show-toplevel)
+uv run "$REPO/scripts/deploy_status.py" init --sha "$SHA" --branch "$(git branch --show-current)"
+herdr pane run "$DASH" "uv run $REPO/scripts/deploy_status.py watch --sha $SHA --timeout 1800"
+```
+
+`watch` tolerates being started before the first `set` (it shows "waiting for the monitor's first
+phase…"), holds the final frame on screen when the verdict lands, and exits on the timeout so a dead
+monitor does not leave a spinner turning forever.
 
 ### 2. Start a Claude agent in it — with a retry
 
@@ -191,33 +266,32 @@ Those are different thresholds on purpose. Checking is cheap and silent; talking
 attention, which is the thing this skill is protecting.
 
 ```bash
+uv run "$REPO/scripts/deploy_status.py" check --sha "$SHA"; VERDICT=$?
 STATE=$(herdr agent get "$NAME" 2>/dev/null | python3 -c "
 import sys,json
 try: print(json.load(sys.stdin)['result']['agent']['agent_status'])
 except Exception: print('gone')
 ")
-OUT=$(herdr pane read "$PANE" 2>/dev/null)
-VERDICT=$(printf '%s' "$OUT" | grep -E '^\s*Verdict:' | tail -1)
-TROUBLE=$(printf '%s' "$OUT" | grep -cE '❌|⚠️')      # 0 == nothing to relay
 ```
 
-The mandated symbols make this cheap: **`TROUBLE` = 0 with a `Verdict:` present means green, and you
-say nothing.** You never have to parse prose to decide whether to speak — which is what keeps the
-check silent by default.
+**`check` is the whole decision, and it reads the JSON, not the screen.** `0` green — say nothing.
+`1` trouble — it prints the offending phases on one line, relay that. `2` incomplete — combine with
+`STATE` below to work out whether it is still going or died. You never parse prose, and never grep a
+glyph, which is what the previous version did and what a `✓`-instead-of-`✅` silently defeated.
 
 **`agent_status` alone cannot tell you whether it finished.** A monitor that completed and reported
-sits at **`idle`** — exactly like one that was started and never prompted. That is why the prompt
-mandates a final line beginning `Verdict:`: it is the completion signal, and grepping for it is the
-only reliable check. Keep the two in sync if you edit the prompt.
+sits at **`idle`** — exactly like one that was started and never prompted. `check` is what
+distinguishes them: a finished run has written a verdict into the state file.
 
-| state | meaning | say |
-|---|---|---|
-| `working` | still running | nothing, unless well past its 20-min budget |
-| `idle` + a `Verdict:` line | finished | **nothing if green.** Relay only a failure, in one line |
-| `idle`, no `Verdict:`, `tokens: None` | **never submitted** — the paste is still in the box | send `enter` (see step 3), then say nothing |
-| `idle`, no `Verdict:`, tokens present | ran and died mid-way | surface it — that push is unverified |
-| `blocked` | waiting on input | surface it; it will never finish on its own |
-| `gone` | pane closed before reporting | surface it — the push was never verified |
+| `check` | `agent_status` | meaning | say |
+|---|---|---|---|
+| 2 | `working` | still running | nothing, unless well past its 20-min budget |
+| 0 | `idle` | finished, green | **nothing.** They already have the dashboard |
+| 1 | any | a phase is ❌ or ⚠️ | relay `check`'s one-line output |
+| 2 | `idle`, `tokens: None` | **never submitted** — the paste is still in the box | send `enter` (see step 3), then say nothing |
+| 2 | `idle`, tokens present | ran and died mid-way | surface it — that push is unverified |
+| 2 | `blocked` | waiting on input | surface it; it will never finish on its own |
+| 2 | `gone` | pane closed before reporting | surface it — the push was never verified |
 
 `tokens` is what separates "never started" from "started and died" — an agent that has done no work
 at all reports `tokens: None` and `$0.00`. The first is fixable in one keystroke; the second is not.
@@ -250,6 +324,34 @@ is **five phases** and is not done at green CI — green CI only means an image 
 > `argocd sync`.** `selfHeal` is on, so a manual cluster change is both futile and misleading — the
 > only correct fix for a bad image is a new commit. If something is broken, report it; do not repair
 > it.
+>
+> **Reporting: you do not draw the status display — you update it.** A dashboard is already running
+> in the pane above yours, rendering from a state file. Your output is these calls, one the moment
+> each phase settles (`$REPO` is this repo's root):
+>
+> ```bash
+> uv run $REPO/scripts/deploy_status.py set --sha <SHA> --phase <1-5> \
+>     --state run|ok|warn|fail|skip --detail "<the specific facts>"
+> ```
+>
+> - `run` when you *start* a phase, so the dashboard spins rather than looking stalled.
+> - `ok` passed · `warn` passed but a human should look (restarts > 0, a suspected stale render, odd
+>   timing) · `fail` broken, stop the chain · `skip` not applicable this run (say why in `--detail`).
+> - `--detail` is **facts, not prose**: run number, sha, tag, counts, durations. It renders on one
+>   line and is ellipsised, so put the identifying fact first — `"#140 · 142 tests · 1m03s"`, not
+>   `"the CI workflow completed successfully after running the tests"`.
+>
+> Close with the verdict, which is also the completion signal the launching agent checks for:
+>
+> ```bash
+> uv run $REPO/scripts/deploy_status.py verdict --sha <SHA> \
+>     --text "<sha> reached running pods — 3 deployments on sha-<short>, 0 restarts"
+> ```
+>
+> Do not print status lines, boxes, tables or emoji into your own chat output — it is collapsed,
+> mis-wrapped and invisible where it matters, and it is not what anyone reads. **If every phase is
+> `ok`, your entire chat output is one short sentence.** Write detail only for a `warn` or `fail`
+> phase, under a `### ❌ Phase N — <name>` heading, and only for that phase.
 >
 > ### Phase 1 — CI
 > A push touching anything outside `deploy/**` triggers `publish-images.yml`: the `_ci-checks.yml`
@@ -303,50 +405,22 @@ is **five phases** and is not done at green CI — green CI only means an image 
 > Watch for `CrashLoopBackOff`, `ImagePullBackOff`, or a new pod stuck `Pending` while an old one
 > still serves — image drift shows up exactly that way.
 >
-> ### Output format — emit a status line the moment each phase settles
+> ### Update the dashboard as you go — never batch it to the end
 >
-> **Do not batch the report to the end.** Print one line as each phase resolves, so the pane is
-> watchable in flight rather than blank until it finishes:
+> Call `set --state run` when you begin a phase and again with its outcome the moment it settles.
+> The pane above is watchable in flight only if you do; batching leaves it frozen on phase 1 for ten
+> minutes, which reads as a hang.
 >
+> A worked sequence for one phase:
+>
+> ```bash
+> uv run $REPO/scripts/deploy_status.py set --sha <SHA> --phase 3 --state run --detail "polling Argo"
+> # ... kubectl calls ...
+> uv run $REPO/scripts/deploy_status.py set --sha <SHA> --phase 3 --state ok \
+>     --detail "3 apps Synced+Healthy at be0b9a2"
 > ```
-> [1/5] ✅ CI            publish-images #482 · 106 tests · 3m12s
-> [2/5] ✅ deploy-state  be0b9a2 · sha-bd202a2
-> [3/5] ⏳ Argo          polling, not synced yet (2m)
-> ```
 >
-> Symbols, used strictly — they are the whole point of the glance:
->
-> | | meaning |
-> |---|---|
-> | ✅ | phase passed, nothing to read |
-> | ❌ | **failed** — stop the chain here, detail below |
-> | ⚠️ | passed but needs a human eye (restarts > 0, a suspected stale render, an odd timing) |
-> | ⏳ | still in progress |
-> | ⏭️ | not applicable this run (say why in four words) |
->
-> Keep each line to one row: `[n/5]`, symbol, phase name, then the *specific facts* — run number,
-> sha, tag, counts, durations. No prose on these lines.
->
-> ### Final block
->
-> Close with a fenced summary, then the verdict:
->
-> ```
-> ┌─ bd202a2 ──────────────────────────────────────────────
-> │ ✅ CI   ✅ deploy-state   ✅ Argo   ✅ image   ✅ rollout
-> └────────────────────────────────────────────────────────
-> ```
-> `Verdict: bd202a2 reached running pods — 3 deployments on sha-bd202a2, 0 restarts.`
->
-> **If every phase is ✅, that block plus the verdict is the ENTIRE report.** Write nothing else. The
-> user should be able to confirm a good deploy in one glance and never read a word of prose.
->
-> **Only when a phase is ❌ or ⚠️** do you write detail, and only for that phase — under a
-> `### ❌ Phase N — <name>` heading, so the eye lands on it immediately. Everything green stays
-> collapsed to its one line. This is the whole design: glance when it is fine, read when it is not.
->
-> The final line must begin literally `Verdict:` — it is the completion signal the launching agent
-> greps for, and without it your run is indistinguishable from one that never started.
+> Then the verdict call from the Reporting section above, which closes the run.
 >
 > ### Then release the deploy lock — always, success or failure
 >
@@ -367,14 +441,19 @@ is **five phases** and is not done at green CI — green CI only means an image 
 > - pods that rolled but are not healthy.
 >
 > Keep it tight — a status report, not a narrative. If the whole chain is still incomplete after 20
-> minutes, emit the summary block with the phases you reached marked and the remainder ⏳, say where
-> it stopped, and stop rather than waiting indefinitely. A partial block still beats silence: it
-> shows at a glance how far it got.
+> minutes, `set` the phase you are stuck on to `warn` with what you last saw, write a `verdict`
+> saying where it stopped, and stop rather than waiting indefinitely. A partial dashboard still beats
+> silence: it shows at a glance how far it got, and the verdict is what stops the launching agent
+> reading the run as "died".
 
 ## Notes
 
-- The pane persists after the run finishes so the user can read the result. Leave it; the reuse check
-  in the preconditions will pick it up on the next push.
+- Both panes persist after the run finishes so the user can read the result — the dashboard holds its
+  final frame. Leave them; the reuse checks in the preconditions pick them both up on the next push,
+  and `init` resets the panel for the new sha.
+- **Reusing a dashboard pane needs the watcher restarted**, because a finished `watch` has exited to
+  a shell prompt. On reuse, run `init` for the new sha and `herdr pane run "$DASH" …` again before
+  prompting the agent.
 - If the push was to a branch Argo does not track, say so in the prompt — the agent should then watch
   only Phase 1 and skip Phases 2–5.
 - A docs-only push still fires `publish-images.yml` and still rebuilds and redeploys every image,

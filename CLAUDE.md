@@ -138,6 +138,15 @@ NEON_DATABASE_URL=... uv run python scripts/connector_eval.py --days 7 [--source
 # their event_lineage rows) first. A lock would not have caught this — the likely mistake is a
 # sequential repeat, which mutual exclusion permits.
 
+# The deploy monitor's display (the `push-monitor` skill drives this; rarely run by hand).
+# A chat agent's tool output is COLLAPSED in its own pane and its prose drifts, so the status
+# display is a plain pane rendering a JSON state file the agent updates. `check`'s exit code
+# (0 green / 1 trouble / 2 incomplete) is the launcher's verdict — never grep the pane for emoji.
+uv run scripts/deploy_status.py init  --sha <sha> --branch <b>   # seed, then `watch` in a pane
+uv run scripts/deploy_status.py set   --sha <sha> --phase 3 --state ok --detail "3 apps Synced"
+uv run scripts/deploy_status.py check --sha <sha>
+# PEP 723 header pulls `rich` into an ephemeral uv env — not a project dependency.
+
 # Named locks shared across every worktree (scripts/lock.sh NAME acquire|release|status).
 # `deploy`  — taken by .githooks/pre-push, released by the push-monitor on its verdict.
 # `history` — taken by rederive.py --produce, released in a finally.
