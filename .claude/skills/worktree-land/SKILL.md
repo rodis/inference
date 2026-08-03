@@ -31,16 +31,64 @@ at a time.
 Nothing here is exotic git. The value is doing the four checks that are easy to skip and expensive to
 get wrong: the lock, the checks, the mixed-path split, and the handoff to the monitor.
 
+## Precondition: invoke this FROM a worktree, never from the primary checkout
+
+**Stop before anything else if the invoking session is not inside a linked worktree.** This is a
+refusal, not a warning — say which branch you are on, tell the user to run it from the worktree whose
+branch they want landed, and do nothing else.
+
+```bash
+# Equal in the primary checkout; different in a linked worktree. Independent of paths and branch
+# names, so it also holds for a worktree that is not at the sibling path.
+GIT_DIR_ABS=$(git rev-parse --absolute-git-dir)
+GIT_COMMON=$(git rev-parse --path-format=absolute --git-common-dir)
+if [ "$GIT_DIR_ABS" = "$GIT_COMMON" ]; then
+  echo "REFUSING: this is the primary checkout ($(git branch --show-current)). Invoke worktree-land"
+  echo "from inside the worktree whose branch should land."
+  exit 1
+fi
+```
+
+Three reasons, and the first is the one that matters:
+
+1. **It contradicts the repo's own rule.** `CLAUDE.md` says never work on `main` directly — the
+   primary checkout is a landing target, not a place an agent sits. A session that runs `land` from
+   there is *already* on `main` doing work, which is the state the rule exists to prevent. Landing is
+   something a worktree session does **to** the primary checkout, always at arm's length via `git -C`.
+2. **From `main` the branch has to be named, and naming is guessable.** Invoked from a worktree,
+   `BRANCH` is simply what that worktree has checked out — the thing the session has been building,
+   with no room to pick wrong. From the primary checkout it is an argument, and with several
+   worktrees live, landing the wrong branch is a silent mis-ship that CI will happily deploy.
+3. **Step 10 becomes meaningless.** "End where you started — in the worktree" has nothing to return
+   to, so the one guard against a leaked `cd` stops guarding anything.
+
+Observed 2026-08-03: this skill was run from the primary checkout's session and completed cleanly —
+`ad240e4` landed and deployed correctly. Nothing broke, which is exactly why the guard is worth
+having: the failure mode is not an error, it is landing the wrong branch on a day when more than one
+is in flight.
+
+**The bootstrap exception.** A repo-local skill cannot be loaded from a session whose checkout does
+not yet have it — the commit that adds `.claude/skills/<name>/` is, by definition, not in `main` when
+you go to land it. That is a one-time chicken-and-egg per skill: read the file from the worktree and
+follow it by hand. It is not a licence to run the whole thing from the primary checkout.
+
 ## Steps
 
 ### 1. Paths and branch
 
-- `MAIN_REPO`: the primary checkout (e.g. `/Users/rods/Development/inference`).
-- `WORKTREE`: `$MAIN_REPO.worktrees/<name>`.
-- `BRANCH`: `git -C "$WORKTREE" branch --show-current`.
+Derive all three from **where you are**, having passed the precondition above — do not take them as
+arguments:
+
+```bash
+WORKTREE=$(git rev-parse --show-toplevel)                                  # this worktree
+MAIN_REPO=$(git worktree list --porcelain | head -1 | cut -d' ' -f2)       # the primary checkout
+BRANCH=$(git branch --show-current)                                        # what lands
+```
 
 Abort if `WORKTREE` resolves to `MAIN_REPO`, or if the branch is the primary's own (`main`) — there is
-nothing to land.
+nothing to land. (Both are already excluded by the precondition; keep them as a cheap belt-and-braces,
+since every later step passes `MAIN_REPO` to a `git -C` that would otherwise operate on the wrong
+tree.)
 
 ### 2. Check the worktree is ready
 
