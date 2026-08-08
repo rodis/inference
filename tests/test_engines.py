@@ -307,6 +307,122 @@ def test_stay_ignores_vague_fixes(state, event):
     assert d is not None and d.occurred_at == T + 600
 
 
+# ~100m from _HOME (plausible GPS noise, outside radius 60) and ~150m (a distinct
+# place nearby, still under departure_distance_m).
+_EDGE = dict(lat=47.20784, lon=8.57468)
+_NEXT_DOOR = dict(lat=47.20829, lon=8.57468)
+
+
+def _stay56(**over):
+    """#56 config: hysteresis + bounded resume, as events/stay.yml sets them."""
+    cfg = {"break_fixes": 3, "rejoin_max_hole_seconds": 7200, "departure_distance_m": 500}
+    cfg.update(over)
+    return _stay(**cfg)
+
+
+def test_stay_hysteresis_forgives_a_noisy_edge_fix(state, event):
+    """One plausible-but-noisy fix past the radius (the 2026-08-07 shatter: acc 47m, 61.5m
+    from centroid) must not split the visit."""
+    eng = _stay56()
+    eng.decide(_fix(event, T), state)
+    eng.decide(_fix(event, T + 600), state)
+    assert eng.decide(_fix(event, T + 700, **_EDGE), state) is None          # outlier: buffered
+    eng.decide(_fix(event, T + 800), state)                                  # back inside: forgiven
+    eng.decide(_fix(event, T + 1400), state)
+    for i in range(3):                                                       # real departure: held
+        assert eng.decide(_fix(event, T + 1500 + i * 10, **_AWAY), state) is None
+    d = eng.decide(_fix(event, T + 1530, **_AWAY), state)                    # >500m finalizes it
+    assert d is not None and d.occurred_at == T + 1400                       # ONE stay, full span
+    assert d.score == 4                                                      # outlier not in lineage
+
+
+def test_stay_hysteresis_still_breaks_on_consecutive_outside_fixes(state, event):
+    eng = _stay56()
+    eng.decide(_fix(event, T), state)
+    eng.decide(_fix(event, T + 600), state)
+    assert eng.decide(_fix(event, T + 700, **_AWAY), state) is None          # 1 of 3
+    assert eng.decide(_fix(event, T + 710, **_AWAY), state) is None          # 2 of 3
+    assert eng.decide(_fix(event, T + 720, **_AWAY), state) is None          # 3: break confirmed, held
+    d = eng.decide(_fix(event, T + 730, **_AWAY), state)                     # >500m finalizes it
+    assert d is not None and d.occurred_at == T + 600
+
+
+def test_stay_resumes_across_a_sameplace_blackout(state, event):
+    """The 2026-08-08 bakery: 72min of silence, the stream rejoining 14m from the centroid,
+    a payment in the dark proving continuity. One stay spanning the hole."""
+    eng = _stay56()
+    eng.decide(_fix(event, T), state)
+    eng.decide(_fix(event, T + 600), state)
+    assert eng.decide(_fix(event, T + 600 + 4300, **_NEAR), state) is None   # gap > 3600: resume
+    eng.decide(_fix(event, T + 600 + 4400), state)
+    for i in range(3):
+        assert eng.decide(_fix(event, T + 6000 + i * 10, **_AWAY), state) is None  # break, held
+    d = eng.decide(_fix(event, T + 6030, **_AWAY), state)                    # >500m finalizes it
+    assert d is not None and d.occurred_at == T + 5000                       # spans the blackout
+    assert d.score == 4
+
+
+def test_stay_resume_is_refused_past_the_hole_limit(state, event):
+    """Beyond rejoin_max_hole 'stayed' vs 'left and came back' is unknowable: two stays."""
+    eng = _stay56()
+    eng.decide(_fix(event, T), state)
+    eng.decide(_fix(event, T + 600), state)
+    assert eng.decide(_fix(event, T + 600 + 7300, **_NEAR), state) is None   # hole > 7200: held only
+    d = eng.decide(_fix(event, T + 600 + 7400), state)                       # next fix finalizes
+    assert d is not None and d.occurred_at == T + 600
+
+
+def test_stay_resume_is_refused_after_a_proven_departure(state, event):
+    """A fix beyond departure_distance_m makes the return a SECOND visit."""
+    eng = _stay56()
+    eng.decide(_fix(event, T), state)
+    eng.decide(_fix(event, T + 600), state)
+    for i in range(3):
+        assert eng.decide(_fix(event, T + 700 + i * 10, **_AWAY), state) is None  # break, held
+    d = eng.decide(_fix(event, T + 740, **_AWAY), state)                     # 1.2km away: final
+    assert d is not None and d.occurred_at == T + 600
+    eng.decide(_fix(event, T + 900), state)                                  # back home: a new stay
+    eng.decide(_fix(event, T + 1500), state)
+    for i in range(3):
+        assert eng.decide(_fix(event, T + 1600 + i * 10, **_AWAY), state) is None
+    d2 = eng.decide(_fix(event, T + 1630, **_AWAY), state)                   # >500m finalizes it
+    assert d2 is not None and d2.occurred_at == T + 1500                     # second stay, own span
+
+
+def test_stay_resume_is_refused_after_a_tracked_excursion(state, event):
+    """2026-07-27: a 29min tracked walk passed back within 60m of a held bakery stay and
+    dragged its end 15min into the walk's own trip. The stream WATCHED the excursion — it
+    can contradict continuity — so the pass-through must not resume the stay."""
+    eng = _stay56()
+    eng.decide(_fix(event, T), state)
+    eng.decide(_fix(event, T + 600), state)
+    for i in range(3):
+        assert eng.decide(_fix(event, T + 700 + i * 10, **_NEXT_DOOR), state) is None  # break, held
+    for i in range(8):                                                       # tracked wandering nearby
+        assert eng.decide(_fix(event, T + 730 + i * 10, **_EDGE), state) is None
+    assert eng.decide(_fix(event, T + 810, **_NEAR), state) is None          # passes back through: NO resume
+    d = eng.decide(_fix(event, T + 1200, **_NEXT_DOOR), state)               # settles next door >= min_dwell
+    d = d or eng.decide(_fix(event, T + 1210, **_NEXT_DOOR), state)
+    assert d is not None and d.occurred_at == T + 600                        # ends BEFORE the walk
+
+
+def test_stay_held_stay_finalizes_when_a_new_stay_settles_nearby(state, event):
+    """Moving to the shop 150m over (inside departure_distance_m, outside the radius): the
+    held stay is emitted as soon as the new dwell crosses min_dwell — no far fix needed."""
+    eng = _stay56()
+    eng.decide(_fix(event, T), state)
+    eng.decide(_fix(event, T + 600), state)
+    for i in range(3):
+        assert eng.decide(_fix(event, T + 700 + i * 10, **_NEXT_DOOR), state) is None
+    d = eng.decide(_fix(event, T + 720 + 300, **_NEXT_DOOR), state)          # next-door dwell >= 300
+    assert d is not None and d.occurred_at == T + 600                        # the HELD stay emits
+    for i in range(3):
+        d2 = eng.decide(_fix(event, T + 1200 + i * 10, **_AWAY), state)
+    assert d2 is None                                                        # next-door stay now held
+    d2 = eng.decide(_fix(event, T + 1300, **_AWAY), state)                   # >500m finalizes it
+    assert d2 is not None and d2.occurred_at == T + 1020
+
+
 # --- validated_session_window ---------------------------------------------------
 
 # Mirrors car_trip.yml. _HOME/_NEAR (9.4m apart) stand in for a parked phone jittering;
