@@ -1361,10 +1361,26 @@ erasing its existence: one fix during a 40-minute gap in movement still says you
 | `max_accuracy_m` | `100` | vaguer fixes are dropped without touching the cluster |
 | `max_gap_seconds` | `3600` | a sampling outage longer than this ends the cluster wherever the next fix lands |
 | `max_speed_kmh` | `400` | plausibility guard |
+| `break_fixes` | `1` | hysteresis: consecutive out-of-radius fixes required to close the cluster (the buffered excursion persisting a full `min_dwell` also confirms, whatever its count). `1` = the pre-#56 behavior: a single fix breaks |
+| `rejoin_max_hole_seconds` | `0` | bounded resume: a closed stay is *held* and resumes if the stream rejoins its cluster within this hole — provided the hole was dark (at most a noise burst observed since the close) and no fix beyond `departure_distance_m` intervened. `0` = never (pre-#56) |
+| `departure_distance_m` | `500` | a fix this far from a held stay's centroid proves a real departure and finalizes it immediately (mirrors `trip_window`'s `min_distance_m`) |
 
-State: one `open` cluster — `{clat, clon, n, first_ts, last_ts, last_lat, last_lon, events}`. The
+State: one `open` cluster — `{clat, clon, n, first_ts, last_ts, last_lat, last_lon, events}` (plus a
+transient `out` buffer of hysteresis outliers) — and, when resume is enabled, one `pending`
+soft-closed stay of the same shape (plus `obs`, the count of fixes observed since it closed). The
 centroid is a **running mean** (`clat += (lat - clat) / n`), so it is O(1) in state size; the
 retained `events` list is what grows, and it is needed for lineage and capability derivation.
+
+A held stay is emitted (with its `occurred_at` unchanged — the last fix inside) as soon as anything
+proves the visit over: a fix beyond `departure_distance_m`, a hole past `rejoin_max_hole_seconds`,
+or another cluster elsewhere crossing `min_dwell` (a second stay is then inevitable). The #56 replay
+over 25 days (2026-08-08): half of all stays (39/78) had been cut short against the evidence — a
+single 47m-accuracy fix 1.5 m past the radius shattered one 2.5 h visit, and 33 of 39
+blackout-closed stays rejoined their own cluster after the gap. With `break_fixes: 3` /
+`rejoin: 7200` / `departure: 500` (what `events/stay.yml` sets), all six timeline-visible fragmented
+visits healed into single stays, zero real journeys were swallowed (the one tracked-walk regression
+found mid-replay is what the `obs` dark-hole condition exists to refuse), and every non-Home bridged
+hole carried a card payment at the same place corroborating the merge.
 
 ```mermaid
 flowchart TB
@@ -1402,8 +1418,10 @@ while the 13-minute drive between them fragmented into ~35 singleton clusters th
 nothing. Those are the numbers the defaults come from, not guesses.
 
 Two deliberate omissions keep this a *strategy* rather than a policy: no POI naming (the event is a
-generic `stay` carrying its centroid; labelling happens in the `place` capability), and no re-opening
-of a closed stay if you return (that is a second stay, correctly).
+generic `stay` carrying its centroid; labelling happens in the `place` capability), and no
+*unbounded* re-opening of a closed stay — the bounded resume above only bridges holes the stream
+itself left dark, so a return past the hole limit, after a provable departure, or after a *tracked*
+excursion is a second stay, correctly.
 
 ### `trip_window` (ADR 0010)
 
@@ -1713,7 +1731,8 @@ definitions are:
 | `session_gated_window` | `window` | `{name: {ts, event}}` (latest per name) | every contributor; **cleared on fire** |
 | | `open` | `{ts, event}` or `None` | on gate; cleared on fire or when stale |
 | | `last_fired` | `int` | on fire |
-| `stay_window` | `open` | `{clat, clon, n, first_ts, last_ts, last_lat, last_lon, events}` | every accepted fix |
+| `stay_window` | `open` | `{clat, clon, n, first_ts, last_ts, last_lat, last_lon, events}` (+ transient `out` = buffered hysteresis outliers) | every accepted fix |
+| | `pending` | the same cluster shape + `obs` (fixes observed since close) or `None` — the held soft-closed stay | on a stay-worthy close when `rejoin_max_hole_seconds` > 0; cleared on resume or finalize |
 | `trip_window` | `run` | `{sources, la0, la1, lo0, lo1, first_ts, gap_lo, n, last, settling}` or `None` | opened when a fix escapes the anchor; cleared on close. `gap_lo` = the fix preceding the departure fix (the evidence-gap bound) |
 | | `anchor` | a cluster `{clat, clon, n, first_ts, last, last_event, prev_ts, fixes, events}` or `None` | the cluster you are settled in; becomes the arrival cluster on close. `prev_ts` = the fix before the cluster (set when a blackout resets it) |
 | | `marks` | `[{ts, event}]` — latched corroboration, pruned to `max_duration_seconds` | every corroborating event; those up to the padded span consumed on close (gap-extended end-zone marks are attached but retained — they may be the next leg's entry) |
@@ -1721,7 +1740,7 @@ definitions are:
 | | `recent` | `[[lo, hi]]` — spans of emitted journeys, pruned to `recent_horizon_seconds` | on primary emission; read to absorb late secondaries |
 | | `clock` / `last_tick` | `int` — the lagged expiry clock / newest tick seen (feeds the geometry veto) | every tick or secondary |
 
-Concretely, for the current definition set: `stay:open`, `trip:run`, `trip:anchor`, `trip:marks`,
+Concretely, for the current definition set: `stay:open`, `stay:pending`, `trip:run`, `trip:anchor`, `trip:marks`,
 `got_into_the_car:window`,
 `got_into_the_car:last_fired`, `got_out_the_car:window`, `got_out_the_car:open`,
 `got_out_the_car:last_fired`, `car_trip:open`, `car_trip:track`,

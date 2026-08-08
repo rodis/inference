@@ -24,6 +24,28 @@ engine_config:
   max_gap_seconds: 3600      # a sampling outage longer than this ends the stay, so an iOS
                              # suspension can't fuse two visits hours apart into one
 
+  # The two #56 guards, measured on a 25-day replay (2026-08-08) in which HALF of all stays
+  # (39/78) were cut short against the evidence — six timeline-visible visits in nine days,
+  # three with a card payment sitting in the wrongly-dropped stretch.
+  break_fixes: 3             # one noisy fix must not shatter a visit: a 47m-accuracy fix
+                             # 61.5m from the centroid (1.5m past the radius) split a real
+                             # 2.5h bakery visit into 5min + 131min on 2026-08-07. Three
+                             # consecutive outside fixes = ~30s of real Overland cadence, so
+                             # a genuine departure closes barely later than before (and the
+                             # stay's END is the last inside fix either way).
+  rejoin_max_hole_seconds: 7200
+                             # a closed stay resumes if the stream rejoins its cluster within
+                             # 2h: 33 of the 39 blackout-closed stays rejoined (median ~10m
+                             # from centroid), and every observed repairable hole was under
+                             # 2h. Bounded, because past some silence "stayed" vs "left and
+                             # came back" is genuinely unknowable — that ambiguity is what
+                             # max_gap_seconds has always guarded.
+  departure_distance_m: 500  # ...but a fix this far from the held cluster proves a real
+                             # departure and finalizes it immediately — mirrors trip.yml's
+                             # min_distance_m: the same displacement that makes a journey
+                             # real makes a return a SECOND visit. ADR 0009: a physical
+                             # fact, not a weight.
+
 source_topic: raw_sensors
 sink_topic: high_level_events
 
