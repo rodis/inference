@@ -87,6 +87,99 @@ ON CONFLICT (user_id) DO UPDATE
   SET level = EXCLUDED.level, hidden = EXCLUDED.hidden, updated_at = now()
 """
 
+# The Money module's aggregate (portal P2, issue #64) — the first module-owned route: it
+# ships with dashboards/money/* and the frame never learns its shape. One round trip, all
+# aggregation server-side, because the whole point of the module data seam is that a board
+# wanting 30 days of payments must not widen the shared events window every board loads.
+#
+# Two design decisions worth stating:
+#
+# - **The place join is time containment, not merchant-name parsing.** A payment that fell
+#   inside a labelled stay's interval inherits that stay's place label — the same rule the
+#   timeline's moments lane draws bands with (hostOf), done in SQL. The *shortest* containing
+#   stay wins, mirroring hostOf's innermost-container rule. Merchant strings are terminal
+#   noise ("Backerei Konditorei", "Coop-2214 Baar SBB"); the stay label is reference data the
+#   user curated, so it groups cleanly. Unmatched payments keep their merchant string.
+# - **Windows are trailing whole UTC days**, same convention as EVENTS_SQL, and the previous
+#   window (for the delta) is simply the equal-length window before it. days=7 ⇒ "this week"
+#   means the last 7 whole days, not a calendar week — honest and picker-free.
+SPEND_SQL = """
+WITH bounds AS (
+  SELECT (date_trunc('day', now() AT TIME ZONE 'UTC')
+            - make_interval(days => %(days)s::int - 1)) AT TIME ZONE 'UTC' AS start,
+         (date_trunc('day', now() AT TIME ZONE 'UTC') + interval '1 day') AT TIME ZONE 'UTC' AS fin,
+         (date_trunc('day', now() AT TIME ZONE 'UTC')
+            - make_interval(days => 2 * %(days)s::int - 1)) AT TIME ZONE 'UTC' AS prev_start
+),
+pay AS (
+  SELECT e.id, e.occurred_at,
+         (e.message->>'amount')::numeric AS amount,
+         coalesce(e.message->>'merchant', 'unknown') AS merchant,
+         extract(epoch from e.occurred_at) AS ts
+  FROM events e, bounds b
+  WHERE e.name = 'credit_card_payment' AND e.user_id = %(user_id)s
+    AND e.occurred_at >= b.start AND e.occurred_at < b.fin
+),
+located AS (
+  SELECT p.*, s.label
+  FROM pay p
+  LEFT JOIN LATERAL (
+    SELECT st.message->'place'->>'label' AS label
+    FROM events st, bounds b
+    WHERE st.name = 'stay' AND st.user_id = %(user_id)s
+      -- a stay emits at departure, so one containing this payment lands at or after it;
+      -- the +1 day catches a stay still open at the window's edge
+      AND st.occurred_at >= p.occurred_at AND st.occurred_at < b.fin + interval '1 day'
+      AND st.message->'place'->>'label' IS NOT NULL
+      AND (st.message->'interval'->>'started_at')::numeric <= p.ts
+      AND (st.message->'interval'->>'ended_at')::numeric >= p.ts
+    ORDER BY (st.message->'interval'->>'duration_seconds')::numeric ASC
+    LIMIT 1
+  ) s ON true
+),
+day_list AS (
+  SELECT to_char(date_trunc('day', now() AT TIME ZONE 'UTC') - make_interval(days => n),
+                 'YYYY-MM-DD') AS day
+  FROM generate_series(%(days)s::int - 1, 0, -1) AS n
+),
+by_day AS (
+  SELECT d.day,
+         coalesce(sum(l.amount), 0)::float AS total,
+         count(l.id)::int AS count
+  FROM day_list d
+  LEFT JOIN located l
+    ON to_char(l.occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') = d.day
+  GROUP BY d.day
+),
+merchants AS (
+  SELECT coalesce(l.label, l.merchant) AS label,
+         bool_or(l.label IS NOT NULL) AS placed,
+         count(*)::int AS count,
+         sum(l.amount)::float AS total
+  FROM located l
+  GROUP BY 1
+),
+prev AS (
+  SELECT coalesce(sum((e.message->>'amount')::numeric), 0)::float AS total
+  FROM events e, bounds b
+  WHERE e.name = 'credit_card_payment' AND e.user_id = %(user_id)s
+    AND e.occurred_at >= b.prev_start AND e.occurred_at < b.start
+)
+SELECT json_build_object(
+  'days', %(days)s::int,
+  'total', coalesce((SELECT sum(amount) FROM pay), 0)::float,
+  'count', (SELECT count(*) FROM pay)::int,
+  'matched', (SELECT count(*) FROM located WHERE label IS NOT NULL)::int,
+  'prev_total', (SELECT total FROM prev),
+  'by_day', (SELECT json_agg(json_build_object(
+                'day', day, 'total', total, 'count', count) ORDER BY day) FROM by_day),
+  'merchants', coalesce((SELECT json_agg(json_build_object(
+                'label', label, 'placed', placed, 'count', count, 'total', total)
+                ORDER BY total DESC)
+              FROM (SELECT * FROM merchants ORDER BY total DESC LIMIT 8) m), '[]'::json)
+)
+"""
+
 
 def _db_url() -> str:
     url = os.environ.get("DATABASE_URL")
@@ -228,6 +321,16 @@ def put_preferences(user_id: str = Query(...), body: dict = Body(...)):
     with app.state.pool.connection() as conn, conn.cursor() as cur:
         cur.execute(PREFS_UPSERT_SQL, (user_id, Jsonb(level), Jsonb(hidden)))
     return JSONResponse({"ok": True})
+
+
+@app.get("/api/money/spend")
+def money_spend(user_id: str = Query(...), days: int = Query(7, ge=1, le=90)):
+    """Spend over the trailing `days` whole UTC days: per-day totals (zero-filled), the
+    previous equal window for the delta, and merchants grouped by the place label the
+    payment×stay containment join assigns (falling back to the raw merchant string)."""
+    with app.state.pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(SPEND_SQL, {"user_id": user_id, "days": days})
+        return JSONResponse(cur.fetchone()[0])
 
 
 @app.get("/api/stream")

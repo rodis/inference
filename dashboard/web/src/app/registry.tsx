@@ -6,6 +6,8 @@ import type { LucideIcon } from "lucide-react";
 import TimelineDashboard from "../dashboards/timeline/TimelineDashboard";
 import LevelsDashboard from "../dashboards/levels/LevelsDashboard";
 import LastJourneyCard from "../dashboards/home/LastJourneyCard";
+import SpendDashboard from "../dashboards/money/SpendDashboard";
+import SpendHomeCard from "../dashboards/money/SpendHomeCard";
 
 /** The portal's whole structure is registry data: sections give the sidebar its groups,
  *  modules give it entries, and the frame (Shell / HomeView / the palette) only ever derives
@@ -38,10 +40,7 @@ export const SECTIONS: Section[] = [
   { id: "life", title: "Life" },
   { id: "places", title: "Places", planned: [{ title: "Stays", Icon: MapPin }] },
   { id: "journeys", title: "Journeys", planned: [{ title: "Journeys", Icon: Route }] },
-  {
-    id: "money", title: "Money",
-    planned: [{ title: "Weekly spend", Icon: CreditCard }, { title: "Merchants", Icon: Store }],
-  },
+  { id: "money", title: "Money", planned: [{ title: "Merchants", Icon: Store }] },
   { id: "health", title: "Health", planned: [{ title: "Activity", Icon: Activity }] },
   {
     id: "brain", title: "Brain",
@@ -87,6 +86,10 @@ export const MODULES: ModuleDef[] = [
   {
     slug: "timeline", title: "Day timeline", section: "life", Icon: Calendar,
     component: TimelineDashboard, HomeCard: LastJourneyCard,
+  },
+  {
+    slug: "spend", title: "Weekly spend", section: "money", Icon: CreditCard,
+    component: SpendDashboard, HomeCard: SpendHomeCard, scopes: ["week", "month"],
   },
   { slug: "levels", title: "Levels", section: "config", Icon: Layers, component: LevelsDashboard },
 ];

@@ -548,6 +548,27 @@ footer b { color: var(--ink-2); font-weight: 600; }
 .hc-chip.good { background: var(--good-soft); color: var(--good); font-weight: 700; }
 .hc-chip.veh { background: var(--demote-soft); color: var(--demote); font-weight: 700; }
 
+/* ── the Money board (dashboards/money) ───────────────────────────────────────── */
+.mny-cols { display: grid; grid-template-columns: minmax(0, 3fr) minmax(260px, 2fr); gap: 14px; align-items: start; }
+@media (max-width: 860px) { .mny-cols { grid-template-columns: 1fr; } }
+.mny-stat { display: flex; align-items: baseline; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.mny-stat .big { font-family: var(--rounded); font-size: 30px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.mny-stat .delta { font-family: var(--mono); font-size: 11px; color: var(--ink-2); }
+.mny-stat .delta.down { color: var(--good); }
+.mny-chart { display: flex; align-items: flex-end; gap: 8px; height: 140px; margin-top: 18px; }
+.mny-bar { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 5px; height: 100%; }
+.mny-bar .fill { width: 100%; max-width: 46px; border-radius: 4px 4px 0 0; min-height: 2px; }
+.mny-bar .fill:hover { filter: brightness(1.1); }
+.mny-bar .bl { font-family: var(--mono); font-size: 9.5px; color: var(--muted); height: 13px; }
+.mny-bar.today .bl { color: var(--accent); font-weight: 700; }
+.mny-bar .bv { font-family: var(--mono); font-size: 9.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.mny-list { margin-top: 12px; display: flex; flex-direction: column; gap: 9px; }
+.mny-row { display: grid; grid-template-columns: 26px minmax(0, 1fr) 64px; align-items: center; gap: 9px; }
+.mny-row .ptile { width: 24px; height: 24px; border-radius: 7px; color: #fff; display: flex; align-items: center; justify-content: center; font-family: var(--rounded); font-size: 11px; font-weight: 750; }
+.mny-row .pname { font-size: 12.5px; font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mny-row .msub { font-family: var(--mono); font-size: 9.5px; color: var(--muted); }
+.mny-row .mv { font-family: var(--mono); font-size: 11px; text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+
 /* ── ⌘K palette (Palette.tsx) — same overlay as the modal, its own panel ─────── */
 .pal-ov { padding-top: 12vh; align-items: flex-start; }
 .pal { width: 100%; max-width: 480px; background: var(--card); border-radius: 18px; box-shadow: var(--shadow-lg); overflow: hidden; }

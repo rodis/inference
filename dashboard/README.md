@@ -17,6 +17,7 @@ level up.
 |-------|---------------|
 | **/** (Home) | the latest day as a vertical **spine** (the day board's capsule grammar at card scale — everyday places excluded, unnamed stays hollow) beside each module's registered **HomeCard**; cards are doors, never the analysis |
 | **/d/timeline** | one day as **two parallel timelines** on a shared time scale (see below), with a pinch/⌘-scroll **semantic zoom** that reveals or folds detail around the point you're looking at |
+| **/d/spend** | spend over the shared period (week/month): per-day bars + merchants grouped by the **place label** the payment×stay containment join assigns (`/api/money/spend` — the module's own route, the first proof of the per-module data lane) |
 | **/d/levels** | the altitude ladder: where each event *type* lives, drag-and-drop (see below) |
 
 **⌘K** opens the palette: results are computed, never hand-registered — modules from the
