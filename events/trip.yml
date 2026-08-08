@@ -80,6 +80,19 @@ engine_config:
   # It cannot widen `interval`, which is derived from the located fixes alone.
   corroboration_pad_seconds: 60
 
+  # ...and where the pad's "one sampling interval" reasoning breaks — where the edge's actual
+  # sampling interval is minutes, not seconds — tolerate the ACTUAL gap instead (issue #46).
+  # A boundary also counts in the stretch the location stream cannot contradict: before the
+  # start, back to the fix preceding the departure fix (the 2026-08-03 cold-start put a real
+  # got_into 196s out, in a 12h overnight silence); after the end, while the fixes still sat in
+  # the arrival cluster (the same day's parking-spot search put the real got_out 288s out, all
+  # of it circling in-cluster). Densely-sampled edges tighten back to ~the pad on their own.
+  # Adjudicated with scripts/vehicle_eval.py over 25 days (2026-08-08): own-car confirmed
+  # 11 -> 19 of 27 (absent 5 -> 0), zero new false corroboration — the borrowed-car vet legs
+  # that killed the wider pads all stayed clean, and every "uncorroborated" gain traced to a
+  # CarPlay-proxy mislabel of a real own-car trip.
+  corroboration_gap_tolerant: true
+
 source_topic: raw_sensors
 sink_topic: high_level_events
 

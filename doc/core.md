@@ -1416,6 +1416,7 @@ Overland in full (123 fixes out, 104 back, max 119 km/h, bounding-box extent 13.
 | `location_event` | `location_ping` | named, so this stays a strategy rather than a location policy |
 | `corroborating_events` | `()` | events that ride along as **evidence** without defining the span (see below) |
 | `corroboration_pad_seconds` | `60` | how far outside the span a corroborating event may sit and still count |
+| `corroboration_gap_tolerant` | `false` | additionally accept a mark across the adjacent **evidence gap** — see below (issue #46) |
 
 State: one `run`, one `anchor` (the cluster you are sitting in) and a `marks` list (latched
 corroboration). `run`/`anchor` are `None` between trips; `marks` is bounded by
@@ -1523,16 +1524,32 @@ mattering here: a boundary that fired on the wrong side still proves the car was
 no longer has to **be** the boundary. On real data most trips' evidence reads `[got_out, got_into]` —
 the exit preceding the entry, i.e. issue #2's phantom, visible in the lineage and harmless.
 
-Two mechanics carry it. A **latch**, because the entry boundary fires when you get in — before the
+Three mechanics carry it. A **latch**, because the entry boundary fires when you get in — before the
 first moving fix, so before the run exists (measured: up to 15 minutes ahead of it on
 sparsely-sampled mornings); marks are therefore recorded whether or not a run is open, and consumed
-on close so a later journey can't reuse them. And **zero tolerance** on containment, for two
-independent reasons: a mark outside the span would widen the `interval` capability (which projects
-from the lineage extent — the corruption `validated_session_window` refuses its own fixes for) and on
-the `ended_at` side would break `occurred_at == interval.ended_at`; and containment measured *better*
-than a pad, since at ±2 min a phantom exit 31 s past a borrowed-car arrival leaked in and claimed the
-vehicle, while at zero the separation was perfect (all 14 own-car journeys kept evidence, all 6
-borrowed-car ones had none).
+on close so a later journey can't reuse them. A **pad** (`corroboration_pad_seconds`) on
+containment, because a correctly-measured journey *systematically excludes* both boundaries — you
+get in before the phone leaves the departure cluster and get out after it enters the arrival one
+(measured medians −58 s / +18 s over 25 Jul–1 Aug); strict containment found evidence on only 6 of
+21 journeys where 15 were own-car, 60 s recovered 14, and wider pads bought nothing real — 120 s and
+180 s each only admitted borrowed-car legs gaining a phantom exit (31 s past a vet-return arrival).
+The pad is safe where it once wasn't because `interval` projects from the **located** sources alone,
+so a mark outside the span can no longer widen the span or break `occurred_at == interval.ended_at`.
+And **gap tolerance** (`corroboration_gap_tolerant`, issue #46), because a fixed pad cannot fit both
+real failure modes at once: an Overland cold-start put a real `got_into` 196 s before a span whose
+first fix of the day was already moving, and a parking-spot search put the real `got_out` 288 s
+after an arrival dated (correctly) at the settle cluster's first fix — while every pad past 60 s
+only admitted phantoms. With the flag on, a mark also counts when the location stream *cannot
+contradict* it belonging to this trip: before the start, back to the fix **preceding** the departure
+fix (the silent gap the boundary fired in — densely-sampled edges stay tight, only genuinely silent
+ones widen); after the end, while the fixes still sat inside the **arrival cluster** when the trip
+closed. Marks in that gap-extended end zone are attached but **retained** rather than consumed — a
+boundary firing while the arrival cluster still holds may be the *next* leg's entry (the 2026-08-01
+petrol stop chained two trips minutes apart, and consuming it stripped the second leg's only
+evidence). Adjudicated with `scripts/vehicle_eval.py` over 25 days (2026-08-08): own-car `confirmed`
+went **11 → 19 of 27** (absent 5 → 0) with **zero new false corroboration** — every extra
+"uncorroborated" gain traced to a CarPlay-proxy mislabel of a real own-car trip, and the genuinely
+borrowed vet legs stayed clean.
 
 Two deliberate omissions keep this a strategy: it says nothing about **mode** or about **where** the
 trip went — origin, destination and mode are derived from the same evidence by the `journey`
@@ -1622,9 +1639,9 @@ definitions are:
 | | `open` | `{ts, event}` or `None` | on gate; cleared on fire or when stale |
 | | `last_fired` | `int` | on fire |
 | `stay_window` | `open` | `{clat, clon, n, first_ts, last_ts, last_lat, last_lon, events}` | every accepted fix |
-| `trip_window` | `run` | `{sources, la0, la1, lo0, lo1, first_ts, n, last, settling}` or `None` | opened when a fix escapes the anchor; cleared on close |
-| | `anchor` | a cluster `{clat, clon, n, first_ts, last, last_event, fixes, events}` or `None` | the cluster you are settled in; becomes the arrival cluster on close |
-| | `marks` | `[{ts, event}]` — latched corroboration, pruned to `max_duration_seconds` | every corroborating event; those inside the span consumed on close |
+| `trip_window` | `run` | `{sources, la0, la1, lo0, lo1, first_ts, gap_lo, n, last, settling}` or `None` | opened when a fix escapes the anchor; cleared on close. `gap_lo` = the fix preceding the departure fix (the evidence-gap bound) |
+| | `anchor` | a cluster `{clat, clon, n, first_ts, last, last_event, prev_ts, fixes, events}` or `None` | the cluster you are settled in; becomes the arrival cluster on close. `prev_ts` = the fix before the cluster (set when a blackout resets it) |
+| | `marks` | `[{ts, event}]` — latched corroboration, pruned to `max_duration_seconds` | every corroborating event; those up to the padded span consumed on close (gap-extended end-zone marks are attached but retained — they may be the next leg's entry) |
 
 Concretely, for the current definition set: `stay:open`, `trip:run`, `trip:anchor`, `trip:marks`,
 `got_into_the_car:window`,

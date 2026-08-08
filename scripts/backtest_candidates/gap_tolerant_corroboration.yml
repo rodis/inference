@@ -1,0 +1,7 @@
+# Issue #46: accept a corroborating boundary across the ADJACENT EVIDENCE GAP instead of a
+# fixed pad — back to the fix preceding the departure fix, forward while the arrival cluster
+# still held. The 60s pad stays as the floor (the flag only ever adds marks).
+# Adjudicate with scripts/vehicle_eval.py: own-car recall must rise WITHOUT the uncorroborated
+# bucket gaining evidence (the borrowed-car phantom legs that killed the 120/180s pads).
+trip:
+  corroboration_gap_tolerant: true

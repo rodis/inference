@@ -230,12 +230,14 @@ def _vehicle(sources: list[dict]) -> dict:
     `got_into_the_car` — which definitions the corroboration comes from is the engine's config,
     and framework code stays free of concrete event names.
 
-    There is no tolerance window: the engine folds a corroborating source only when it lies
-    strictly inside the span, so anything reaching this deriver is already contained. That
-    matters twice over. It keeps `interval` exact — a source outside the span would silently
-    rewrite `started_at`/`ended_at`, the trap `validated_session_window` documents for its own
-    fixes — and it measured *better*: at a 2-minute pad a phantom `got_out` 31 s past a
-    borrowed-car arrival leaked in, while at zero the separation was perfect.
+    Which corroborating sources reach this deriver is the ENGINE's decision, not this one's:
+    the engine folds a mark when it lies inside the span plus its `corroboration_pad_seconds`
+    (a correctly-measured journey systematically excludes both car boundaries), stretched
+    across the adjacent evidence gap when `corroboration_gap_tolerant` is set (issue #46 —
+    a cold-start entry or a parking-search exit falls minutes outside any sane pad, in a
+    stretch the location stream cannot contradict). None of that widens `interval`, which
+    derives from the located sources alone — the trap `validated_session_window` documents
+    for its own fixes.
 
     Names are deduplicated in first-seen event-time order, so `evidence` reads chronologically
     and `confirmed` counts distinct signals rather than repeats (a lock burst while unloading

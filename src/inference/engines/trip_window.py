@@ -106,6 +106,19 @@ class TripWindowEngine:
         # was wrong. It cannot widen the `interval` capability, which is derived from the located
         # fixes alone (see `capabilities._interval`).
         self.corroboration_pad_seconds = int(config.get("corroboration_pad_seconds", 0))
+        # Widen corroboration by EVIDENCE GAPS instead of seconds (issue #46). A fixed pad
+        # cannot fit both failure modes at once: an Overland cold-start put a real `got_into`
+        # 196s before the span (the first fix of the day was already moving, so the span could
+        # not start earlier), and a parking-spot search put the real `got_out` 288s after it
+        # (arrival is dated at the settle cluster's first fix, correctly) — while every pad
+        # past 60s only admitted borrowed-car phantoms. Gap tolerance accepts a mark when the
+        # location stream cannot contradict it belonging to this trip: before the start, back
+        # to the last fix PRECEDING the departure fix (the silent gap the boundary fired in);
+        # after the end, while the fixes still sit inside the arrival cluster (the entity
+        # demonstrably hadn't gone anywhere else yet). Both bounds are read off actual fixes,
+        # so densely-sampled edges tighten to ~one sampling interval — the pad's own rationale
+        # — and only genuinely silent edges widen.
+        self.corroboration_gap_tolerant = bool(config.get("corroboration_gap_tolerant", False))
 
     def input_event_names(self) -> set[str]:
         return {self.location_event} | set(self.corroborating_events)
@@ -152,7 +165,7 @@ class TripWindowEngine:
         # before it is a stale departure point, not a departure point.
         if last is not None and now - int(last["ts"]) > self.max_gap_seconds:
             decision = self._close(run, state) if run else None
-            state.set("anchor", self._cluster(fix, event))
+            state.set("anchor", self._cluster(fix, event, prev_ts=int(last["ts"])))
             return decision
 
         if run is None:
@@ -178,12 +191,17 @@ class TripWindowEngine:
 
         # Left. The journey departs from the anchor's LAST fix — a real fix with a real
         # timestamp, inside the place we were, so the origin still matches its POI.
+        # `gap_lo` is the fix PRECEDING that departure fix — the far edge of the evidence gap
+        # a gap-tolerant corroborator may fall in (None when the anchor is all we ever saw).
+        fixes = anchor["fixes"]
+        gap_lo = int(fixes[-2]["ts"]) if len(fixes) >= 2 else anchor.get("prev_ts")
         state.set("anchor", None)                     # consumed by the run it opens
         state.set("run", {
             "sources": [anchor["last_event"], event],
             "la0": min(anchor["last"]["lat"], fix["lat"]), "la1": max(anchor["last"]["lat"], fix["lat"]),
             "lo0": min(anchor["last"]["lon"], fix["lon"]), "lo1": max(anchor["last"]["lon"], fix["lon"]),
             "first_ts": int(anchor["last"]["ts"]),
+            "gap_lo": gap_lo,
             "n": 1,
             "last": dict(fix),
             "settling": None,
@@ -231,11 +249,14 @@ class TripWindowEngine:
     # --- clusters -----------------------------------------------------------------
 
     @staticmethod
-    def _cluster(fix: dict, event: dict) -> dict:
+    def _cluster(fix: dict, event: dict, prev_ts: int | None = None) -> dict:
         """A one-fix cluster. `fixes`/`events` are retained because a candidate that turns out
-        not to be an arrival must hand its fixes back to the journey."""
+        not to be an arrival must hand its fixes back to the journey. `prev_ts` remembers the
+        fix that preceded this cluster (set when a blackout resets the anchor), so a run
+        departing from a single-fix anchor still knows where its evidence gap begins."""
         return {"clat": fix["lat"], "clon": fix["lon"], "n": 1,
                 "first_ts": int(fix["ts"]), "last": dict(fix), "last_event": event,
+                "prev_ts": prev_ts,
                 "fixes": [dict(fix)], "events": [event]}
 
     @staticmethod
@@ -276,7 +297,8 @@ class TripWindowEngine:
         marks.append({"ts": ts, "event": event})
         state.set("marks", marks)
 
-    def _fold_marks(self, state: ScopedState, first_ts: int, end_ts: int) -> list[dict]:
+    def _fold_marks(self, state: ScopedState, first_ts: int, end_ts: int,
+                    gap_lo: int | None, arrival_hi: int | None) -> list[dict]:
         """The corroborating events lying inside the closing span, plus `corroboration_pad_seconds`.
 
         The pad exists because a correctly-measured journey **systematically excludes** both car
@@ -290,12 +312,28 @@ class TripWindowEngine:
         span can no longer rewrite `started_at`/`ended_at` or break
         `occurred_at == interval.ended_at`. The pad buys evidence without touching the geometry.
 
-        Consumed marks are dropped, along with anything older than the padded span, so a later
-        journey cannot re-use this one's evidence.
+        With `corroboration_gap_tolerant` the acceptance window additionally stretches to the
+        evidence-gap bounds (issue #46, see `__init__`): back to `gap_lo` — the fix preceding
+        the departure fix — and forward to `arrival_hi` — the last fix the arrival cluster had
+        absorbed when the trip closed. Whichever of pad and gap is wider wins per edge, so the
+        flag can only add marks, never lose one the pad would have found.
+
+        Marks up to the padded span are consumed; anything older is dropped with them, so a
+        later journey cannot re-use this one's evidence. Marks in the gap-extended END zone
+        are attached but RETAINED: a boundary firing while the arrival cluster still held may
+        be the *next* leg's entry (a petrol stop chains two trips minutes apart — measured
+        2026-08-01, where consuming it stripped the following leg's only evidence), and a
+        boundary between two legs of one errand corroborates both.
         """
         pad = self.corroboration_pad_seconds
+        lo, hi = first_ts - pad, end_ts + pad
+        if self.corroboration_gap_tolerant:
+            if gap_lo is not None:
+                lo = min(lo, int(gap_lo))
+            if arrival_hi is not None:
+                hi = max(hi, int(arrival_hi))
         marks = state.get("marks") or []
-        inside = [m for m in marks if first_ts - pad <= int(m["ts"]) <= end_ts + pad]
+        inside = [m for m in marks if lo <= int(m["ts"]) <= hi]
         state.set("marks", [m for m in marks if int(m["ts"]) > end_ts + pad])
         return [m["event"] for m in inside]
 
@@ -321,16 +359,22 @@ class TripWindowEngine:
             sources.append(settling["events"][0])
             self._widen(run, arrival)
             end_ts = int(arrival["ts"])
+            # The span ends at the cluster's FIRST fix, but the cluster had absorbed fixes up
+            # to its last one by the time the trip closed — the stretch the entity demonstrably
+            # stayed put in, where a late boundary (a parking-spot search's got_out) may fall.
+            arrival_hi = int(settling["last"]["ts"])
             state.set("anchor", settling)             # arrive here, depart from here next
         else:
             end_ts = int(run["last"]["ts"])
+            arrival_hi = None                         # closed blind — no cluster to vouch
             state.set("anchor", None)                 # nowhere trustworthy to depart from
         state.set("run", None)
 
         # Evidence riding along, not shaping the verdict: the guardrails below judge the journey
         # on displacement alone, exactly as they do with no corroboration configured. Sorting
         # keeps the lineage chronological now that two streams contribute to it.
-        sources.extend(self._fold_marks(state, int(run["first_ts"]), end_ts))
+        sources.extend(self._fold_marks(state, int(run["first_ts"]), end_ts,
+                                        run.get("gap_lo"), arrival_hi))
         sources.sort(key=lambda s: int((s.get("message") or {}).get("timestamp", 0)))
 
         duration = end_ts - int(run["first_ts"])

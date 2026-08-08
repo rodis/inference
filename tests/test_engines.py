@@ -823,3 +823,101 @@ def test_stale_marks_do_not_accumulate(state, event):
     eng.decide(event("got_into_the_car", T), state)
     eng.decide(event("got_out_the_car", T + 5000), state)                # prunes the first
     assert [m["ts"] for m in state.get("marks")] == [T + 5000]
+
+
+# --- gap-tolerant corroboration (issue #46) --------------------------------------
+#
+# A fixed pad cannot fit both real failure modes at once: an Overland cold-start put a real
+# got_into 196s before the span (the first fix of the day was already MOVING, so the span could
+# not start earlier), and a parking-spot search put the real got_out 288s after it — while every
+# pad past 60s only admitted borrowed-car phantoms. Gap tolerance accepts a mark when the
+# location stream cannot contradict it belonging to this trip.
+
+
+def _gap_tolerant(**over):
+    return _corroborated(corroboration_pad_seconds=60,
+                         corroboration_gap_tolerant=True, **over)
+
+
+def test_a_boundary_in_the_cold_start_gap_counts(state, event):
+    """The 2026-08-03 start edge: 12h of overnight silence, then a first fix already at 58km/h —
+    the got_into fired in the gap, 196s before the span could start. No fix contradicts it."""
+    eng = _gap_tolerant()
+    eng.decide(_fix(event, T, **_HOME), state)                           # last fix before the night
+    eng.decide(event("got_into_the_car", T + 5000), state)               # fires in the silence
+    # First fix of the day is already under way (blackout resets the anchor), 200s after the mark.
+    last, _ = _leg(eng, state, event, T + 5200)
+    d = _arrive(eng, state, event, last + 60)
+    assert d is not None
+    assert "got_into_the_car" in [s["message"]["name"] for s in d.sources]
+    # ...and the span still starts at the first located fix — evidence, not geometry.
+    fixes = [s["message"]["timestamp"] for s in d.sources if s["message"].get("lat") is not None]
+    assert min(fixes) == T + 5200
+
+
+def test_the_gap_stops_at_the_previous_fix(state, event):
+    """A fix BETWEEN the mark and the departure contradicts the mark belonging to this trip —
+    the tolerance is read off the actual sampling, so a densely-sampled edge stays tight."""
+    eng = _gap_tolerant()
+    eng.decide(event("got_into_the_car", T + 30), state)                 # 90s before departure...
+    dep = _sit(eng, state, event, T)                                     # ...but fixes keep coming
+    last, _ = _leg(eng, state, event, dep + 60)
+    d = _arrive(eng, state, event, last + 60)
+    assert d is not None
+    assert "got_into_the_car" not in [s["message"]["name"] for s in d.sources]
+
+
+def test_a_boundary_during_the_parking_search_counts(state, event):
+    """The 2026-08-03 end edge: arrival is dated at the settle cluster's first fix (correctly),
+    then minutes of circling for a spot — the got_out fires in-cluster, past any sane pad."""
+    eng = _gap_tolerant()
+    _sit(eng, state, event, T)
+    last, _ = _leg(eng, state, event, T + 300)
+    assert eng.decide(_fix(event, last + 60, **_AWAY), state) is None    # arrival cluster opens
+    assert eng.decide(_fix(event, last + 180, **_AWAY), state) is None
+    eng.decide(event("got_out_the_car", last + 260), state)              # 200s past the span end
+    d = eng.decide(_fix(event, last + 390, **_AWAY), state)              # cluster confirms
+    assert d is not None and d.occurred_at == last + 60                  # end untouched
+    assert "got_out_the_car" in [s["message"]["name"] for s in d.sources]
+
+
+def test_a_boundary_after_the_arrival_cluster_broke_is_excluded(state, event):
+    """The tolerance ends where the evidence does: once the entity moved on, a later boundary
+    belongs to whatever comes next, not to this trip."""
+    eng = _gap_tolerant()
+    _sit(eng, state, event, T)
+    last, _ = _leg(eng, state, event, T + 300)
+    d = _arrive(eng, state, event, last + 60)                            # closes at last + 390
+    assert d is not None
+    eng.decide(event("got_out_the_car", last + 500), state)              # after the close
+    assert [m["ts"] for m in state.get("marks")] == [last + 500]         # latched for the NEXT trip
+
+
+def test_a_boundary_between_two_chained_trips_corroborates_both(state, event):
+    """The 2026-08-01 petrol stop: legs minutes apart, one entry boundary between them. It fired
+    while leg 1's arrival cluster still held AND belongs to leg 2's departure gap — consuming it
+    on leg 1 (the first implementation) stripped leg 2's only evidence."""
+    eng = _gap_tolerant()
+    _sit(eng, state, event, T)
+    last, _ = _leg(eng, state, event, T + 300)
+    assert eng.decide(_fix(event, last + 60, **_AWAY), state) is None    # arrive at the pump
+    eng.decide(event("got_into_the_car", last + 260), state)             # in-cluster, past end+pad
+    d1 = eng.decide(_fix(event, last + 390, **_AWAY), state)
+    assert d1 is not None
+    assert "got_into_the_car" in [s["message"]["name"] for s in d1.sources]
+    back, _ = _leg(eng, state, event, last + 420, frm=_AWAY, to=_HOME)   # straight back out
+    d2 = _arrive(eng, state, event, back + 60, at=_HOME)
+    assert d2 is not None
+    assert "got_into_the_car" in [s["message"]["name"] for s in d2.sources]
+
+
+def test_gap_tolerance_off_keeps_the_pad_semantics(state, event):
+    """The flag gates everything: without it the cold-start mark stays excluded (this is the
+    documented 2026-08-03 miss, reproduced)."""
+    eng = _corroborated(corroboration_pad_seconds=60)
+    eng.decide(_fix(event, T, **_HOME), state)
+    eng.decide(event("got_into_the_car", T + 5000), state)
+    last, _ = _leg(eng, state, event, T + 5200)
+    d = _arrive(eng, state, event, last + 60)
+    assert d is not None
+    assert "got_into_the_car" not in [s["message"]["name"] for s in d.sources]
