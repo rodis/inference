@@ -322,6 +322,19 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 .dt-body { min-width: 0; text-align: left; background: none; border: 0; color: inherit; cursor: pointer; padding: 6px 6px 12px 8px; border-radius: 12px; transition: background 0.12s; }
 .dt-body:hover { background: var(--card-2); }
 .dt-body:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+/* Label collision, two halves of one fix (#63). Rows are absolute siblings, so paint order is
+   DOM order, and MIN_STEP only guarantees 34px between rows — a label whose meta wraps overflows
+   its slot into the next row's box. Invisible while backgrounds are none, but the next row's
+   hover fill paints straight over the stranded line.
+   At rest: a `tight` row (next activity within LABEL_FULL — see DayTimeline) clamps its meta to
+   one ellipsized line, so no label ever intrudes into a neighbor's box.
+   On hover/focus: the clamp lifts so the full text is readable, and the row is raised above its
+   siblings so that expansion wins the paint order — covering a neighbor is correct *here*,
+   because the covered thing is not what you're reading. 3 also clears the quiet-gap chip at 2. */
+.dt-act.tight .ev-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dt-act.tight:hover .ev-meta, .dt-act.tight:focus-within .ev-meta { white-space: normal; overflow: visible; }
+.dt-act:has(.dt-body:hover), .dt-mom:has(.dt-body:hover),
+.dt-act:has(.dt-body:focus-visible), .dt-mom:has(.dt-body:focus-visible) { z-index: 3; }
 
 /* during an active pinch/scroll gesture, positions track the fingers 1:1 (no glide) */
 .dtwrap.zooming .dt-act, .dtwrap.zooming .dt-mom, .dtwrap.zooming .dt-band,

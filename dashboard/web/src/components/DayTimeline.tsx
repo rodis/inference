@@ -13,6 +13,13 @@ interface Props {
 
 const CAP_W = 46;      // one capsule sub-column, must match --capw in styles.css
 const HIT_EPS = 0.1;   // below this an event is decorative — no pointer, no tab stop
+/* Vertical room a two-line label needs (title + wrapped meta + .dt-body padding). MIN_STEP
+   guarantees rows only 34px, so a label whose meta wraps can overflow its slot into the next
+   row's box — invisible until that row's hover fill paints over the stranded line (#63). Below
+   this gap the row goes `tight`: meta clamps to one ellipsized line at rest, and hover/focus
+   un-clamps it (the row is raised above its siblings then, so the full text wins the paint
+   order instead of colliding). */
+const LABEL_FULL = 72;
 
 /** The day as two parallel timelines on one shared time scale.
  *
@@ -81,16 +88,21 @@ export default function DayTimeline({ events, layout, onSelect, revealOf }: Prop
         </div>
       ))}
 
-      {activities.map((e) => {
+      {activities.map((e, i) => {
         const box = spans.get(e.id);
         const top = box?.top ?? pos.get(e.id) ?? 0;
+        // Labels all live in the same text column regardless of capsule sub-column, so the
+        // only thing that bounds this label's room is where the next activity's row anchors.
+        const next = activities[i + 1];
+        const nextTop = next ? (spans.get(next.id)?.top ?? pos.get(next.id) ?? Infinity) : Infinity;
+        const tight = nextTop - top < LABEL_FULL;
         const cat = catOf(e.name), Icon = iconOf(e), r = revealOf(e), iv = intervalOf(e);
         // An activity at an unnamed place is drawn hollow (see `placeUnknown`) via a class, never
         // by lowering `opacity` on this row: that number is the altitude reveal, and folding two
         // meanings into it would make "faded" ambiguous between "deep" and "unnamed". The class
         // restyles the capsule *inside* the row, so the two readings stay on separate channels.
         return (
-          <div key={e.id} className={"dt-act" + (placeUnknown(e) ? " unnamed" : "")}
+          <div key={e.id} className={"dt-act" + (placeUnknown(e) ? " unnamed" : "") + (tight ? " tight" : "")}
             style={{ top, opacity: r, pointerEvents: r < HIT_EPS ? "none" : undefined }}>
             <div className="t">{fmtTime(new Date((iv?.started_at ?? e.epoch) * 1000))}</div>
             <div className="caps" style={{ width: cols * CAP_W }}>

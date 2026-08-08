@@ -305,10 +305,19 @@ check("eight activity capsules drawn", (dt.match(/class="capsule"/g) || []).leng
 // onto every capsule in the lane — fails here instead of being noticed on a screenshot. The class
 // is also what keeps the weakening off `.dt-act`'s own opacity, which belongs to the altitude
 // reveal.
-const weakRows = (dt.match(/class="dt-act unnamed"/g) || []).length;
+const actRows = dt.match(/class="dt-act[^"]*"/g) || [];
+const weakRows = actRows.filter((c) => c.includes("unnamed")).length;
 check("exactly the unnamed stay is drawn hollow", weakRows === 1, `${weakRows} of 8 rows`);
 check("the other seven activities draw at full strength",
-  (dt.match(/class="dt-act"/g) || []).length === 7, `${(dt.match(/class="dt-act"/g) || []).length}`);
+  actRows.length - weakRows === 7, `${actRows.length - weakRows}`);
+// A row whose label would overflow into the next row's box (next activity starts within
+// LABEL_FULL) clamps its meta to one line via `tight` — the resting half of the #63 fix, the
+// hover half (un-clamp + raise) is CSS-only. Bounded on both sides: zero tight rows means the
+// clamp stopped applying (the fixture's clustered shapes guarantee some), all-tight means it
+// leaked onto rows with room.
+const tightRows = actRows.filter((c) => c.includes("tight")).length;
+check("clustered activities clamp their labels (tight)", tightRows >= 1 && tightRows < actRows.length,
+  `${tightRows} of ${actRows.length} rows`);
 // The category colour reaches CSS as a custom property, which is what lets the unnamed variant
 // restate the fill as a dotted border + icon colour. Hard-coding `background` inline again would
 // silently fill the hollow capsule back in.
