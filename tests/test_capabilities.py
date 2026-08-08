@@ -358,3 +358,25 @@ def test_the_endpoints_are_bounds_not_pauses():
 
 def test_non_geo_evidence_yields_no_pauses():
     assert derive_capability(Capability.PAUSES, [_src(100), _src(200)]) == {}
+
+
+def test_place_carries_the_rows_categories():
+    """Reference data flows like `everyday`: the row's ORDERED category list is stamped onto
+    the event at mint time — primary first, None when the place is unknown or declares none."""
+    capabilities.set_place_book([{"name": "Coop Pronto", "lat": 47.2158, "lon": 8.5738,
+                                  "radius_m": 70, "categories": ["fuel", "shop"]}])
+    try:
+        frag = derive_capability(Capability.PLACE, [
+            {"message": {"id": "a", "name": "location_ping", "timestamp": 1,
+                         "lat": 47.2158, "lon": 8.5738}},
+            {"message": {"id": "b", "name": "location_ping", "timestamp": 2,
+                         "lat": 47.21582, "lon": 8.57381}},
+        ])
+        assert frag["place"].categories == ["fuel", "shop"]
+        capabilities.set_place_book([])
+        frag = derive_capability(Capability.PLACE, [
+            {"message": {"id": "a", "name": "location_ping", "timestamp": 1,
+                         "lat": 47.2158, "lon": 8.5738}}])
+        assert frag["place"].categories is None
+    finally:
+        capabilities.set_place_book([])

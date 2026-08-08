@@ -1,6 +1,6 @@
 import { Car } from "lucide-react";
 import type { AwareEvent } from "../types";
-import { carCorroborated, fmtTime, humanDur, intervalOf, isSpan, labelOf, pausesOf, routeOf } from "../view";
+import { carCorroborated, fmtTime, humanDur, intervalOf, isSpan, labelOf, pauseIcon, pausesOf, routeOf } from "../view";
 import LevelChip, { OverrideFlag } from "./LevelChip";
 
 interface Props {
@@ -30,7 +30,10 @@ export default function EventBody({ event: e, level, def = null, depth, hostLabe
   // than two, so it stays short and can't be half-missing. See view.ts::routeOf.
   const route = routeOf(e);
   // Sub-threshold stops the journey carries ("Avia Neuheim 4m") — enrichment, not events.
+  // The chip glyph is the stop's place CATEGORY when known (a pump for a fuel station, a
+  // croissant for the Konditorei), else the generic road-sign pause. See view.ts::pauseIcon.
   const pauses = pausesOf(e);
+  const PauseIcon = pauseIcon(e);
 
   let detail: string;
   if (iv) {
@@ -52,6 +55,11 @@ export default function EventBody({ event: e, level, def = null, depth, hostLabe
         {carCorroborated(e) && (
           <span className="ev-car" title="in your car — corroborated by its signals">
             <Car size={13} aria-label="in your car" />
+          </span>
+        )}
+        {PauseIcon && (
+          <span className="ev-car" style={{ opacity: 0.85 }} title={`stopped along the way — ${pauses}`}>
+            <PauseIcon size={13} aria-label="stopped along the way" />
           </span>
         )}
         {Number.isFinite(amount) && amount > 0 && <span className="ev-amount">CHF {amount.toFixed(2)}</span>}

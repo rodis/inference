@@ -1,6 +1,6 @@
 import type { AwareEvent } from "../types";
 import type { DayLayout } from "../view";
-import { catOf, fmtTime, hostOf, humanDur, inkOn, intervalOf, isSpan, labelOf, placeUnknown, startOf } from "../view";
+import { catOf, fmtTime, hostOf, humanDur, iconOf, inkOn, intervalOf, isSpan, labelOf, placeUnknown, startOf } from "../view";
 import EventBody from "./EventBody";
 
 interface Props {
@@ -84,7 +84,7 @@ export default function DayTimeline({ events, layout, onSelect, revealOf }: Prop
       {activities.map((e) => {
         const box = spans.get(e.id);
         const top = box?.top ?? pos.get(e.id) ?? 0;
-        const cat = catOf(e.name), r = revealOf(e), iv = intervalOf(e);
+        const cat = catOf(e.name), Icon = iconOf(e), r = revealOf(e), iv = intervalOf(e);
         // An activity at an unnamed place is drawn hollow (see `placeUnknown`) via a class, never
         // by lowering `opacity` on this row: that number is the altitude reveal, and folding two
         // meanings into it would make "faded" ambiguous between "deep" and "unnamed". The class
@@ -102,7 +102,7 @@ export default function DayTimeline({ events, layout, onSelect, revealOf }: Prop
                   ["--cat" as string]: cat.c, ["--capink" as string]: inkOn(cat.c),
                   height: box?.height ?? 44, marginLeft: (box?.col ?? 0) * CAP_W,
                 }}>
-                <cat.Icon size={18} strokeWidth={2.25} />
+                <Icon size={18} strokeWidth={2.25} />
               </div>
             </div>
             <button className="dt-body" onClick={() => onSelect(e)} tabIndex={r < HIT_EPS ? -1 : undefined}>
@@ -114,7 +114,7 @@ export default function DayTimeline({ events, layout, onSelect, revealOf }: Prop
 
       {moments.map((e) => {
         const y = pos.get(e.id) ?? 0;
-        const cat = catOf(e.name), r = revealOf(e);
+        const cat = catOf(e.name), Icon = iconOf(e), r = revealOf(e);
         // Three honest states, and the band already covers the first:
         //   band on screen        → say nothing, figure/ground has it
         //   host exists but is above the altitude → name it in text, since nothing draws it
@@ -124,7 +124,7 @@ export default function DayTimeline({ events, layout, onSelect, revealOf }: Prop
         return (
           <div key={e.id} className="dt-mom" style={{ top: y, opacity: r, pointerEvents: r < HIT_EPS ? "none" : undefined }}>
             <div className="t">{fmtTime(e.date)}</div>
-            <div className="disc" style={{ color: cat.c }}><cat.Icon size={13} strokeWidth={2.4} /></div>
+            <div className="disc" style={{ color: cat.c }}><Icon size={13} strokeWidth={2.4} /></div>
             <button className="dt-body" onClick={() => onSelect(e)} tabIndex={r < HIT_EPS ? -1 : undefined}>
               <EventBody event={e}
                 orphan={!banded && !anyHost}

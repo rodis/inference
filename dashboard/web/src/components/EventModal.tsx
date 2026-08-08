@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { AwareEvent } from "../types";
-import { catOf, fmtTime, fmtTimeSec, humanDur, inkOn, labelOf, typeLabel } from "../view";
+import { catOf, fmtTime, fmtTimeSec, humanDur, iconOf, inkOn, labelOf, typeLabel } from "../view";
 import LevelChip, { OverrideFlag } from "./LevelChip";
 
 /** A contributor type that floods the tree (a `stay` derives from *dozens* of location pings,
@@ -60,11 +60,11 @@ function DKidList({ kids, byId, levelOf, derivLevel, onOpen }: { kids: AwareEven
  *  refocus the modal on that contributor (drill down into how *it* was built). */
 function DNode({ e, byId, levelOf, derivLevel, onOpen }: { e: AwareEvent; byId: Record<string, AwareEvent>; levelOf: (n: string) => number; derivLevel: (e: AwareEvent) => number; onOpen: (e: AwareEvent) => void }) {
   const kids = (e.message.derived_from || []).map((p) => byId[p.id]).filter(Boolean) as AwareEvent[];
-  const cat = catOf(e.name);
+  const cat = catOf(e.name), Icon = iconOf(e);
   return (
     <div className="dnode">
       <button className="drow" onClick={() => onOpen(e)} title="Open this event">
-        <span className="dtile" style={{ background: cat.c, color: inkOn(cat.c) }}><cat.Icon size={15} strokeWidth={2.25} /></span>
+        <span className="dtile" style={{ background: cat.c, color: inkOn(cat.c) }}><Icon size={15} strokeWidth={2.25} /></span>
         <span className="dn">{labelOf(e)}</span>
         <span className="dg" />
         <span className="dt">{fmtTimeSec(e.date)}</span>
@@ -102,7 +102,7 @@ export default function EventModal({ event, byId, levelOf, derivLevel, defaultOf
   const kids = (e.message.derived_from || []).map((p) => byId[p.id]).filter(Boolean) as AwareEvent[];
   const dl = derivLevel(e);
   const lv = levelOf(e.name);
-  const cat = catOf(e.name);
+  const cat = catOf(e.name), HIcon = iconOf(e);
   // how many direct contributors are collapsed below the altitude of the board behind us
   const hiddenBeneath = revealOf
     ? kids.reduce((n, k) => (revealOf(k) < 0.5 ? n + 1 : n), 0)
@@ -122,7 +122,7 @@ export default function EventModal({ event, byId, levelOf, derivLevel, defaultOf
       <div className="modal">
         <div className="modal-head">
           <button className="x" aria-label="Close" onClick={onClose}>✕</button>
-          <div className="htile" style={{ background: cat.c, color: inkOn(cat.c) }}><cat.Icon size={22} strokeWidth={2.25} /></div>
+          <div className="htile" style={{ background: cat.c, color: inkOn(cat.c) }}><HIcon size={22} strokeWidth={2.25} /></div>
           <div>
             <div className="mlabel">
               {e.event_class === "derived"

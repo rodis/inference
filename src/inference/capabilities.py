@@ -145,11 +145,13 @@ def _place_at(lat: float, lon: float, spread_m: float) -> Place:
     reference-data lookup is applied, so `place` and `journey`'s endpoints label identically.
     """
     match = _match_place(lat, lon)
+    categories = list(match[0].get("categories") or []) if match else []
     return Place(
         lat=lat, lon=lon, spread_m=round(spread_m, 1),
         label=str(match[0].get("name", "")) if match else None,
         distance_m=round(match[1], 1) if match else None,
         everyday=bool(match[0].get("everyday", False)) if match else None,
+        categories=categories or None,
     )
 
 

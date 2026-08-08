@@ -1,4 +1,4 @@
-import { Car, Route, LogIn, LogOut, DoorOpen, KeyRound, Smartphone, CreditCard, MapPin, Circle } from "lucide-react";
+import { Car, Route, LogIn, LogOut, DoorOpen, KeyRound, Smartphone, CreditCard, MapPin, Circle, Fuel, Coffee, Croissant, PawPrint, House, Store, OctagonPause } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { AwareEvent } from "./types";
 
@@ -114,6 +114,34 @@ export const catOf = (name: string): { c: string; Icon: LucideIcon } => {
   if (name.startsWith("entered_")) return { c: "#2f9e8f", Icon: MapPin };
   if (name.startsWith("left_")) return { c: "#59b0a4", Icon: MapPin };
   return { c: "#9298a6", Icon: Circle };
+};
+
+/** Icon by place CATEGORY (the `regions.categories` reference data, carried on the `place`
+ *  capability). The row's list is ordered — primary first — so the first category with a
+ *  glyph wins: a Konditorei (['bakery','cafe']) draws the croissant, a fuel-station-with-shop
+ *  the pump. The vocabulary is user-owned data; an unmapped category simply falls through,
+ *  so adding a new kind of place never breaks rendering — it just doesn't get a glyph yet. */
+export const PLACE_ICON: Record<string, LucideIcon> = {
+  fuel: Fuel, cafe: Coffee, bakery: Croissant, vet: PawPrint, home: House, shop: Store,
+};
+export const placeIcon = (categories?: string[] | null): LucideIcon | null => {
+  for (const c of categories ?? []) if (PLACE_ICON[c]) return PLACE_ICON[c];
+  return null;
+};
+
+/** An event's glyph: what KIND of place it happened at when the place says (a stay at the
+ *  bakery draws a croissant, not the generic pin), else its category-by-name icon. Colour
+ *  stays `catOf(name).c` — the hue says what the event IS, the glyph says where it landed. */
+export const iconOf = (e: AwareEvent): LucideIcon =>
+  placeIcon(e.message.place?.categories) ?? catOf(e.name).Icon;
+
+/** The pause chip's glyph: the first pause's place category when known ("stopped at a fuel
+ *  station"), else the generic road-sign pause — an octagon is road vocabulary, and the claim
+ *  without a labelled place is only "the journey held still somewhere". */
+export const pauseIcon = (e: AwareEvent): LucideIcon | null => {
+  const ps = e.message.pauses;
+  if (!ps?.length) return null;
+  return placeIcon(ps[0].place?.categories) ?? OctagonPause;
 };
 const pad = (n: number) => String(n).padStart(2, "0");
 export const fmtTime = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;

@@ -172,6 +172,21 @@
           ],
           "default": null,
           "title": "Everyday"
+        },
+        "categories": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Categories"
         }
       },
       "required": [

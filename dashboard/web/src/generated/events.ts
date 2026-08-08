@@ -18,6 +18,7 @@ export type SpreadM = number;
 export type Label = string | null;
 export type DistanceM = number | null;
 export type Everyday = boolean | null;
+export type Categories = string[] | null;
 export type StraightLineM = number;
 export type PathM = number;
 export type Mode = string | null;
@@ -101,6 +102,7 @@ export interface Place {
   label?: Label;
   distance_m?: DistanceM;
   everyday?: Everyday;
+  categories?: Categories;
 }
 /**
  * The *journey capability*: an event that went **from somewhere to somewhere**.

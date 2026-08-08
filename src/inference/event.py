@@ -128,6 +128,11 @@ class Place(BaseModel):
     # what lets the dashboard offer a "show everyday places" toggle without re-deriving.
     # None when nothing matched — an unlabelled stay makes no claim either way.
     everyday: bool | None = None
+    # What KIND of place, as the row's ordered list — a Konditorei is ['bakery','cafe'], one
+    # word would lie. The first entry is the primary (a consumer wanting one icon takes it);
+    # the rest support filtering ("every cafe I stopped at"). Reference data exactly like
+    # `everyday`: frozen at mint, None when the place is unknown or the row declares none.
+    categories: list[str] | None = None
 
 
 class Journey(BaseModel):

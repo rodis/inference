@@ -25,7 +25,8 @@ logger = logging.getLogger("inference.places")
 
 
 def load_places(dsn: str | None) -> list[dict]:
-    """Read enabled POI rows as `{name, lat, lon, radius_m, everyday}`. No DSN -> no labels.
+    """Read enabled POI rows as `{name, lat, lon, radius_m, everyday, categories}`.
+    No DSN -> no labels.
 
     `everyday` marks a place that is not *news* — the one you live in. A stay there is a real
     fact worth deriving and keeping, but it has no natural boundaries in the data: you are
@@ -43,8 +44,11 @@ def load_places(dsn: str | None) -> list[dict]:
     import psycopg  # lazy: adapter-only dependency
 
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        # `categories` is the row's ORDERED kind list ("what is this place?" — e.g. a Konditorei
+        # is ['bakery','cafe']); the first entry is the primary and drives iconography, the rest
+        # exist for filtering. Reference data like `everyday`: stamped onto events at mint time.
         cur.execute(
-            "SELECT name, lat, lon, radius_m, everyday FROM regions "
+            "SELECT name, lat, lon, radius_m, everyday, categories FROM regions "
             "WHERE enabled = true AND kind = 'poi'"
         )
         cols = [c.name for c in cur.description]
