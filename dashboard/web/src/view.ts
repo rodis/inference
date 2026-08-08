@@ -1,4 +1,4 @@
-import { Car, Route, LogIn, LogOut, DoorOpen, KeyRound, Smartphone, CreditCard, MapPin, Circle, Fuel, Coffee, Croissant, PawPrint, House, Store, OctagonPause } from "lucide-react";
+import { Car, Route, LogIn, LogOut, DoorOpen, KeyRound, Smartphone, CreditCard, MapPin, Circle, Fuel, Coffee, Croissant, PawPrint, House, Store } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { AwareEvent } from "./types";
 
@@ -135,14 +135,14 @@ export const placeIcon = (categories?: string[] | null): LucideIcon | null => {
 export const iconOf = (e: AwareEvent): LucideIcon =>
   placeIcon(e.message.place?.categories) ?? catOf(e.name).Icon;
 
-/** The pause chip's glyph: the first pause's place category when known ("stopped at a fuel
- *  station"), else the generic road-sign pause — an octagon is road vocabulary, and the claim
- *  without a labelled place is only "the journey held still somewhere". */
-export const pauseIcon = (e: AwareEvent): LucideIcon | null => {
-  const ps = e.message.pauses;
-  if (!ps?.length) return null;
-  return placeIcon(ps[0].place?.categories) ?? OctagonPause;
-};
+/** The pause chip's glyph: the first pause's place category, and ONLY that — a chip appears
+ *  when the data can say what kind of place you stopped at ("a fuel station"), never as a
+ *  generic mark. An unlabelled pause still reads on the detail line ("via 1 stop 4m"); a
+ *  glyph that could only say "something, somewhere" isn't worth a slot in the chip row.
+ *  (A road-sign OctagonPause fallback was tried and dropped the same day — the category
+ *  glyphs carry more meaning, and mixing grammars diluted them. User call, 2026-08-08.) */
+export const pauseIcon = (e: AwareEvent): LucideIcon | null =>
+  placeIcon(e.message.pauses?.[0]?.place?.categories);
 const pad = (n: number) => String(n).padStart(2, "0");
 export const fmtTime = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 export const fmtTimeSec = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;

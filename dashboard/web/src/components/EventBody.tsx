@@ -30,8 +30,9 @@ export default function EventBody({ event: e, level, def = null, depth, hostLabe
   // than two, so it stays short and can't be half-missing. See view.ts::routeOf.
   const route = routeOf(e);
   // Sub-threshold stops the journey carries ("Avia Neuheim 4m") — enrichment, not events.
-  // The chip glyph is the stop's place CATEGORY when known (a pump for a fuel station, a
-  // croissant for the Konditorei), else the generic road-sign pause. See view.ts::pauseIcon.
+  // The chip glyph exists only when the stop's place CATEGORY is known (a pump for a fuel
+  // station, a croissant for the Konditorei); an unlabelled stop stays text-only on the
+  // detail line. See view.ts::pauseIcon.
   const pauses = pausesOf(e);
   const PauseIcon = pauseIcon(e);
 
