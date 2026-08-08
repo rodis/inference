@@ -431,7 +431,7 @@ check("Home links to /", shell.includes('href="/"'));
 check("sections render as groups", [">Life<", ">Money<", ">Brain<", ">Config<"].every((s) => shell.includes(s)));
 check("modules render under their section", shell.includes(">Day timeline") && shell.includes(">Levels"));
 check("planned entries are ghosts, not links",
-  shell.includes("sn ghost") && !shell.match(/<a[^>]*sn ghost/));
+  shell.includes("sn planned") && !shell.match(/<a[^>]*sn planned/));
 check("the palette trigger is in the top bar", shell.includes("⌘K"));
 check("the period control hides until a module opts in", !shell.includes('aria-label="period"'));
 

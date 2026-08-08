@@ -90,7 +90,7 @@ export default function Shell() {
                 </NavLink>
               ))}
               {planned.map((p) => (
-                <span key={p.title} className="sn ghost" title="planned — not built yet">
+                <span key={p.title} className="sn planned" title="planned — not built yet">
                   {p.Icon && <p.Icon size={15} strokeWidth={2.25} />}{p.title}
                   <i className="soon">soon</i>
                 </span>

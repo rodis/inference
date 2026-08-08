@@ -129,9 +129,10 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 .sn.on { background: var(--accent-soft); color: var(--accent); }
 .sn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .sn svg { flex: none; opacity: 0.9; }
-/* planned, not built: the sidebar shows where the portal is going. Dashed = not-yet, the
-   board grammar's existing reading (unseen tokens, the levels tray). */
-.sn.ghost { color: var(--muted); cursor: default; }
+/* planned, not built: the sidebar shows where the portal is going. Muted row + a small
+   dashed "soon" chip only — `.planned`, NOT `.ghost`, which is the levels board's token
+   style and drags a dashed border box onto anything sharing the name. */
+.sn.planned { color: var(--muted); cursor: default; }
 .sn .soon { margin-left: auto; font-family: var(--mono); font-style: normal; font-size: 8.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-2); border: 1px dashed var(--hair-2); border-radius: 5px; padding: 1px 5px; }
 
 .maincol { display: flex; flex-direction: column; min-width: 0; }
@@ -504,7 +505,7 @@ footer b { color: var(--ink-2); font-weight: 600; }
 
 /* ── home: the day as a spine, module cards beside it (HomeView.tsx) ──────────── */
 .hm-year { color: var(--accent); }
-.hm-cols { display: grid; grid-template-columns: 330px minmax(0, 1fr); gap: 14px; align-items: start; }
+.hm-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
 .hm-cols .hm-spine { height: 100%; }
 .hm-cards { display: grid; grid-template-columns: 1fr; gap: 14px; align-content: start; }
 @media (max-width: 860px) { .hm-cols { grid-template-columns: 1fr; } .hm-cols .hm-spine { height: auto; } }
