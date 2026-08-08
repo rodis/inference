@@ -1,4 +1,4 @@
-import { Car, Route, LogIn, LogOut, DoorOpen, KeyRound, Smartphone, CreditCard, MapPin, Circle, Fuel, Coffee, Croissant, PawPrint, House, Store } from "lucide-react";
+import { Car, Route, LogIn, LogOut, DoorOpen, KeyRound, Smartphone, CreditCard, MapPin, Circle, Fuel, Coffee, Croissant, PawPrint, House, Store, Utensils } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { AwareEvent } from "./types";
 
@@ -123,6 +123,7 @@ export const catOf = (name: string): { c: string; Icon: LucideIcon } => {
  *  so adding a new kind of place never breaks rendering — it just doesn't get a glyph yet. */
 export const PLACE_ICON: Record<string, LucideIcon> = {
   fuel: Fuel, cafe: Coffee, bakery: Croissant, vet: PawPrint, home: House, shop: Store,
+  fast_food: Utensils, restaurant: Utensils,
 };
 export const placeIcon = (categories?: string[] | null): LucideIcon | null => {
   for (const c of categories ?? []) if (PLACE_ICON[c]) return PLACE_ICON[c];
