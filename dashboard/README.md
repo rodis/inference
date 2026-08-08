@@ -1,13 +1,34 @@
 # Aware dashboard
 
-A small, stateless web app that visualizes the `events` table in Neon. A React SPA
-served by FastAPI, built as a **registry of dashboards** (`web/src/app/registry.tsx` —
-adding one is a module plus an entry, mirroring events-as-data):
+A small, stateless web app that visualizes the `events` table in Neon. A React SPA served by
+FastAPI, structured as a **portal**: the whole frame derives from registry data
+(`web/src/app/registry.tsx`), and the frame itself is never edited to grow the app.
 
-| dashboard | what it's for |
-|-----------|---------------|
-| **Day timeline** | one day as **two parallel timelines** on a shared time scale (see below), with a pinch/⌘-scroll **semantic zoom** that reveals or folds detail around the point you're looking at |
-| **Levels** | the altitude ladder: where each event *type* lives, drag-and-drop (see below) |
+The registry holds two arrays. `SECTIONS` gives the sidebar its groups (Life, Places, Journeys,
+Money, Health, Brain, Config — a section may also declare *planned* entries, drawn as dashed
+"soon" ghosts so the sidebar shows where the portal is going). `MODULES` holds the dashboards:
+each names its `section`, and may also ship a `HomeCard` (a glanceable card composed into `/`),
+`scopes` (opting into the shared Day/Week/Month period control in the top bar), and a `palette`
+provider (contributing ⌘K results). Adding a dashboard = write its component + append a module
+entry; adding a whole domain = one section row + its modules — mirroring events-as-data, one
+level up.
+
+| route | what it's for |
+|-------|---------------|
+| **/** (Home) | the latest day as a vertical **spine** (the day board's capsule grammar at card scale — everyday places excluded, unnamed stays hollow) beside each module's registered **HomeCard**; cards are doors, never the analysis |
+| **/d/timeline** | one day as **two parallel timelines** on a shared time scale (see below), with a pinch/⌘-scroll **semantic zoom** that reveals or folds detail around the point you're looking at |
+| **/d/levels** | the altitude ladder: where each event *type* lives, drag-and-drop (see below) |
+
+**⌘K** opens the palette: results are computed, never hand-registered — modules from the
+registry, days from the loaded window (with per-day stay/journey counts), labelled places from
+the window's stays (opening one lands on its most recent day), plus whatever items module
+providers return. Selecting a day drives the same shared `selectedDay` seam the week strip uses.
+
+**Data seam:** what is *shared* is context — user, period, the selected day, the level ladder —
+plus the recent-events window the original boards read (`useAware()`). A new module's own data
+goes through `client` (a GET + in-memory cache lane on the context) against a route the module
+brings with it, so a server-side aggregate (Money's `spend_by_day`, the Brain's policies) never
+widens the shared window.
 
 Tap any event for a recursive dig-down into its derivation lineage.
 

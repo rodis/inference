@@ -22,6 +22,7 @@
 import { renderToString } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import Shell from "../src/app/Shell";
+import HomeView from "../src/dashboards/home/HomeView";
 import { AwareContext } from "../src/app/useAware";
 import type { AwareCtx } from "../src/app/useAware";
 import DayTimeline from "../src/components/DayTimeline";
@@ -411,11 +412,37 @@ console.log("\n— the brand mark —");
 const shell = strip(renderToString(
   <MemoryRouter><AwareContext.Provider value={ctx}><Shell /></AwareContext.Provider></MemoryRouter>));
 check("the appbar draws the brand tile", shell.includes('class="applogo"'));
-check("the mark is four dots", (shell.match(/<circle/g) || []).length === 4,
-  `${(shell.match(/<circle/g) || []).length} circles`);
-check("...on an opacity ramp", ["0.26", "0.48", "0.74"].every((o) => shell.includes(`opacity="${o}"`)));
-check("the mark inherits the tile's ink", shell.includes('fill="currentColor"'));
+// The portal sidebar is full of lucide glyphs that legitimately contain circles, so the
+// four-dot assertion is scoped to the applogo tile's own svg rather than the whole shell.
+const logoSvg = shell.slice(shell.indexOf('class="applogo"'));
+const mark = logoSvg.slice(0, logoSvg.indexOf("</svg>") + 6);
+check("the mark is four dots", (mark.match(/<circle/g) || []).length === 4,
+  `${(mark.match(/<circle/g) || []).length} circles`);
+check("...on an opacity ramp", ["0.26", "0.48", "0.74"].every((o) => mark.includes(`opacity="${o}"`)));
+check("the mark inherits the tile's ink", mark.includes('fill="currentColor"'));
 check("the wordmark is next to it", shell.includes(">Aware<"));
+
+console.log("\n— the portal frame —");
+// The sidebar derives from the registry (sections → modules → ghosts) and the frame never
+// names a module itself. These pin the derivation, not the styling: a module entry must
+// land under its section as a link, a planned entry as a non-link ghost, and Home must be
+// a real route of its own.
+check("Home links to /", shell.includes('href="/"'));
+check("sections render as groups", [">Life<", ">Money<", ">Brain<", ">Config<"].every((s) => shell.includes(s)));
+check("modules render under their section", shell.includes(">Day timeline") && shell.includes(">Levels"));
+check("planned entries are ghosts, not links",
+  shell.includes("sn ghost") && !shell.match(/<a[^>]*sn ghost/));
+check("the palette trigger is in the top bar", shell.includes("⌘K"));
+check("the period control hides until a module opts in", !shell.includes('aria-label="period"'));
+
+// Home is composed, not hand-written: the spine draws the latest day's surviving spans in
+// the board's capsule grammar, and the cards column holds whatever modules registered.
+const homeHtml = strip(renderToString(
+  <MemoryRouter><AwareContext.Provider value={ctx}><HomeView /></AwareContext.Provider></MemoryRouter>));
+check("home splits into spine + cards", homeHtml.includes("hm-cols") && homeHtml.includes("hm-cards"));
+check("the spine draws capsules", (homeHtml.match(/vt-cap/g) || []).length >= 2);
+check("an unnamed stay is hollow on the spine too", homeHtml.includes("vt-cap hollow"));
+check("a registered HomeCard renders", homeHtml.includes("Last journey"));
 
 console.log("\n— a journey draws as a journey (ADR 0010) —");
 // Built standalone rather than added to `rows`: a `trip` overlapping the day's car_trip would

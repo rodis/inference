@@ -3,9 +3,35 @@ import { fetchEvents, fetchPreferences, fetchUsers, savePreferences } from "../a
 import type { AwareEvent, Preferences } from "../types";
 import { defaultLevelOf, laneCount, prepare } from "../view";
 import { AwareContext } from "./useAware";
-import type { AwareCtx } from "./useAware";
+import type { AwareCtx, QueryClient } from "./useAware";
+import type { Scope } from "./registry";
 
 const EMPTY_PREFS: Preferences = { level: {}, hidden: [] };
+
+/** The module data lane: GET + in-memory promise cache keyed by URL. Deduplicates
+ *  concurrent fetches for free (the promise itself is cached), and a failed fetch is
+ *  evicted so the next mount retries instead of caching the error forever. */
+function makeClient(): QueryClient {
+  const cache = new Map<string, Promise<unknown>>();
+  return {
+    get<T>(url: string): Promise<T> {
+      let p = cache.get(url);
+      if (!p) {
+        p = fetch(url).then((r) => {
+          if (!r.ok) throw new Error(`${url} → ${r.status}`);
+          return r.json();
+        });
+        p.catch(() => cache.delete(url));
+        cache.set(url, p);
+      }
+      return p as Promise<T>;
+    },
+    invalidate(prefix?: string) {
+      if (!prefix) { cache.clear(); return; }
+      for (const k of cache.keys()) if (k.startsWith(prefix)) cache.delete(k);
+    },
+  };
+}
 
 /** Loads users + per-user events/prefs once, derives the prepared event graph, and owns
  *  the level/lift config (global to all dashboards). Everything is exposed via context so
@@ -18,6 +44,11 @@ export default function DataProvider({ children }: { children: React.ReactNode }
   const [status, setStatus] = useState<string>("Loading…");
   const [saved, setSaved] = useState(false);
   const [selectedDay, setSelectedDay] = useState<string>("");
+  const [scope, setScope] = useState<Scope>("week");
+  const client = useMemo(makeClient, []);
+
+  // A different user's aggregates must never serve from a prior user's cache.
+  useEffect(() => { client.invalidate(); }, [userId, client]);
 
   useEffect(() => {
     fetchUsers()
@@ -115,7 +146,7 @@ export default function DataProvider({ children }: { children: React.ReactNode }
 
   const ctx: AwareCtx = {
     users, userId, setUserId, status, eventsCount: events.length,
-    prepared, selectedDay, setSelectedDay,
+    prepared, selectedDay, setSelectedDay, scope, setScope, client,
     lanes, levelOf, defaultOf, isHidden, overrides, configured,
     setLevel, setHidden, resetLevel, resetAll, saved,
   };

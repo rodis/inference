@@ -1,21 +1,25 @@
-import { createBrowserRouter, createMemoryRouter, Navigate, RouterProvider } from "react-router-dom";
+import { createBrowserRouter, createMemoryRouter, RouterProvider } from "react-router-dom";
 import type { RouteObject } from "react-router-dom";
 import DataProvider from "./DataProvider";
 import Shell from "./Shell";
-import { DASHBOARDS } from "./registry";
+import HomeView from "../dashboards/home/HomeView";
+import { MODULES } from "./registry";
 
 function NotFound() {
   return <div className="statusline">No such dashboard. <a href="/">Go home →</a></div>;
 }
 
+// "/" is a real view, not a redirect: the Home spine + each module's registered HomeCard.
+// Module routes stay at /d/:slug, so every deep link that existed before the portal shell
+// keeps resolving.
 const routes: RouteObject[] = [
   {
     element: <Shell />,
     children: [
-      { index: true, element: <Navigate to={`/d/${DASHBOARDS[0].slug}`} replace /> },
-      ...DASHBOARDS.map((d) => {
-        const C = d.component;
-        return { path: `d/${d.slug}`, element: <C /> };
+      { index: true, element: <HomeView /> },
+      ...MODULES.map((m) => {
+        const C = m.component;
+        return { path: `d/${m.slug}`, element: <C /> };
       }),
       { path: "*", element: <NotFound /> },
     ],

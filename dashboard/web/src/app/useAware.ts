@@ -1,8 +1,21 @@
 import { createContext, useContext } from "react";
 import type { Prepared } from "../view";
+import type { Scope } from "./registry";
 
-/** Shared, cross-dashboard data + config — loaded once by DataProvider and consumed by
- *  every dashboard via useAware(). A dashboard's own view state stays inside the dashboard. */
+/** A module's private data lane: same-origin GET with an in-memory cache keyed by URL, so
+ *  navigating back to a board never re-fetches. Modules that aggregate server-side (Money's
+ *  spend_by_day, the Brain's policies) fetch through this instead of the shared events
+ *  window — the frame supplies the client, never the queries. `invalidate` clears by prefix
+ *  (or everything), for the day a module writes. */
+export interface QueryClient {
+  get<T>(url: string): Promise<T>;
+  invalidate(prefix?: string): void;
+}
+
+/** Shared, cross-dashboard context — loaded once by DataProvider and consumed by every
+ *  dashboard via useAware(). What is *shared* is context (user, period, the selected day,
+ *  the level ladder) and the recent-events window the original boards read; a new module's
+ *  own data comes through `client` and stays module-private. */
 export interface AwareCtx {
   users: string[];
   userId: string;
@@ -12,6 +25,9 @@ export interface AwareCtx {
   prepared: Prepared;        // all / byId / raw / derived / days / derivLevel
   selectedDay: string;       // shared across day-based dashboards so the day persists on nav
   setSelectedDay: (d: string) => void;
+  scope: Scope;              // shared period; only modules declaring `scopes` surface it
+  setScope: (s: Scope) => void;
+  client: QueryClient;       // per-module data lane (see QueryClient)
 
   // --- the level ladder (one knob per event type; see view.ts) ---
   lanes: number;                              // ladder height = laneCount(maxDepth)

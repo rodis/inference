@@ -110,26 +110,47 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var(--sans); line-height: 1.5; -webkit-font-smoothing: antialiased; }
-.wrap { max-width: 1340px; margin: 0 auto; padding: 36px 24px 96px; }
 
-/* ── app frame ─────────────────────────────────────────────────────────────────── */
-.appbar { display: flex; align-items: center; gap: 12px; margin-bottom: 26px; }
+/* ── the portal frame: sidebar + top bar, both registry-derived (Shell.tsx) ────── */
+.portal { display: grid; grid-template-columns: 218px minmax(0, 1fr); min-height: 100vh; }
+
+.side { position: sticky; top: 0; height: 100vh; overflow-y: auto; background: var(--card); border-right: 1px solid var(--hair); padding: 16px 12px 20px; }
+.appbar { display: flex; align-items: center; gap: 10px; padding: 2px 8px 12px; }
 /* The brand tile. `color` is the mark's ink (AwareMark paints in currentColor) — white in both
    themes on purpose: the dark palette's accent is a *lighter* coral, so the gradient stays bright
    enough to carry white, and a logo that flips to dark ink reads as a different logo. */
 .applogo { width: 40px; height: 40px; border-radius: 12px; flex: none; background: linear-gradient(150deg, var(--accent), var(--accent-2)); display: flex; align-items: center; justify-content: center; color: #fff; box-shadow: 0 5px 14px rgba(251,111,106,0.4); }
 .appbar .appname { font-family: var(--rounded); font-size: 19px; font-weight: 800; letter-spacing: -0.01em; }
-.appbar .sub { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-left: auto; }
 
-/* registry-driven top nav */
-.topnav { display: flex; gap: 4px; flex-wrap: wrap; margin-left: 18px; margin-right: auto; }
-.navlink { font-family: var(--rounded); font-size: 13px; font-weight: 650; color: var(--ink-2); text-decoration: none; padding: 7px 12px; border-radius: 10px; display: inline-flex; align-items: center; gap: 6px; transition: background 0.12s, color 0.12s; }
-.navlink:hover { background: var(--hover); color: var(--ink); }
-.navlink.on { background: var(--accent-soft); color: var(--accent); }
-.navlink .ni { font-size: 13px; }
-.navlink:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.snav { display: flex; flex-direction: column; gap: 3px; }
+.sect { font-family: var(--mono); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.09em; color: var(--muted-2); padding: 12px 10px 4px; }
+.sn { display: flex; align-items: center; gap: 9px; font-family: var(--rounded); font-size: 13px; font-weight: 650; color: var(--ink-2); text-decoration: none; padding: 6px 10px; border-radius: 10px; transition: background 0.12s, color 0.12s; }
+.sn:hover { background: var(--hover); color: var(--ink); }
+.sn.on { background: var(--accent-soft); color: var(--accent); }
+.sn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.sn svg { flex: none; opacity: 0.9; }
+/* planned, not built: the sidebar shows where the portal is going. Dashed = not-yet, the
+   board grammar's existing reading (unseen tokens, the levels tray). */
+.sn.ghost { color: var(--muted); cursor: default; }
+.sn .soon { margin-left: auto; font-family: var(--mono); font-style: normal; font-size: 8.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-2); border: 1px dashed var(--hair-2); border-radius: 5px; padding: 1px 5px; }
 
-.themebtn { width: 30px; height: 30px; flex: none; display: inline-flex; align-items: center; justify-content: center; margin-left: 10px; border: 1px solid var(--hair-2); border-radius: 9px; background: var(--card); color: var(--ink-2); cursor: pointer; transition: background 0.12s, color 0.12s, border-color 0.12s; }
+.maincol { display: flex; flex-direction: column; min-width: 0; }
+.tbar { display: flex; align-items: center; gap: 12px; padding: 11px 22px; border-bottom: 1px solid var(--hair); background: var(--card); position: sticky; top: 0; z-index: 40; }
+.crumb { font-family: var(--rounded); font-size: 13.5px; font-weight: 700; white-space: nowrap; }
+.crumb .dim { color: var(--muted); font-weight: 600; }
+.searchpill { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 11px; color: var(--muted); background: var(--chip); border: 1px solid var(--hair-2); border-radius: 9px; padding: 6px 10px; cursor: pointer; transition: border-color 0.12s, color 0.12s; }
+.searchpill:hover { border-color: var(--muted-2); color: var(--ink-2); }
+.searchpill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.content { width: 100%; max-width: 1180px; margin: 0 auto; padding: 26px 24px 96px; min-width: 0; }
+
+@media (max-width: 860px) {
+  .portal { grid-template-columns: 1fr; }
+  .side { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--hair); }
+  .tbar { position: static; }
+}
+
+.themebtn { width: 30px; height: 30px; flex: none; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--hair-2); border-radius: 9px; background: var(--card); color: var(--ink-2); cursor: pointer; transition: background 0.12s, color 0.12s, border-color 0.12s; }
 .themebtn:hover { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-soft); }
 .themebtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
@@ -480,5 +501,68 @@ kbd { font-family: var(--mono); font-size: 10px; background: var(--chip); border
 
 footer { margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--hair); font-family: var(--mono); font-size: 11px; color: var(--muted); line-height: 1.7; }
 footer b { color: var(--ink-2); font-weight: 600; }
+
+/* ── home: the day as a spine, module cards beside it (HomeView.tsx) ──────────── */
+.hm-year { color: var(--accent); }
+.hm-cols { display: grid; grid-template-columns: 330px minmax(0, 1fr); gap: 14px; align-items: start; }
+.hm-cols .hm-spine { height: 100%; }
+.hm-cards { display: grid; grid-template-columns: 1fr; gap: 14px; align-content: start; }
+@media (max-width: 860px) { .hm-cols { grid-template-columns: 1fr; } .hm-cols .hm-spine { height: auto; } }
+
+.hc-head { display: flex; align-items: center; gap: 8px; }
+.hc-go { margin-left: auto; font-family: var(--rounded); font-size: 11.5px; font-weight: 650; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; white-space: nowrap; }
+.hc-go:hover { text-decoration: underline; }
+.hc-go:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* the vertical mini-timeline: the day board's capsule grammar at card scale.
+   --cat is set per row by the component (category colour), like the board's capsules. */
+.vt { margin-top: 6px; }
+.vrow { display: grid; grid-template-columns: 44px 38px minmax(0, 1fr); gap: 0 12px; align-items: start; margin-top: 10px; }
+.vt-t { text-align: right; font-family: var(--mono); font-size: 11px; color: var(--muted); padding-top: 8px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.vt-cap { width: 34px; border-radius: 17px; border: 0; background: var(--cat); color: #fff; display: flex; align-items: flex-start; justify-content: center; padding: 8px 0 0; cursor: pointer; box-shadow: 0 3px 8px rgba(24,28,40,0.2); }
+.vt-cap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* located but unnamed — hollow, the board's own channel for "not resolved yet" */
+.vt-cap.hollow { background: transparent; border: 2px dotted var(--cat); color: var(--cat); box-shadow: none; padding-top: 6px; }
+.vt-body { padding-top: 6px; min-width: 0; }
+.vt-name { font-family: var(--rounded); font-size: 13.5px; font-weight: 650; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vt-name.dim { color: var(--muted); font-weight: 620; }
+.vt-meta { font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 1px; }
+.vt-gap { display: grid; grid-template-columns: 44px 38px minmax(0, 1fr); gap: 0 12px; margin-top: 10px; }
+.vt-gap span { grid-column: 2 / 4; justify-self: start; font-family: var(--mono); font-size: 9px; color: var(--muted); background: var(--card); border: 1px dashed var(--hair-2); border-radius: 999px; padding: 2px 9px; white-space: nowrap; letter-spacing: 0.03em; }
+.vt-now { display: grid; grid-template-columns: 44px 38px minmax(0, 1fr); gap: 0 12px; align-items: center; margin-top: 12px; }
+.vt-now .vt-t { padding-top: 0; color: var(--accent); }
+.vt-now .nd { justify-self: center; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.vt-now .nl { font-family: var(--mono); font-size: 10px; color: var(--accent); }
+
+/* the Last-journey card's route line */
+.hc-route { display: flex; align-items: center; gap: 10px; margin-top: 12px; min-width: 0; }
+.hc-dot { width: 11px; height: 11px; border-radius: 50%; flex: none; background: var(--muted-2); }
+.hc-dot.dest { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.hc-line { flex: 1; min-width: 24px; border-top: 2px dotted var(--rail); }
+.hc-end { min-width: 0; flex: 1; }
+.hc-end.right { text-align: right; }
+.hc-place { font-family: var(--rounded); font-size: 14px; font-weight: 650; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hc-meta { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 1px; }
+.hc-chips { display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap; }
+.hc-chip { font-family: var(--mono); font-size: 10px; border-radius: 6px; padding: 2px 8px; background: var(--chip); color: var(--ink-2); }
+.hc-chip.good { background: var(--good-soft); color: var(--good); font-weight: 700; }
+.hc-chip.veh { background: var(--demote-soft); color: var(--demote); font-weight: 700; }
+
+/* ── ⌘K palette (Palette.tsx) — same overlay as the modal, its own panel ─────── */
+.pal-ov { padding-top: 12vh; align-items: flex-start; }
+.pal { width: 100%; max-width: 480px; background: var(--card); border-radius: 18px; box-shadow: var(--shadow-lg); overflow: hidden; }
+.palin { display: flex; align-items: center; gap: 10px; padding: 13px 16px; border-bottom: 1px solid var(--hair); }
+.palin input { flex: 1; border: 0; background: none; font-family: var(--sans); font-size: 14px; color: var(--ink); outline: none; }
+.palin input::placeholder { color: var(--muted-2); }
+.pallist { max-height: 46vh; overflow-y: auto; padding-bottom: 6px; }
+.palempty { font-family: var(--mono); font-size: 11px; color: var(--muted-2); padding: 16px; }
+.palgroup { font-family: var(--mono); font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted-2); padding: 11px 16px 4px; }
+.palrow { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 16px; border: 0; background: none; cursor: pointer; font-size: 13px; text-align: left; color: inherit; }
+.palrow:hover, .palrow.sel { background: var(--accent-soft); }
+.palrow.sel .prk, .palrow:hover .prk { color: var(--accent); }
+.palrow .pri { width: 24px; height: 24px; border-radius: 7px; flex: none; display: flex; align-items: center; justify-content: center; color: #fff; }
+.palrow .prk { font-family: var(--rounded); font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.palrow .prd { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-left: auto; white-space: nowrap; flex: none; }
+.palfoot { display: flex; gap: 14px; padding: 9px 16px 11px; border-top: 1px solid var(--hair); font-family: var(--mono); font-size: 9.5px; color: var(--muted-2); flex-wrap: wrap; }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
