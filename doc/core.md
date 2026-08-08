@@ -76,7 +76,7 @@ flowchart TB
     raw --> pers
     hle --> pers
     pers --> neon --> dash
-    neon -. "regions/places read at startup<br/>(the runtime's ONLY Neon read)" .-> rt
+    neon -. "places: read at startup, then<br/>refreshed on a TTL (the ONLY Neon read)" .-> rt
 
     style rt fill:#1f2937,stroke:#60a5fa,stroke-width:2px,color:#e5e7eb
 ```
@@ -663,7 +663,7 @@ flowchart LR
     d2["_place(sources)<br/>fragment: place = Place(...)"]
     frag["fragments.update(each fragment)"]
     ie["InferredEvent(**envelope, **fragments)"]
-    book["_PLACE_BOOK<br/>set_place_book() at startup"]
+    book["_PLACE_BOOK<br/>set_place_book(): startup + TTL refresh"]
 
     yml --> defn --> plan --> shp
     shp -->|"for each declared capability"| reg
@@ -835,12 +835,15 @@ the book is only read when a stay is shaped. A failed reload keeps the previous 
 timestamp anyway, so one Neon outage cannot become a connection storm on a stream delivering a fix
 every ~11 s.
 
-**Both reads are best-effort.** `build_runtime` wraps each in `try/except Exception` + `logger.
-exception`. A Neon blip degrades to "no region events" or "no place labels" until the next restart —
-never a crash. This is the runtime's **only** Neon access, and it happens once at startup.
+**The read is best-effort.** `build_runtime` wraps it in `try/except Exception` + `logger.
+exception`. A Neon blip degrades to "no place labels" (stays still carry their centroid) until the
+next successful refresh — never a crash. Since the zone half went, `load_places` is the runtime's
+**only** Neon access: once in `build_runtime`, then on the refresher's TTL.
 
-Editing a region or place takes effect on the next runtime start. Since state is ephemeral and
-recovers from the changelog, a restart is cheap and safe.
+**Editing a place needs no restart.** A new or edited POI row is picked up within
+`PLACE_BOOK_TTL_SECONDS` of the next event, so a place named after the fact starts labelling
+immediately. What it does *not* do is relabel the past: a label is frozen onto the event at mint
+time, so relabelling history is a `rederive.py --only stay --replace` over the window (invariant 19).
 
 ---
 
@@ -1880,7 +1883,9 @@ tree for `workers/.env` to be found. In K8s the same vars come from the ConfigMa
 - **The breaking fix is not part of a stay.** It starts the next cluster.
 - **Every `state.set` is a Kafka record.** Think about write frequency in a `decide` that runs on a
   location stream.
-- **Region and place edits need a restart.** Both are read once at startup.
+- **Place edits do NOT need a restart** — the book reloads within `PLACE_BOOK_TTL_SECONDS` of the
+  next event. But a label is frozen at mint time, so naming a place does not relabel past stays;
+  that is a `rederive.py --replace` over the window.
 - **Definitions are baked into the image.** `EVENTS_DIR` points at a directory in the container; a
   YAML change ships through the normal build/deploy cycle.
 - **Reported GPS accuracy is not a safety net.** A fix claiming `acc: 5` was 700 m wrong. That is why

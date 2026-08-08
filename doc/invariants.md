@@ -240,7 +240,9 @@ on a count delta.
 **Per-entity state is partition-local RocksDB on an `emptyDir`, recovered from the Kafka changelog.**
 
 *Why:* K8s is elastic disposable compute; everything durable lives in Aiven or Neon. It also means a
-restart is cheap, which is what makes "region edits apply on next start" acceptable.
+restart is cheap, which is what makes shipping a definition change through the normal build/deploy
+cycle acceptable. (Place rows are *not* in that category — they reload on a TTL, no restart; see
+`core.md` §the place book.)
 
 *How to apply:* never assume state survives a reschedule, and never put anything in it that can't be
 rebuilt. **Every `state.set` is a Kafka record** — think about write frequency in a `decide` that runs
