@@ -65,6 +65,16 @@ A new **strategy** is a new `Engine` class in [`src/inference/engines/`](src/inf
 
 Env/secrets live in `workers/.env` (gitignored). The entrypoint loads it via `find_dotenv(usecwd=True)`, which walks upward from the CWD — **run from inside the `workers/` tree**. In K8s the same vars come from the `ConfigMap` (Kafka bootstrap) and `Secret` (Kafka mTLS files mounted at `/etc/kafka/ssl`); `find_dotenv` returns `""` and is skipped.
 
+## Runtime changes require explicit approval
+
+**Do not change `src/inference/runtime/` without discussing the change with the user and getting
+explicit approval first.** Events (`events/*.yml`), engines (`src/inference/engines/`) and
+capability derivers (`src/inference/capabilities.py`) are the additive seams — write those freely.
+The runtime is different because it is the blast radius: every definition runs through the one
+Router/Shaper in one process, so a runtime bug breaks all derivation at once, while a bad engine or
+definition breaks only itself. Present the intended change (what, why, the diff shape) and wait for
+the user's go-ahead; never fold a runtime tweak silently into unrelated work.
+
 ## Never work on `main` directly
 
 **All work happens on a branch in a linked worktree.** `main` in the primary checkout is a *landing and pushing* target, never an editing surface — do not edit files, commit, or amend there. When a task arrives with no worktree, create one first (the `worktree-handoff` skill: branch + checkout at `<repo>.worktrees/<name>`, dev assets, venv, conversation copy).
