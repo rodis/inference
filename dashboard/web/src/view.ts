@@ -216,6 +216,13 @@ export const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 // `credit_card_payment`. If you add a definition with `capabilities: [interval, …]`, add it
 // here in the same change.
 export const SPAN_EVENTS = new Set<string>(["car_trip", "trip", "stay"]);
+
+/** Events in ADR 0011's parallel-run: derived and persisted for validation, deliberately not
+ *  drawn yet. `journey` restates every `trip` (plus the session-only fallback), so drawing it
+ *  now would double every drive — and as a point-disc at that, since it is not in SPAN_EVENTS.
+ *  Phase 2 flips this: `journey` joins SPAN_EVENTS, `trip`/`car_trip` fold under SUPERSEDED_BY,
+ *  and this set empties. A hard drop like the levels-board park, not a reveal-0 fade. */
+export const PARALLEL_RUN_HIDDEN = new Set<string>(["journey"]);
 export const intervalOf = (e: AwareEvent) => e.message.interval ?? null;
 
 /** Spans that another span on the same day re-expresses more completely — mapped

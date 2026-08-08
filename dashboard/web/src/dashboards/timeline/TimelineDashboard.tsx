@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useAware } from "../../app/useAware";
 import { DAY_WINDOW } from "../../api";
 import type { AwareEvent } from "../../types";
-import { absorbedIds, catOf, dayKey, dayLayout, humanDur, isEverydayPlace, laneNames, supersededIds } from "../../view";
+import { absorbedIds, catOf, dayKey, dayLayout, humanDur, isEverydayPlace, laneNames, PARALLEL_RUN_HIDDEN, supersededIds } from "../../view";
 import DayTimeline from "../../components/DayTimeline";
 import WeekStrip from "../../components/WeekStrip";
 import EventModal from "../../components/EventModal";
@@ -48,7 +48,9 @@ export default function TimelineDashboard() {
   );
   const superseded = useMemo(() => supersededIds(daySpans), [daySpans]);
   const dayAll = useMemo(
-    () => daySpans.filter((e) => !isHidden(e.name) && !isEverydayPlace(e) && !superseded.has(e.id)),
+    () => daySpans.filter((e) =>
+      !isHidden(e.name) && !isEverydayPlace(e) && !superseded.has(e.id)
+      && !PARALLEL_RUN_HIDDEN.has(e.name)),
     [daySpans, isHidden, superseded]
   );
   const absorbed = useMemo(() => absorbedIds(dayAll, revealOf), [dayAll, revealOf]);
