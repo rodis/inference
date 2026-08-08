@@ -77,6 +77,7 @@ def _judge(trips, intos, outs, drives) -> list[dict]:
         s, e = int(m["interval"]["started_at"]), int(m["interval"]["ended_at"])
         vehicle = m.get("vehicle")
         journey = m.get("journey") or {}
+        support = m.get("support")
         out.append({
             "start": s, "end": e,
             "own": any(a <= e + OVERLAP_PAD and b >= s - OVERLAP_PAD for a, b in drives),
@@ -85,17 +86,18 @@ def _judge(trips, intos, outs, drives) -> list[dict]:
             "off_in": _nearest(intos, s),
             "off_out": _nearest(outs, e),
             "mode": journey.get("mode"),
+            "support": "/".join((support or {}).get("evidence_kinds") or ()) or None,
             "route": " -> ".join(
                 (journey.get(k) or {}).get("label") or "?" for k in ("origin", "destination")),
         })
     return out
 
 
-def score(label: str, defs, signals, drives, verbose: bool) -> None:
+def score(label: str, defs, signals, drives, verbose: bool, event_name: str = TRIP) -> None:
     derived = replay(defs, signals)
     intos = sorted(int(m["timestamp"]) for m in derived if m["name"] == START)
     outs = sorted(int(m["timestamp"]) for m in derived if m["name"] == END)
-    judged = _judge([m for m in derived if m["name"] == TRIP], intos, outs, drives)
+    judged = _judge([m for m in derived if m["name"] == event_name], intos, outs, drives)
 
     own = [t for t in judged if t["own"]]
     rest = [t for t in judged if not t["own"]]
@@ -105,11 +107,15 @@ def score(label: str, defs, signals, drives, verbose: bool) -> None:
     off_in = [t["off_in"] for t in own if t["off_in"] is not None]
     off_out = [t["off_out"] for t in own if t["off_out"] is not None]
 
-    print(f"{label:<24} trips={len(judged):3d} (own-car {len(own)}, uncorroborated {len(rest)}) | "
+    print(f"{label:<24} {event_name}s={len(judged):3d} (own-car {len(own)}, uncorroborated {len(rest)}) | "
           f"own: confirmed={len(confirmed)} one-sided={len(one_sided)} absent="
           f"{len(own) - len(confirmed) - len(one_sided)} | "
           f"uncorroborated gaining evidence={len(leaked)} "
           f"(confirmed={sum(1 for t in leaked if t['confirmed'])})")
+    if any(t["support"] for t in judged):
+        from collections import Counter
+        kinds = Counter(t["support"] for t in judged)
+        print(f"      support: {dict(kinds)}")
     if off_in or off_out:
         print(f"      own-car edge offsets: got_into vs start median "
               f"{median(off_in):+.0f}s (n={len(off_in)}), got_out vs end median "
@@ -121,9 +127,10 @@ def score(label: str, defs, signals, drives, verbose: bool) -> None:
                    else "+".join(t["evidence"]) if t["evidence"] else "-")
         offs = ", ".join(f"{k} {v:+d}s" if v is not None else f"{k} none"
                          for k, v in (("in", t["off_in"]), ("out", t["off_out"])))
+        sup = f"  support: {t['support']}" if t["support"] else ""
         print(f"      {_fmt(t['start'])}Z {(t['end'] - t['start']) // 60:3d}min "
               f"{'own ' if t['own'] else '    '} {t['mode'] or '?':8s} "
-              f"{t['route']:<30} [{offs}]  vehicle: {vehicle}")
+              f"{t['route']:<30} [{offs}]  vehicle: {vehicle}{sup}")
 
 
 def main():
@@ -160,9 +167,15 @@ def main():
     print(f"{args.days}d, {len(signals)} signals, {len(drives)} CarPlay drives — "
           f"user={args.user}\n")
 
-    score("current", base, signals, drives, args.verbose)
-    for label, defs in cands:
-        score(label, defs, signals, drives, args.verbose)
+    # Score every fused/journey-shaped event too (ADR 0011 parallel-run): any definition that
+    # is not TRIP but declares the vehicle capability gets the same judgment, so the fusion's
+    # recall is adjudicated on the identical footing as the detector it must not regress.
+    fused = [d.name for d in base
+             if d.name != TRIP and "vehicle" in [str(getattr(c, "value", c)) for c in d.capabilities]]
+    for event_name in [TRIP, *fused]:
+        score("current", base, signals, drives, args.verbose, event_name)
+        for label, defs in cands:
+            score(label, defs, signals, drives, args.verbose, event_name)
 
 
 if __name__ == "__main__":

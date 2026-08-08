@@ -196,9 +196,14 @@ class Router:
         This is *detection only* — it mints the event's identity envelope (id/name/type/
         entity/time) and carries its `sources` (the full events the engine used)
         forward for the downstream `Shaper`. It does NOT touch presentation or capabilities:
-        no `role`, no `derived_from`, no `interval`. That keeps routing ignorant of output
-        shaping and, crucially, the event re-enqueued for recursion is the *clean* envelope
-        (no sources sidecar), so an engine consuming it never stores a fattened, nested body.
+        no `role`, no `derived_from`, no `interval` — those exist only after the Shaper, so
+        a downstream engine never sees an upstream event's *shaped* form. The re-enqueued
+        event DOES carry the `sources` sidecar (ADR 0011): a fusion engine deriving a
+        top-level event from detector claims needs their evidence (a `journey` cannot derive
+        its span without `trip`'s fixes), and capabilities are derived once, at the top, from
+        whatever evidence reached it. Engines that don't read `sources` are unaffected; an
+        engine that latches a derived event into state stores its sidecar with it, which is
+        bounded by the upstream engine's own state bounds.
 
         `state` is the per-entity store the adapter injects (a `StateStore` port — Quix
         `State` in production), wrapped per produced event in a `ScopedState` so definitions
@@ -222,8 +227,9 @@ class Router:
                         "user_id": user_id,
                         "timestamp": int(decision.occurred_at),   # canonical event-time; == interval.ended_at for spans
                     }}
-                    out.append({**base, "sources": list(decision.sources)})   # sidecar consumed by the Shaper
-                    queue.append(base)                                        # clean envelope drives recursion
+                    item = {**base, "sources": list(decision.sources)}
+                    out.append(item)                    # sidecar consumed by the Shaper
+                    queue.append(item)                  # recursion carries the evidence too (ADR 0011)
         return out
 
 

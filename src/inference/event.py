@@ -56,6 +56,7 @@ class Capability(str, Enum):
     PLACE = "place"         # happened somewhere — centroid derived from the evidence, label matched
     JOURNEY = "journey"     # went from somewhere to somewhere — endpoints, distance and mode
     VEHICLE = "vehicle"     # corroborated by non-locational evidence — e.g. your own car's signals
+    SUPPORT = "support"     # how the claim is backed — evidence kinds + a grade (ADR 0011)
 
 
 class Contributor(BaseModel):
@@ -172,10 +173,12 @@ class Vehicle(BaseModel):
     directionally correct — they only have to fall **inside** a journey that is already known.
     A lock at entry rather than exit still proves the car was involved.
 
-    Measured over 25 July - 1 August: of 20 replayed journeys, all 14 in the user's own car
-    had at least one boundary strictly inside the span (12 had both), and all 6 in a borrowed
-    car had **none**. Perfect separation, with no threshold — which is why the rule is simply
-    containment, and why the pad is zero (see `_vehicle`).
+    Containment is the engine's decision, not this model's: a boundary counts inside the span
+    plus a small pad (a correctly-measured journey systematically excludes both boundaries),
+    stretched across the adjacent evidence gap when the engine is configured gap-tolerant
+    (issue #46 — a cold-start entry or parking-search exit falls minutes outside any pad that
+    stays phantom-free). Measured 2026-08-08 over 25 days: 19 of 27 own-car journeys
+    `confirmed`, none absent, borrowed-car legs clean.
 
     `evidence` names the corroborating events, and is deliberately whatever the data contained
     rather than a fixed vocabulary — the deriver classifies structurally (a source with no
@@ -193,6 +196,36 @@ class Vehicle(BaseModel):
 
     evidence: list[str]
     confirmed: bool
+
+
+class Support(BaseModel):
+    """The *support capability*: **what kind of evidence backs this claim** (ADR 0011).
+
+    This is the shape in which the removed `confidence_score` returns — deliberately not a
+    scalar. A probability cannot be calibrated at this system's scale (one user, ~22 labelled
+    trips killed `naive_bayes_window`), and the dominant failure mode is ambiguity, which is
+    invariant to scoring: identical evidence gets identical numbers whether the event is real
+    or phantom (ADR 0009). What *is* honestly knowable is the **topology** of the evidence —
+    how many independent kinds of it agree — and that is all this model states.
+
+    `evidence_kinds` lists the independent kinds structurally: `"geometry"` when located fixes
+    are among the evidence, plus the name of each corroborating *claim* (a derived event that
+    contributed as evidence rather than as a constituent of another). Kinds are whatever the
+    data contained, never a fixed vocabulary — a future transit or bicycle detector slots in
+    without touching this model.
+
+    `level` is the one-word summary consumers threshold on: `corroborated` when two or more
+    independent kinds agree, `single_source` otherwise. A `single_source` journey is still a
+    real claim (200 fixes of geometry are solid evidence of *movement*) — the grade says how
+    the claim would survive one source being wrong, not how firmly it is believed. Consumers
+    own their cut: a timeline may render `single_source` paler; an action lane may require
+    `corroborated`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    level: str                       # "corroborated" | "single_source"
+    evidence_kinds: list[str]
 
 
 class InferredEvent(BaseModel):
@@ -218,3 +251,4 @@ class InferredEvent(BaseModel):
     place: Place | None = None
     journey: Journey | None = None
     vehicle: Vehicle | None = None
+    support: Support | None = None

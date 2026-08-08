@@ -1,0 +1,58 @@
+# A journey: the one event consumers see when you went somewhere (ADR 0011, issue #50).
+#
+# `trip` and `car_trip` are DETECTORS — one sees geometry (any movement, but only while
+# Overland delivers fixes and only settle_seconds late), one sees your car's peripherals
+# (prompt and outage-proof, but direction-fuzzy). Neither is the other's fallback or rival;
+# this event is derived from their UNION, so a journey exists when either saw it and is
+# corroborated when both did. "Was this my own car?" is the `vehicle` capability on it, and
+# how well the claim is backed is `support` — one timeline row, graded, instead of two events
+# chained on certainties neither detector has.
+#
+# PARALLEL-RUN (phase 1): trip and car_trip keep their capabilities and the dashboard keeps
+# drawing trip; this event ships alongside for validation against the ADR's bar (>= 19/27
+# own-car confirmed, borrowed legs clean, one physical journey -> one event). Phase 2 strips
+# the detectors and switches the dashboard.
+name: journey
+enabled: true
+
+engine: claim_fusion
+engine_config:
+  # The claim whose evidence defines the journey — its fixes become span, endpoints, mode.
+  # Fires the fused event immediately: the matching car session has almost always already
+  # closed (car_trip ends at got_out; trip only confirms settle_seconds after arrival).
+  primary_event: trip
+
+  # The corroborating claim, and the outage fallback: latched, folded into the primary it
+  # overlaps, or emitted alone when no primary ever comes.
+  secondary_event: car_trip
+
+  # Clock only. Lets an unpaired car_trip expire and emit between journeys; in a true
+  # location outage there are no ticks either, so the fallback rides out on the next event
+  # of any kind this engine sees — bounded staleness, accepted.
+  tick_event: location_ping
+
+  # Overlap slack when pairing the two claims' spans: they date their edges differently
+  # (settled fix vs boundary signal; measured medians -58s/+18s, tails to ~5min on cold
+  # starts and parking searches), so exact overlap is the wrong bar.
+  pair_pad_seconds: 300
+
+  # How long an unpaired car_trip waits before emitting session-only. Must exceed trip's
+  # worst measured lag behind car_trip (+21 min), or one physical journey emits twice —
+  # a premature session-only event plus the late trip's.
+  secondary_timeout_seconds: 1800
+
+  # The fallback must clear the same floor trip imposes on itself (min_duration_seconds:
+  # 120): a journey the primary would refuse as too short cannot be claimed by the fallback
+  # either. Kills car_trip's sub-2-minute phantom pairs (#26) in sparse-sampling stretches
+  # where the geometry veto has no fixes to refute them with (2 of the 6 survivors, 25d).
+  min_secondary_span_seconds: 120
+
+source_topic: raw_sensors
+sink_topic: high_level_events
+
+# interval: the fixes' extent (or the session boundaries' when there are no fixes).
+# journey: origin/destination labelled against the place book, distances, mode.
+# vehicle: the car evidence that rode along — see trip.yml's corroboration notes.
+# support: evidence kinds + grade — `corroborated` when geometry and an independent claim
+#   agree, `single_source` when one detector carried it alone (ADR 0011).
+capabilities: [interval, journey, vehicle, support]

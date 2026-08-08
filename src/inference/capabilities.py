@@ -18,7 +18,7 @@ built-ins, the same side-effect pattern as `inference.engines`.
 from collections import Counter
 from collections.abc import Callable
 
-from inference.event import Capability, Interval, Journey, Place, Vehicle
+from inference.event import Capability, Interval, Journey, Place, Support, Vehicle
 from inference.geo import haversine_m
 
 # capability → deriver(sources) -> fragment of InferredEvent fields
@@ -258,6 +258,54 @@ def _vehicle(sources: list[dict]) -> dict:
         return {}                                      # no corroboration — assert nothing
     evidence = sorted(seen, key=lambda n: (seen[n], n))
     return {"vehicle": Vehicle(evidence=evidence, confirmed=len(evidence) >= 2)}
+
+
+@register_capability(Capability.SUPPORT)
+def _support(sources: list[dict]) -> dict:
+    """How the claim is backed: the independent evidence kinds, and a grade over their count.
+
+    Kinds are read off the evidence **structurally**, mirroring `_vehicle`: located sources are
+    the `geometry` kind (the movement itself), and each *derived* source — an upstream claim
+    that contributed as evidence (ADR 0011) — is a kind named by its event name. Framework code
+    never learns what a claim is called; a transit or bicycle detector becomes a kind the day a
+    definition feeds it in.
+
+    **A claim contained in another claim's evidence is not independent.** With recursion
+    carrying sources, a `car_trip` arrives with its own `got_into`/`got_out` inside its sidecar;
+    counting all three as kinds would let one physical detector lane vote three times — the
+    same one-event-counted-once reasoning as `_vehicle`'s name dedup. So any derived source
+    whose id appears in another source's sidecar is collapsed into its container.
+
+    No kinds → no fragment: declaring `support` on an event whose evidence is all raw and
+    non-located is visibly a no-op, not a fabricated grade (the `_place` precedent).
+    """
+    located = any(
+        (s.get("message") or {}).get("lat") is not None
+        and (s.get("message") or {}).get("lon") is not None
+        for s in sources
+    )
+    contained = {
+        (sub.get("message") or {}).get("id")
+        for s in sources
+        for sub in (s.get("sources") or [])
+    }
+    claims: dict[str, int] = {}
+    for s in sources:
+        msg = s.get("message") or {}
+        name = msg.get("name")
+        if (msg.get("inference_type") is None or msg.get("id") in contained
+                or not isinstance(name, str)):
+            continue
+        ts = msg.get("timestamp", 0)
+        if name not in claims or ts < claims[name]:
+            claims[name] = ts
+    kinds = (["geometry"] if located else []) + sorted(claims, key=lambda n: (claims[n], n))
+    if not kinds:
+        return {}
+    return {"support": Support(
+        level="corroborated" if len(kinds) >= 2 else "single_source",
+        evidence_kinds=kinds,
+    )}
 
 
 def _mode(messages: list[dict]) -> str | None:

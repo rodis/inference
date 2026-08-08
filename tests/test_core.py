@@ -61,7 +61,11 @@ def test_route_emits_base_and_source_sidecar_without_shaping(definition, event, 
         assert shaped_field not in item["message"]
 
 
-def test_route_resolves_recursion_in_process_without_nesting_sources(definition, event, state):
+def test_route_recursion_carries_evidence_but_never_shaped_form(definition, event, state):
+    """ADR 0011: the re-enqueued derived event carries its `sources` sidecar, so a fusion
+    engine downstream can fold the upstream evidence into its own decision. What it still
+    never carries is anything the Shaper mints — capabilities, lineage — because shaping
+    happens after routing; detection composes over evidence, not over presentation."""
     mid = definition("mid", "weighted_window",
                      {"weights": {"sig": 10}, "threshold": 10, "window_seconds": 600, "cooldown_seconds": 0})
     top = definition("top", "weighted_window",
@@ -70,7 +74,11 @@ def test_route_resolves_recursion_in_process_without_nesting_sources(definition,
     out = router.route(event("sig", 100, id="R"), state)
     assert {i["message"]["name"] for i in out} == {"mid", "top"}    # one raw signal cascades two levels
     top_item = next(i for i in out if i["message"]["name"] == "top")
-    assert all("sources" not in s for s in top_item["sources"])     # recursed on the CLEAN envelope
+    # the recursed `mid` carried its evidence: `top`'s source is `mid` WITH mid's own sources
+    mid_source = next(s for s in top_item["sources"] if s["message"]["name"] == "mid")
+    assert [s["message"]["id"] for s in mid_source["sources"]] == ["R"]
+    # ...but never the shaped form: no capabilities, no lineage on the recursed envelope
+    assert "derived_from" not in mid_source["message"] and "interval" not in mid_source["message"]
 
 
 # --- Shaper.shape ---------------------------------------------------------------

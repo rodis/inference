@@ -1,7 +1,22 @@
 # ADR 0011 — Claims, not certainties: detectors detect, one enriched journey carries graded support
 
-Status: **Proposed — not implemented.**
+Status: **Accepted — phase 1 (parallel-run) implemented 2026-08-08; phase 2 (strip the
+detectors' capabilities, switch the dashboard) pending live validation.**
 Date: 2026-08-08
+
+> **Phase 1 outcome** (25-day replay, `scripts/vehicle_eval.py`): 42 `journey`s = 38 `trip`s 1:1
+> plus 4 session-only (all in the pre-25-Jul sparse-sampling era, 3 of 4 CarPlay-corroborated) —
+> the no-double-count bar. Own-car `confirmed` 30/32 with 0 absent (bar: ≥ 19/27); borrowed legs
+> `geometry`-only, no vehicle claim. Decisions taken at implementation: the fused event is named
+> **`journey`** (`trip` keeps its semantics as the geometry detector); `support` is the 2-level
+> enum plus `evidence_kinds`; history is forward-only. Two mechanisms the proposal did not
+> anticipate, both replay-caught: the fallback needed a **geometry veto** (a session-only journey
+> may only claim a span the location stream could not see — without it, `car_trip`'s phantom pairs
+> re-entered as 30 session-only journeys, 6 phantom-`confirmed`) plus the primary's own duration
+> floor; and expiry needed a **one-event-lagged clock** (a sampling gap can blackout-close the trip
+> on the same tick that would expire its session, doubling one journey). Both are the ADR's own
+> logic — physical vetoes over scoring — applied to the fusion itself. See `core.md` §11
+> `claim_fusion`.
 
 > Builds on [`0009-weights-are-at-their-ceiling.md`](0009-weights-are-at-their-ceiling.md) (ambiguity,
 > not unreliability, is the dominant failure mode) and [`0010-trips-from-motion.md`](0010-trips-from-motion.md)

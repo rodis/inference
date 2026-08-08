@@ -1059,7 +1059,7 @@ fix is skipped and the track continues from the last trustworthy position.
 
 ## 11. Engine reference
 
-Seven engines are registered; the six distinct strategies are grouped below
+Eight engines are registered; the seven distinct strategies are grouped below
 (`validated_session_window` subclasses the pairing one and is documented with it). All share the
 shape `(event, scoped state) -> Decision | None`, and all are selected purely by a definition's
 `engine:` string.
@@ -1555,6 +1555,47 @@ Two deliberate omissions keep this a strategy: it says nothing about **mode** or
 trip went — origin, destination and mode are derived from the same evidence by the `journey`
 capability. And a closed trip is never re-opened; going out again is a second trip, correctly.
 
+### `claim_fusion` (ADR 0011)
+
+The inference layer over the detectors: `journey` = union(`trip`, `car_trip`). Each detector sees
+one facet — geometry sees any movement but needs fixes and confirms late; the car session survives
+a location outage and fires promptly but pairs direction-ambiguous boundaries. This engine derives
+the event consumers actually see from **either**, corroborated when both agree. It is what the
+ADR 0011 recursion change exists for: the claims arrive carrying their evidence, and the fused
+decision's sources are that union, so capabilities (`interval`, `journey`, `vehicle`, `support`)
+are derived once, at the top.
+
+| Config | Default | Meaning |
+|---|---|---|
+| `primary_event` | — | the claim whose evidence defines the journey (its fixes → span/endpoints/mode); fires the fused event immediately |
+| `secondary_event` | — | the corroborating claim; latched, folded into the primary it overlaps, or emitted alone as the outage fallback |
+| `tick_event` | `location_ping` | consumed as a clock only — lets pending secondaries expire, and feeds the geometry veto |
+| `pair_pad_seconds` | `300` | overlap slack when pairing the two claims' spans (they date their edges differently) |
+| `secondary_timeout_seconds` | `1800` | how long an unpaired secondary waits before emitting session-only; must exceed the primary's worst lag behind it (+21 min measured) |
+| `min_secondary_span_seconds` | `0` | a session-only emission must span at least this — set it to the primary's own duration floor |
+| `recent_horizon_seconds` | `21600` | how long emitted spans are remembered, to absorb a late secondary instead of double-emitting |
+
+Three hard-won mechanics, each a replay-caught failure:
+
+- **The expiry clock lags one event.** A sampling gap longer than the primary's `max_gap_seconds`
+  blackout-closes the trip on the *same ping* that would expire its pending session, and the tick
+  runs before the recursed trip reaches the latch — observed doubling one journey (2026-08-05
+  11:02). Expiry therefore judges by the previous event's time; the current event only advances
+  the clock, so the primary always gets one chance to claim its pending secondary first.
+- **The geometry veto on the fallback** — ADR 0009's displacement reasoning applied to the union.
+  A session-only emission may only claim a journey geometry *could not see*: if ticks flowed
+  through the claim's span and no primary emerged, the location stream actively refutes it (a
+  lock+door phantom pair at home is exactly this shape). Replayed over 25 days the veto cut
+  session-only journeys 30 → 6, every survivor in the pre-25-Jul sparse-sampling era.
+- **A late secondary is absorbed, not re-emitted.** When the primary fires first, the tardy
+  session finds the journey already exists (the `recent` spans) and is dropped — the journey reads
+  `single_source` where faster pairing would have said `corroborated`, a measurable loss chosen
+  over taxing every journey's latency with a pairing window.
+
+Validated 2026-08-08 over 25 days (`scripts/vehicle_eval.py`): 42 journeys = 38 trips 1:1 + 4
+session-only (all pre-Overland-density, 3 of 4 CarPlay-corroborated); own-car `confirmed` 30/32,
+absent 0; borrowed-car legs `geometry`-only with no vehicle claim.
+
 ### The retired eighth
 
 `naive_bayes_window` was removed 2026-07-27. `car_door_closed` was its only consumer, gone since ADR
@@ -1612,6 +1653,17 @@ wrong. Correct spans exclude both boundaries by tens of seconds, which is why
 `corroboration_pad_seconds` exists and why it is safe: `interval` derives from the located sources
 alone, so the pad buys evidence without touching the span.
 
+`support` answers **"what kind of evidence backs this claim?"** (ADR 0011) — the shape in which the
+removed `confidence_score` returns, deliberately as an enum over evidence *topology* rather than a
+number (a probability cannot be calibrated at this scale, and ambiguity is invariant to scoring —
+ADR 0009). `evidence_kinds` is structural: `geometry` when located fixes are among the evidence,
+plus the name of each **claim** — a derived source — that contributed independently. A claim
+contained in another claim's sidecar is collapsed into its container (a `car_trip` arrives carrying
+its `got_into`/`got_out`; counting all three would let one detector lane vote thrice — `_vehicle`'s
+one-event-counted-once reasoning at the claim level). `level` is the one-word summary consumers
+threshold on: `corroborated` at two or more independent kinds, `single_source` otherwise. No kinds →
+no fragment, the `_place` precedent.
+
 `derive_capability(capability, sources)` raises `RuntimeError` listing the registered capabilities if
 a declared one has no deriver. Since `Capability` is a pydantic-validated enum, a YAML *typo* is
 caught at definition load (that definition is skipped); an enum member added without a deriver fails
@@ -1642,6 +1694,9 @@ definitions are:
 | `trip_window` | `run` | `{sources, la0, la1, lo0, lo1, first_ts, gap_lo, n, last, settling}` or `None` | opened when a fix escapes the anchor; cleared on close. `gap_lo` = the fix preceding the departure fix (the evidence-gap bound) |
 | | `anchor` | a cluster `{clat, clon, n, first_ts, last, last_event, prev_ts, fixes, events}` or `None` | the cluster you are settled in; becomes the arrival cluster on close. `prev_ts` = the fix before the cluster (set when a blackout resets it) |
 | | `marks` | `[{ts, event}]` — latched corroboration, pruned to `max_duration_seconds` | every corroborating event; those up to the padded span consumed on close (gap-extended end-zone marks are attached but retained — they may be the next leg's entry) |
+| `claim_fusion` | `pending` | `[{ts, lo, hi, ticked, event}]` — unpaired secondary claims (evidence sidecar included) | on secondary arrival; consumed by pairing, expiry, veto |
+| | `recent` | `[[lo, hi]]` — spans of emitted journeys, pruned to `recent_horizon_seconds` | on primary emission; read to absorb late secondaries |
+| | `clock` / `last_tick` | `int` — the lagged expiry clock / newest tick seen (feeds the geometry veto) | every tick or secondary |
 
 Concretely, for the current definition set: `stay:open`, `trip:run`, `trip:anchor`, `trip:marks`,
 `got_into_the_car:window`,

@@ -256,3 +256,59 @@ def test_interval_falls_back_to_all_sources_when_none_are_located():
         _mark("got_into_the_car", 100), _mark("got_out_the_car", 700)])
     iv = frag["interval"]
     assert (iv.started_at, iv.ended_at) == (100, 700)
+
+
+# --- support (ADR 0011) -----------------------------------------------------------
+#
+# Evidence kinds read structurally: located sources are the `geometry` kind, each derived
+# source is a kind named by its event name — unless it is CONTAINED in another source's
+# sidecar, in which case it is a constituent of that claim, not independent evidence.
+
+
+def _located(ts, id):
+    return {"message": {"id": id, "name": "location_ping", "timestamp": ts,
+                        "lat": 47.2, "lon": 8.5}}
+
+
+def _claim(name, ts, id, sources=()):
+    return {"message": {"id": id, "name": name, "timestamp": ts, "user_id": "u",
+                        "inference_type": "an_engine"},
+            "sources": list(sources)}
+
+
+def test_support_geometry_alone_is_single_source():
+    frag = derive_capability(Capability.SUPPORT, [_located(100, "a"), _located(200, "b")])
+    assert frag["support"].level == "single_source"
+    assert frag["support"].evidence_kinds == ["geometry"]
+
+
+def test_support_geometry_plus_a_claim_is_corroborated():
+    frag = derive_capability(Capability.SUPPORT, [
+        _located(100, "a"), _located(200, "b"), _claim("car_trip", 210, "ct")])
+    assert frag["support"].level == "corroborated"
+    assert frag["support"].evidence_kinds == ["geometry", "car_trip"]
+
+
+def test_support_collapses_a_claims_constituents():
+    """A car_trip arrives carrying its got_into/got_out in its sidecar (the ADR 0011 recursion
+    change); when those envelopes ALSO appear top-level (hoisted for interval, or as trip
+    marks), they must not count as extra kinds — one physical detector lane, one vote."""
+    into = _claim("got_into_the_car", 90, "in")
+    out = _claim("got_out_the_car", 200, "out")
+    frag = derive_capability(Capability.SUPPORT, [
+        _claim("car_trip", 200, "ct", sources=[into, out]), into, out])
+    assert frag["support"].level == "single_source"
+    assert frag["support"].evidence_kinds == ["car_trip"]
+
+
+def test_support_session_only_with_geometry_absent():
+    into = _claim("got_into_the_car", 90, "in")
+    out = _claim("got_out_the_car", 200, "out")
+    frag = derive_capability(Capability.SUPPORT, [
+        _claim("car_trip", 200, "ct", sources=[into, out]), into, out])
+    assert "geometry" not in frag["support"].evidence_kinds
+
+
+def test_support_asserts_nothing_over_raw_unlocated_evidence():
+    frag = derive_capability(Capability.SUPPORT, [_src(100), _src(200)])
+    assert frag == {}

@@ -2,6 +2,7 @@
 each engine now carries the FULL source event bodies on the Decision (not {id,ts})."""
 
 
+from inference.engines.claim_fusion import ClaimFusionEngine
 from inference.engines.decaying_window import DecayingWindowEngine
 from inference.engines.session_gated_window import SessionGatedWindowEngine
 from inference.engines.session_window import SessionWindowEngine
@@ -921,3 +922,127 @@ def test_gap_tolerance_off_keeps_the_pad_semantics(state, event):
     d = _arrive(eng, state, event, last + 60)
     assert d is not None
     assert "got_into_the_car" not in [s["message"]["name"] for s in d.sources]
+
+
+# --- claim_fusion (ADR 0011) ------------------------------------------------------
+#
+# The inference layer over the detectors: `journey` = union(trip, car_trip). The engine never
+# looks at geometry — spans are read off each claim's evidence timestamps — so the fixtures
+# build claims by hand: a primary carrying located fix sources, a secondary carrying two
+# boundary envelopes in its sidecar (which is what the ADR 0011 recursion change delivers).
+
+
+def _fusion(**over):
+    cfg = {"primary_event": "trip", "secondary_event": "car_trip",
+           "tick_event": "location_ping", "pair_pad_seconds": 300,
+           "secondary_timeout_seconds": 1800}
+    cfg.update(over)
+    return ClaimFusionEngine(cfg)
+
+
+def _primary(event, start, end, *, id="P"):
+    """A trip claim: located fixes spanning start..end riding in its sidecar."""
+    e = event("trip", end, id=id)
+    e["message"]["inference_type"] = "trip_window"
+    e["sources"] = [_fix(event, start, id=f"{id}f0"), _fix(event, end, id=f"{id}f1", **_AWAY)]
+    return e
+
+
+def _secondary(event, start, end, *, id="S"):
+    """A car_trip claim: its boundary envelopes (derived, non-located) in its sidecar."""
+    into = event("got_into_the_car", start, id=f"{id}in")
+    into["message"]["inference_type"] = "weighted_window"
+    out = event("got_out_the_car", end, id=f"{id}out")
+    out["message"]["inference_type"] = "session_gated_window"
+    e = event("car_trip", end, id=id)
+    e["message"]["inference_type"] = "validated_session_window"
+    e["sources"] = [into, out]
+    return e
+
+
+def test_fusion_pairs_a_session_with_the_overlapping_trip(state, event):
+    eng = _fusion()
+    assert eng.decide(_secondary(event, T - 60, T + 620), state) is None    # latched, no fire
+    d = eng.decide(_primary(event, T, T + 600), state)
+    assert d is not None and d.occurred_at == T + 600
+    names = [s["message"]["name"] for s in d.sources]
+    assert names.count("car_trip") == 1                                     # the claim rode along
+    assert names.count("location_ping") == 2                                # with the evidence
+    assert state.get("pending") == []                                       # and was consumed
+
+
+def test_fusion_emits_a_trip_only_journey_immediately(state, event):
+    d = _fusion().decide(_primary(event, T, T + 600), state)
+    assert d is not None
+    assert [s["message"]["name"] for s in d.sources] == ["location_ping", "location_ping"]
+
+
+def test_fusion_does_not_pair_across_distant_spans(state, event):
+    eng = _fusion()
+    eng.decide(_secondary(event, T - 5000, T - 4000), state)                # yesterday's errand
+    d = eng.decide(_primary(event, T, T + 600), state)
+    assert "car_trip" not in [s["message"]["name"] for s in d.sources]
+    assert len(state.get("pending")) == 1                                   # still waiting
+
+
+def test_an_unpaired_session_emits_alone_after_the_timeout(state, event):
+    """The Overland-outage fallback (#42's measured ~7%): no fixes, so no trip ever comes —
+    the session claim IS the journey, and its span is its own boundaries. Expiry judges by the
+    PREVIOUS event's clock (see `_pop_expired`), so it takes two events past the deadline."""
+    eng = _fusion()
+    eng.decide(_secondary(event, T, T + 600), state)
+    # Ticks resume only AFTER the session (past its span + pad): the outage covered the drive
+    # itself, so the geometry veto does not apply and the claim survives to its expiry.
+    assert eng.decide(_fix(event, T + 1000), state) is None                 # not expired yet
+    assert eng.decide(_fix(event, T + 600 + 1901), state) is None           # clock catches up
+    d = eng.decide(_fix(event, T + 600 + 2000), state)                      # ...and now expires
+    assert d is not None and d.occurred_at == T + 600
+    names = [s["message"]["name"] for s in d.sources]
+    assert names == ["car_trip", "got_into_the_car", "got_out_the_car"]     # sidecar hoisted
+    assert state.get("pending") == []
+
+
+def test_a_gap_that_closes_the_trip_cannot_also_expire_its_session(state, event):
+    """The 2026-08-05 11:02 replay double: a 35-minute sampling gap blackout-closes the trip
+    on the SAME ping that would expire its pending session, and the tick runs before the
+    recursed trip. The lagged clock means the session survives that tick and the trip, arriving
+    next, pairs with it — one journey, not two."""
+    eng = _fusion()
+    eng.decide(_secondary(event, T - 60, T + 620), state)
+    # The gap-jumping tick: well past the timeout relative to the latch, but the FIRST event
+    # to say so — the same tick production would close the trip on.
+    assert eng.decide(_fix(event, T + 620 + 2100), state) is None           # no premature emit
+    d = eng.decide(_primary(event, T, T + 600), state)                      # recursed trip lands
+    assert d is not None
+    assert "car_trip" in [s["message"]["name"] for s in d.sources]          # paired, consumed
+    assert state.get("pending") == []
+
+
+def test_a_late_session_is_absorbed_not_double_emitted(state, event):
+    """When the trip fires first (an exit scored after the arrival confirm), the late session
+    must not become a second journey — the event is immutable, so the corroboration is lost
+    (measurably) rather than the timeline gaining a duplicate."""
+    eng = _fusion()
+    assert eng.decide(_primary(event, T, T + 600), state) is not None       # journey emitted
+    eng.decide(_secondary(event, T - 60, T + 620), state)                   # session lands late
+    assert state.get("pending") == []                                       # absorbed
+    assert eng.decide(_fix(event, T + 9000), state) is None                 # and never emits
+
+
+def test_a_phantom_session_is_refuted_by_live_geometry(state, event):
+    """The union fallback must not re-import car_trip's phantom family: a lock+door pair at
+    home mints a car_trip while location fixes flow straight through its span — geometry was
+    watching and saw no journey, so the claim is refuted (ADR 0009's veto), not emitted."""
+    eng = _fusion()
+    assert eng.decide(_fix(event, T + 100), state) is None                  # geometry is alive
+    eng.decide(_secondary(event, T, T + 600), state)                        # phantom claim
+    assert eng.decide(_fix(event, T + 3000), state) is None
+    assert eng.decide(_fix(event, T + 3100), state) is None                 # expiry comes up...
+    assert eng.decide(_fix(event, T + 3200), state) is None                 # ...and drops it
+    assert state.get("pending") == []                                       # gone, not emitted
+
+
+def test_ticks_alone_never_fire(state, event):
+    eng = _fusion()
+    assert eng.decide(_fix(event, T), state) is None
+    assert eng.decide(_fix(event, T + 3600), state) is None
