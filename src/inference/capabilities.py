@@ -18,7 +18,7 @@ built-ins, the same side-effect pattern as `inference.engines`.
 from collections import Counter
 from collections.abc import Callable
 
-from inference.event import Capability, Interval, Journey, Place, Support, Vehicle
+from inference.event import Capability, Interval, Journey, Pause, Place, Support, Vehicle
 from inference.geo import haversine_m
 
 # capability → deriver(sources) -> fragment of InferredEvent fields
@@ -258,6 +258,64 @@ def _vehicle(sources: list[dict]) -> dict:
         return {}                                      # no corroboration — assert nothing
     evidence = sorted(seen, key=lambda n: (seen[n], n))
     return {"vehicle": Vehicle(evidence=evidence, confirmed=len(evidence) >= 2)}
+
+
+# A pause is a cluster that held at least this long. Below it, ordinary traffic (a red light
+# runs 30-90s) would flood the detail line; above the engines' settle threshold it would have
+# been an arrival instead, so the band this captures is exactly the stops detection must
+# ignore. The radius mirrors the geometry engines' clustering convention.
+PAUSE_RADIUS_M = 60.0
+PAUSE_MIN_SECONDS = 120
+
+
+@register_capability(Capability.PAUSES)
+def _pauses(sources: list[dict]) -> dict:
+    """Sub-threshold stops inside the span — see `event.Pause` for why this is enrichment
+    rather than detection. Re-clusters the event's own located evidence (the same
+    running-centroid-plus-radius walk the geometry engines use) and reports each interior
+    cluster that held `PAUSE_MIN_SECONDS`, labelled against the place book.
+
+    Only *interior* clusters count: the first and last located fixes are the event's own
+    bounds (a journey is settled fix -> settled fix by construction), so a cluster touching
+    either is the endpoint itself, not a stop along the way. No pauses -> no fragment.
+    """
+    located = []
+    for s in sources:
+        msg = s.get("message") or {}
+        lat, lon = msg.get("lat"), msg.get("lon")
+        if lat is None or lon is None:
+            continue
+        try:
+            located.append((int(msg.get("timestamp", 0)), float(lat), float(lon)))
+        except (TypeError, ValueError):
+            continue
+    if len(located) < 3:
+        return {}
+    located.sort(key=lambda f: f[0])
+
+    clusters, current = [], None
+    for ts, lat, lon in located:
+        if current is not None and haversine_m(current["clat"], current["clon"], lat, lon) <= PAUSE_RADIUS_M:
+            n = current["n"] + 1
+            current["clat"] += (lat - current["clat"]) / n
+            current["clon"] += (lon - current["clon"]) / n
+            current["n"], current["last_ts"] = n, ts
+            current["fixes"].append((lat, lon))
+        else:
+            if current is not None:
+                clusters.append(current)
+            current = {"clat": lat, "clon": lon, "n": 1, "first_ts": ts, "last_ts": ts,
+                       "fixes": [(lat, lon)]}
+    clusters.append(current)
+
+    pauses = []
+    for c in clusters[1:-1]:                           # interior only — endpoints are the bounds
+        if c["last_ts"] - c["first_ts"] < PAUSE_MIN_SECONDS:
+            continue
+        spread = max((haversine_m(c["clat"], c["clon"], la, lo) for la, lo in c["fixes"]), default=0.0)
+        pauses.append(Pause(started_at=c["first_ts"], ended_at=c["last_ts"],
+                            place=_place_at(c["clat"], c["clon"], spread)))
+    return {"pauses": pauses} if pauses else {}
 
 
 @register_capability(Capability.SUPPORT)

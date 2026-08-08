@@ -91,6 +91,36 @@
       "title": "Journey",
       "type": "object"
     },
+    "Pause": {
+      "additionalProperties": false,
+      "description": "One *pause* inside a journey: the entity held still, but not long enough to be an\narrival. Detection thresholds are deliberately not lowered to see these \u2014 a 2026-08-08\nfuel stop (3m46s at Avia Neuheim, under `settle_seconds` 300) correctly did not split the\njourney, because *no* threshold separates a fuel stop from a rail crossing, and an engine\nthat tries mints phantom micro-stays at every long red light. So the stop is **detail the\njourney carries**, derived from the evidence the journey already retains, rather than an\nevent of its own: detection guards against phantoms, enrichment carries nuance, and the\nreading \"one errand with a stop at the station\" and \"you stopped somewhere\" are both true\nat their own altitude. Labelled against the same place book as everything else, so a pause\nat a known place says so (\"~4 min at Avia Neuheim\") and one at a red light stays anonymous\ncoordinates \u2014 which is honest, and no one has to declare red lights in advance.",
+      "properties": {
+        "started_at": {
+          "title": "Started At",
+          "type": "integer"
+        },
+        "ended_at": {
+          "title": "Ended At",
+          "type": "integer"
+        },
+        "place": {
+          "$ref": "#/$defs/Place"
+        },
+        "duration_seconds": {
+          "readOnly": true,
+          "title": "Duration Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "started_at",
+        "ended_at",
+        "place",
+        "duration_seconds"
+      ],
+      "title": "Pause",
+      "type": "object"
+    },
     "Place": {
       "additionalProperties": false,
       "description": "The *place capability*: an event that happened **somewhere**.\n\nTwo facts of different kinds, deliberately in one capability:\n\n- `lat`/`lon`/`spread_m` are derived from the event's own evidence \u2014 the centroid of the\n  contributing fixes and how far the furthest one sits from it. Pure, always available,\n  and independent of any configuration: an event at an unlisted place still knows where\n  it was. `spread_m` is the evidence's *self-reported* precision (not a GPS accuracy\n  claim), so a tight cluster reads as a confident point and a loose one doesn't pretend.\n- `label`/`distance_m` are the match against known places (reference data, see\n  `inference.runtime.places`). `label` is None when nothing matched, which is a real and\n  useful answer \u2014 \"40 minutes somewhere at 47.195,8.524\" is the raw material for naming\n  that place later, not a failure.\n\nThe label is resolved at derive time and therefore *frozen* into the event. Renaming or\nadding a place does not retroactively relabel history \u2014 re-deriving from the retained raw\nfixes does (see scripts/backtest.py). That is the deliberate trade: events stay immutable\nfacts about what was known when they were minted.",
@@ -283,6 +313,21 @@
         }
       ],
       "default": null
+    },
+    "pauses": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/Pause"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Pauses"
     }
   },
   "required": [

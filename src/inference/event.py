@@ -57,6 +57,7 @@ class Capability(str, Enum):
     JOURNEY = "journey"     # went from somewhere to somewhere — endpoints, distance and mode
     VEHICLE = "vehicle"     # corroborated by non-locational evidence — e.g. your own car's signals
     SUPPORT = "support"     # how the claim is backed — evidence kinds + a grade (ADR 0011)
+    PAUSES = "pauses"       # sub-threshold stops inside the span, as labelled detail
 
 
 class Contributor(BaseModel):
@@ -198,6 +199,32 @@ class Vehicle(BaseModel):
     confirmed: bool
 
 
+class Pause(BaseModel):
+    """One *pause* inside a journey: the entity held still, but not long enough to be an
+    arrival. Detection thresholds are deliberately not lowered to see these — a 2026-08-08
+    fuel stop (3m46s at Avia Neuheim, under `settle_seconds` 300) correctly did not split the
+    journey, because *no* threshold separates a fuel stop from a rail crossing, and an engine
+    that tries mints phantom micro-stays at every long red light. So the stop is **detail the
+    journey carries**, derived from the evidence the journey already retains, rather than an
+    event of its own: detection guards against phantoms, enrichment carries nuance, and the
+    reading "one errand with a stop at the station" and "you stopped somewhere" are both true
+    at their own altitude. Labelled against the same place book as everything else, so a pause
+    at a known place says so ("~4 min at Avia Neuheim") and one at a red light stays anonymous
+    coordinates — which is honest, and no one has to declare red lights in advance.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    started_at: int
+    ended_at: int
+    place: Place
+
+    @computed_field
+    @property
+    def duration_seconds(self) -> int:
+        return self.ended_at - self.started_at
+
+
 class Support(BaseModel):
     """The *support capability*: **what kind of evidence backs this claim** (ADR 0011).
 
@@ -252,3 +279,6 @@ class InferredEvent(BaseModel):
     journey: Journey | None = None
     vehicle: Vehicle | None = None
     support: Support | None = None
+    # None = capability not declared/derivable; [] never emitted (a journey with no pauses
+    # simply omits the field, so presence still means "there is something to say").
+    pauses: list[Pause] | None = None

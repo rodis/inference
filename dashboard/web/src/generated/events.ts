@@ -25,6 +25,10 @@ export type Evidence = string[];
 export type Confirmed = boolean;
 export type Level = string;
 export type EvidenceKinds = string[];
+export type Pauses = Pause[] | null;
+export type StartedAt1 = number;
+export type EndedAt1 = number;
+export type DurationSeconds1 = number;
 
 /**
  * A derived event's `message` payload — the unit shared across Python and TS.
@@ -45,6 +49,7 @@ export interface InferredEvent {
   journey?: Journey | null;
   vehicle?: Vehicle | null;
   support?: Support | null;
+  pauses?: Pauses;
 }
 /**
  * One source event in the lineage graph (an entry in `derived_from`).
@@ -186,4 +191,23 @@ export interface Vehicle {
 export interface Support {
   level: Level;
   evidence_kinds: EvidenceKinds;
+}
+/**
+ * One *pause* inside a journey: the entity held still, but not long enough to be an
+ * arrival. Detection thresholds are deliberately not lowered to see these — a 2026-08-08
+ * fuel stop (3m46s at Avia Neuheim, under `settle_seconds` 300) correctly did not split the
+ * journey, because *no* threshold separates a fuel stop from a rail crossing, and an engine
+ * that tries mints phantom micro-stays at every long red light. So the stop is **detail the
+ * journey carries**, derived from the evidence the journey already retains, rather than an
+ * event of its own: detection guards against phantoms, enrichment carries nuance, and the
+ * reading "one errand with a stop at the station" and "you stopped somewhere" are both true
+ * at their own altitude. Labelled against the same place book as everything else, so a pause
+ * at a known place says so ("~4 min at Avia Neuheim") and one at a red light stays anonymous
+ * coordinates — which is honest, and no one has to declare red lights in advance.
+ */
+export interface Pause {
+  started_at: StartedAt1;
+  ended_at: EndedAt1;
+  place: Place;
+  duration_seconds: DurationSeconds1;
 }

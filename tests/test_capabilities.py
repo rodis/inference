@@ -312,3 +312,49 @@ def test_support_session_only_with_geometry_absent():
 def test_support_asserts_nothing_over_raw_unlocated_evidence():
     frag = derive_capability(Capability.SUPPORT, [_src(100), _src(200)])
     assert frag == {}
+
+
+# --- pauses -----------------------------------------------------------------------
+#
+# Enrichment, not detection: sub-threshold stops derived from the event's own located
+# evidence, so no engine threshold has to pretend one number separates a fuel stop from a
+# rail crossing. Interior clusters only — the endpoints ARE the journey's bounds.
+
+
+def _ping(ts, lat, lon, id=None):
+    return {"message": {"id": id or f"p{ts}", "name": "location_ping", "timestamp": ts,
+                        "lat": lat, "lon": lon}}
+
+
+def test_a_sub_threshold_stop_becomes_a_pause():
+    """The 2026-08-08 fuel stop shape: drive out, hold ~4 min at the station, drive back."""
+    fixes = [_ping(0, 47.20, 8.50)]                                    # departure bound
+    fixes += [_ping(60 + i * 30, 47.20 + 0.002 * (i + 1), 8.50) for i in range(4)]   # out
+    fixes += [_ping(300 + i * 60, 47.2115, 8.50) for i in range(4)]    # held 180s at the stop
+    fixes += [_ping(600 + i * 30, 47.2115 - 0.002 * (i + 1), 8.50) for i in range(4)]  # back
+    fixes += [_ping(800, 47.20, 8.50)]                                 # arrival bound
+    frag = derive_capability(Capability.PAUSES, fixes)
+    assert len(frag["pauses"]) == 1
+    p = frag["pauses"][0]
+    assert (p.started_at, p.ended_at, p.duration_seconds) == (300, 480, 180)
+
+
+def test_a_red_light_is_too_short_to_be_a_pause():
+    fixes = [_ping(0, 47.20, 8.50)]
+    fixes += [_ping(60 + i * 30, 47.20 + 0.002 * (i + 1), 8.50) for i in range(4)]
+    fixes += [_ping(300 + i * 30, 47.2115, 8.50) for i in range(3)]    # held only 60s
+    fixes += [_ping(500 + i * 30, 47.2115 - 0.002 * (i + 1), 8.50) for i in range(4)]
+    assert derive_capability(Capability.PAUSES, fixes) == {}
+
+
+def test_the_endpoints_are_bounds_not_pauses():
+    """A long settled stretch at the START of the evidence is where the journey departed from,
+    not a stop along it — same for the arrival end."""
+    fixes = [_ping(i * 100, 47.20, 8.50) for i in range(4)]            # 300s settled at origin
+    fixes += [_ping(500 + i * 30, 47.20 + 0.003 * (i + 1), 8.50) for i in range(4)]
+    fixes += [_ping(900 + i * 100, 47.2135, 8.50) for i in range(4)]   # 300s settled at the end
+    assert derive_capability(Capability.PAUSES, fixes) == {}
+
+
+def test_non_geo_evidence_yields_no_pauses():
+    assert derive_capability(Capability.PAUSES, [_src(100), _src(200)]) == {}

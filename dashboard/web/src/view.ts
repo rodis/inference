@@ -4,11 +4,13 @@ import type { AwareEvent } from "./types";
 
 export const VERBS: Record<string, string> = {
   car_trip: "Car trip", got_into_the_car: "Got into the car", got_out_the_car: "Got out of the car",
-  // A journey titles itself by its MODE (see labelOf / MODE_NOUN); this is the fallback for
-  // one where no fix claimed a mode — including every session-only `journey`, whose evidence
-  // is the car's boundaries rather than located fixes.
+  // A historical `trip` titles itself by its MODE (see labelOf / MODE_NOUN); this is the
+  // fallback for one where no fix claimed a mode.
   trip: "Trip",
-  journey: "Trip",
+  // `journey` titles itself as what it IS — the mode stopped earning the title slot once the
+  // car glyph (vehicle evidence) carries "in my car" on its own, and it also kept the Levels
+  // board from showing two rows both called "Trip". User call, 2026-08-08.
+  journey: "Journey",
   // Fallback only: a `stay` that matched a known place is labelled with the place itself
   // (see labelOf), because "Konditorei von Rotz Baar" says more than "Stay" ever will.
   stay: "Stay",
@@ -143,8 +145,21 @@ const MODE_NOUN: Record<string, string> = {
   driving: "Drive", walking: "Walk", cycling: "Ride", running: "Run",
 };
 const tripLabel = (e: AwareEvent): string | null => {
+  if (e.name === "journey") return null;             // titles as "Journey" (VERBS) — see there
   const mode = e.message.journey?.mode;
   return mode ? MODE_NOUN[mode] ?? null : null;
+};
+
+/** The detail-line rendering of a journey's pauses: the first labelled stop by name, the rest
+ *  by count. One compact fragment, because the detail line already carries times + route. */
+export const pausesOf = (e: AwareEvent): string | null => {
+  const ps = e.message.pauses;
+  if (!ps?.length) return null;
+  const first = ps[0];
+  const where = first.place?.label ?? "1 stop";
+  const dur = humanDur(first.duration_seconds ?? 0);
+  const more = ps.length > 1 ? ` +${ps.length - 1}` : "";
+  return `${where} ${dur}${more}`;
 };
 
 /** Where a journey went, as **one** place rather than two — for the card's detail line, never its

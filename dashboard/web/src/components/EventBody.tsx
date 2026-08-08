@@ -1,6 +1,6 @@
 import { Car } from "lucide-react";
 import type { AwareEvent } from "../types";
-import { carCorroborated, fmtTime, humanDur, intervalOf, isSpan, labelOf, routeOf } from "../view";
+import { carCorroborated, fmtTime, humanDur, intervalOf, isSpan, labelOf, pausesOf, routeOf } from "../view";
 import LevelChip, { OverrideFlag } from "./LevelChip";
 
 interface Props {
@@ -29,6 +29,8 @@ export default function EventBody({ event: e, level, def = null, depth, hostLabe
   // A journey's route lives here, on the detail line, and never in the title — one place rather
   // than two, so it stays short and can't be half-missing. See view.ts::routeOf.
   const route = routeOf(e);
+  // Sub-threshold stops the journey carries ("Avia Neuheim 4m") — enrichment, not events.
+  const pauses = pausesOf(e);
 
   let detail: string;
   if (iv) {
@@ -63,6 +65,7 @@ export default function EventBody({ event: e, level, def = null, depth, hostLabe
           {iv && <span className="dur">{humanDur(iv.duration_seconds)}</span>}
           {iv && detail ? ` · ${detail}` : iv ? "" : detail}
           {route && <span className="ev-route"> · {route}</span>}
+          {pauses && <span className="ev-route" title="stopped along the way"> · via {pauses}</span>}
           {hostLabel && <span className="ev-host"> · in {hostLabel.toLowerCase()}</span>}
         </div>
       )}

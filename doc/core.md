@@ -1677,6 +1677,16 @@ one-event-counted-once reasoning at the claim level). `level` is the one-word su
 threshold on: `corroborated` at two or more independent kinds, `single_source` otherwise. No kinds →
 no fragment, the `_place` precedent.
 
+`pauses` carries **sub-threshold stops** inside a span — detection deliberately does *not* lower
+`settle_seconds` to see them (no number separates a fuel stop from a rail crossing; a lower
+threshold mints phantom micro-stays at every long light). Instead the deriver re-clusters the
+event's own located evidence with the geometry engines' running-centroid walk and reports each
+*interior* cluster that held ≥ 120 s within 60 m, labelled against the place book — the endpoints
+are the span's own bounds, never pauses. Detection guards against phantoms; enrichment carries
+nuance; both readings of an errand ("one drive with a stop" / "you stopped at the station") stay
+true at their own altitude. First live case: the 2026-08-08 fuel stop, 267 s, at a station not yet
+in the place book — reported unlabelled, which is the raw material for naming it, not a failure.
+
 `derive_capability(capability, sources)` raises `RuntimeError` listing the registered capabilities if
 a declared one has no deriver. Since `Capability` is a pydantic-validated enum, a YAML *typo* is
 caught at definition load (that definition is skipped); an enum member added without a deriver fails

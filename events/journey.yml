@@ -56,4 +56,6 @@ sink_topic: high_level_events
 # vehicle: the car evidence that rode along — see trip.yml's corroboration notes.
 # support: evidence kinds + grade — `corroborated` when geometry and an independent claim
 #   agree, `single_source` when one detector carried it alone (ADR 0011).
-capabilities: [interval, journey, vehicle, support]
+# pauses: sub-threshold stops along the way ("~4 min at Avia Neuheim"), derived from the
+#   journey's own retained fixes — detail, not detection, so no engine threshold moves.
+capabilities: [interval, journey, vehicle, support, pauses]
