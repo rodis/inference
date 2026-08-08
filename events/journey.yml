@@ -8,10 +8,11 @@
 # how well the claim is backed is `support` — one timeline row, graded, instead of two events
 # chained on certainties neither detector has.
 #
-# PARALLEL-RUN (phase 1): trip and car_trip keep their capabilities and the dashboard keeps
-# drawing trip; this event ships alongside for validation against the ADR's bar (>= 19/27
-# own-car confirmed, borrowed legs clean, one physical journey -> one event). Phase 2 strips
-# the detectors and switches the dashboard.
+# Since phase 2 (2026-08-08) this is THE drawn event for going somewhere: the dashboard's
+# timeline folds trip/car_trip under a covering journey, and the detectors carry only their
+# interval. Validated against the ADR's bar on a 25-day replay before cutover: 42 journeys =
+# 38 trips 1:1 + 4 session-only (all in the pre-Overland sparse era), own-car confirmed 30/32
+# with 0 absent, borrowed legs geometry-only.
 name: journey
 enabled: true
 

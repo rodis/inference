@@ -96,12 +96,14 @@ engine_config:
 source_topic: raw_sensors
 sink_topic: high_level_events
 
-# interval: departure -> arrival, projected from the lineage extent — and both bounds are
-#   SETTLED fixes, not moving ones, so the span covers the whole journey.
-# journey: origin + destination as labelled places (this trip reads Home -> ENNETSeeKLINIK),
-#   straight-line and path distance, and the mode from the stream's own classification.
-#   `place` would be wrong here: the centroid of a 24km drive is a field beside the motorway.
-# vehicle: which corroborating signals landed inside the span, so "was this my own car?" is a
-#   property of the journey rather than a separate event. Absent when nothing corroborated —
-#   the peripherals may simply have been off, so absence asserts nothing (see inference.event).
-capabilities: [interval, journey, vehicle]
+# ADR 0011 phase 2: trip is a DETECTOR — the semantic capabilities (journey, vehicle, support)
+# live on the `journey` event that fuses this claim with car_trip's. Two things deliberately
+# stay, both measured rather than assumed:
+#   - interval: the claim's own extent. The dashboard's supersession comparison (one drive,
+#     one capsule) and every pre-`journey` day of history (forward-only migration) need a span
+#     to read, and a span is a fact about the detection, not a judgment about the journey.
+#   - the corroboration marks above: they ride in this claim's EVIDENCE (never its capabilities)
+#     up to the fusion, where they were the only car evidence on 5 of 38 replayed journeys —
+#     the sessions that never paired. Shedding them would regress `vehicle` on exactly the #46
+#     cases the gap tolerance recovered.
+capabilities: [interval]

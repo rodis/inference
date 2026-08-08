@@ -4,9 +4,11 @@ import type { AwareEvent } from "./types";
 
 export const VERBS: Record<string, string> = {
   car_trip: "Car trip", got_into_the_car: "Got into the car", got_out_the_car: "Got out of the car",
-  // A `trip` titles itself by its MODE (see labelOf / MODE_NOUN); this is the fallback for a
-  // journey where no fix claimed one.
+  // A journey titles itself by its MODE (see labelOf / MODE_NOUN); this is the fallback for
+  // one where no fix claimed a mode — including every session-only `journey`, whose evidence
+  // is the car's boundaries rather than located fixes.
   trip: "Trip",
+  journey: "Trip",
   // Fallback only: a `stay` that matched a known place is labelled with the place itself
   // (see labelOf), because "Konditorei von Rotz Baar" says more than "Stay" ever will.
   stay: "Stay",
@@ -33,12 +35,13 @@ export const CAT: Record<string, { c: string; Icon: LucideIcon }> = {
   // coffee-shop capsule in the parallel-lanes design sketch, which is what a stay turned out
   // to be in practice — most of them are a café.
   stay: { c: "#b4732f", Icon: MapPin },
-  // Same blue as `car_trip`, on purpose: a journey is a journey, and on any day since the
-  // Overland lane landed the `trip` is the one drawn (see SUPERSEDED_BY), so a drive must not
-  // change colour depending on which event happened to express it. The icon carries the
-  // difference — `Route` for a journey known from motion, `Car` for one known from the car's
-  // own signals — which is the distinction that actually matters when both appear on one day.
+  // Same blue as `car_trip`, on purpose: a journey is a journey, and a drive must not change
+  // colour depending on which event happened to express it (on a current day `journey` is the
+  // one drawn, on historical days `trip` or `car_trip` — see SUPERSEDED_BY). The icon carries
+  // the difference — `Route` for a journey known from motion, `Car` for one known from the
+  // car's own signals — which is the distinction that actually matters across eras.
   trip: { c: "#3d6cf7", Icon: Route },
+  journey: { c: "#3d6cf7", Icon: Route },
 };
 
 /** Readable ink for something drawn ON a category fill (a capsule icon, a lineage tile).
@@ -215,30 +218,28 @@ export const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 // `interval` correct in Neon on all 20 events and still drew as a disc next to
 // `credit_card_payment`. If you add a definition with `capabilities: [interval, …]`, add it
 // here in the same change.
-export const SPAN_EVENTS = new Set<string>(["car_trip", "trip", "stay"]);
+export const SPAN_EVENTS = new Set<string>(["car_trip", "trip", "stay", "journey"]);
 
-/** Events in ADR 0011's parallel-run: derived and persisted for validation, deliberately not
- *  drawn yet. `journey` restates every `trip` (plus the session-only fallback), so drawing it
- *  now would double every drive — and as a point-disc at that, since it is not in SPAN_EVENTS.
- *  Phase 2 flips this: `journey` joins SPAN_EVENTS, `trip`/`car_trip` fold under SUPERSEDED_BY,
- *  and this set empties. A hard drop like the levels-board park, not a reveal-0 fade. */
-export const PARALLEL_RUN_HIDDEN = new Set<string>(["journey"]);
+/** Events in a parallel-run (ADR 0011's pattern): derived and persisted for validation,
+ *  deliberately not drawn. Empty since phase 2 promoted `journey` to the drawn event; the
+ *  mechanism stays for the next parallel-run. A hard drop like the levels-board park, not a
+ *  reveal-0 fade. */
+export const PARALLEL_RUN_HIDDEN = new Set<string>([]);
 export const intervalOf = (e: AwareEvent) => e.message.interval ?? null;
 
 /** Spans that another span on the same day re-expresses more completely — mapped
- *  `redundant -> replacement`, by NAME, deliberately.
+ *  `redundant -> replacements` (first present replacement wins), by NAME, deliberately.
  *
- *  `trip` and `car_trip` describe the same drive whenever it happened in your own car
- *  (ADR 0010): `trip` derives the span from motion and carries `journey` (labelled origin and
- *  destination, distance, mode) plus `vehicle` (which car boundaries corroborated it), while
- *  `car_trip` carries a bare interval derived by *pairing* those boundaries. Drawing both puts
- *  two capsules on one drive, which reads as a duplicate rather than as two views of it.
+ *  Since ADR 0011 phase 2, `journey` is THE drawn event for going somewhere: the fused,
+ *  enriched claim (labelled endpoints, mode, vehicle, support). `trip` and `car_trip` are its
+ *  detectors, so wherever a `journey` covers the same drive both fold underneath it. Drawing
+ *  two puts two capsules on one drive, which reads as a duplicate rather than as two views.
  *
- *  **Preference, not deletion.** `car_trip` still renders on days `trip` cannot see — it needs
- *  >= 4 moving fixes, so every drive before the Overland lane landed (2026-07-25) has a
- *  `car_trip` and no `trip`. Suppressing the type outright would blank those days; suppressing
- *  it only where a `trip` actually covers the same drive keeps the history intact. Whether
- *  `car_trip` retires at all is issue #42, and this deliberately does not prejudge it.
+ *  **Preference, not deletion — and the replacement LISTS are the history story.** Migration
+ *  was forward-only, so three eras coexist: days since phase 2 have `journey` (detectors fold
+ *  under it); days between the Overland lane (2026-07-25) and phase 2 have `trip` + `car_trip`
+ *  but no `journey` (car_trip folds under trip, exactly the pre-0011 rule); days before that
+ *  have only `car_trip`, which then draws. Suppressing types outright would blank whole eras.
  *
  *  **Keyed on name, unlike `placeUnknown` and `isEverydayPlace` above.** Those keep to
  *  capabilities so the next place-carrying event inherits the treatment for free. There is no
@@ -247,7 +248,10 @@ export const intervalOf = (e: AwareEvent) => e.message.interval ?? null;
  *  `journey`" would also swallow the stay the drive departed from, which merely *overlaps* it
  *  at the boundary rather than restating it. Supersession is an editorial claim that one event
  *  replaces another, so it is written down as one. */
-export const SUPERSEDED_BY = new Map<string, string>([["car_trip", "trip"]]);
+export const SUPERSEDED_BY = new Map<string, string[]>([
+  ["car_trip", ["journey", "trip"]],
+  ["trip", ["journey"]],
+]);
 
 /** Ids of spans suppressed because their replacement is present and covers the same episode.
  *
@@ -259,13 +263,15 @@ export const SUPERSEDED_BY = new Map<string, string>([["car_trip", "trip"]]);
 export function supersededIds(events: AwareEvent[]): Set<string> {
   const out = new Set<string>();
   for (const e of events) {
-    const replacement = SUPERSEDED_BY.get(e.name);
+    const replacements = SUPERSEDED_BY.get(e.name);
     const iv = intervalOf(e);
-    if (!replacement || !iv) continue;
-    for (const r of events) {
-      if (r.name !== replacement) continue;
-      const rv = intervalOf(r);
-      if (rv && iv.started_at <= rv.ended_at && iv.ended_at >= rv.started_at) { out.add(e.id); break; }
+    if (!replacements || !iv) continue;
+    outer: for (const replacement of replacements) {
+      for (const r of events) {
+        if (r.name !== replacement) continue;
+        const rv = intervalOf(r);
+        if (rv && iv.started_at <= rv.ended_at && iv.ended_at >= rv.started_at) { out.add(e.id); break outer; }
+      }
     }
   }
   return out;

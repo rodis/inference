@@ -162,10 +162,17 @@ export default function TimelineDashboard() {
 
   const zoomStep = (d: number) => applyAltitude(Math.round(altitudeRef.current) + d, window.innerHeight / 2);
 
-  // High-level daily indicators for the selected day (not debug counts). Time in the car is
-  // the sum of the day's car_trip durations; spend is the sum of the day's card payments.
+  // High-level daily indicators for the selected day (not debug counts). Time driving sums
+  // the DRAWN drive capsules — dayAll has already folded superseded restatements (a trip or
+  // car_trip under its journey), so each drive counts once whichever era's event expresses it.
+  // Counting only car_trip (the previous rule) read 0 on any day the supersession replaced it.
+  // A journey that knows it wasn't a drive (mode says walking/cycling) is excluded; a bare
+  // interval with no mode claim (car_trip, session-only journeys) counts as driving.
   const daily = useMemo(() => {
-    const driveSec = dayAll.reduce((s, e) => (e.name === "car_trip" ? s + (e.message.interval?.duration_seconds ?? 0) : s), 0);
+    const driveNames = new Set(["journey", "trip", "car_trip"]);
+    const driveSec = dayAll.reduce((s, e) => (
+      driveNames.has(e.name) && (e.message.journey?.mode ?? "driving") === "driving"
+        ? s + (e.message.interval?.duration_seconds ?? 0) : s), 0);
     const spent = dayAll.reduce((s, e) => (e.name === "credit_card_payment" ? s + (Number(e.message.amount) || 0) : s), 0);
     return { driveSec, spent };
   }, [dayAll]);

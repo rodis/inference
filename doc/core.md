@@ -486,7 +486,8 @@ flowchart LR
     gout["got_out_the_car<br/><i>session_gated_window</i>"]
     trip["car_trip<br/><i>validated_session_window</i><br/>interval"]
     stay["stay<br/><i>stay_window</i><br/>interval + place"]
-    gtrip["trip<br/><i>trip_window</i><br/>interval + journey + vehicle"]
+    gtrip["trip<br/><i>trip_window</i><br/>interval"]
+    jny["journey<br/><i>claim_fusion</i><br/>interval + journey + vehicle + support"]
 
     cp --> gin
     lock --> gin
@@ -505,11 +506,16 @@ flowchart LR
     gin -.->|"CORROBORATION<br/>evidence only, never a boundary"| gtrip
     gout -.->|"CORROBORATION"| gtrip
 
+    gtrip -->|"PRIMARY<br/>its evidence defines the journey"| jny
+    trip -->|"SECONDARY<br/>corroborates, or emits alone<br/>after an outage"| jny
+    ping -.->|"tick + geometry VETO<br/>on the fallback"| jny
+
     style gin fill:#1e293b,stroke:#60a5fa,color:#dbeafe
     style gout fill:#1e293b,stroke:#60a5fa,color:#dbeafe
     style trip fill:#0f2a1d,stroke:#34d399,color:#d1fae5
     style stay fill:#0f2a1d,stroke:#34d399,color:#d1fae5
     style gtrip fill:#0f2a1d,stroke:#34d399,color:#d1fae5
+    style jny fill:#2a230f,stroke:#eab308,color:#fef9c3
 ```
 
 **The wireless-charger signals are gone** (2026-08-02, issue #39). `device_connected_to_power` /
@@ -521,11 +527,15 @@ signals could carry. Measured before landing (12-day post-BMW-door replay): 2 of
 `vehicle`), junk unchanged at 0, and mean `car_trip` end error improved −55s → −14s because the
 mid-drive charger unplug was the main early-close path.
 
-**`trip` and `car_trip` are not rivals.** `trip` is the generic journey, derived from motion in
-`location_ping` alone, so it sees a borrowed car, a passenger seat, a train or a walk; `car_trip` is
-the car-*evidenced* specialisation, and the two overlap wherever the drive was in your own car. The
-graph shows why: `car_trip` sits behind two derived detectors that only exist because your car's
-peripherals talk to your phone, while `trip` hangs directly off the raw stream. See ADR 0010.
+**`trip` and `car_trip` are not rivals — they are detectors under one inference (ADR 0011).**
+`trip` is the geometry claim, derived from motion in `location_ping` alone, so it sees a borrowed
+car, a passenger seat, a train or a walk; `car_trip` is the car-session claim, prompt and
+Overland-independent. The graph shows why neither subsumes the other: `car_trip` sits behind two
+derived detectors that only exist because your car's peripherals talk to your phone, while `trip`
+hangs directly off the raw stream. **`journey`** — the one event consumers see — is derived from
+their *union* by `claim_fusion` and alone carries the semantic capabilities; the detectors keep
+only `interval` (their claim's own extent, which the dashboard's supersession comparison and the
+pre-`journey` history both need). See ADR 0010 for the detectors, ADR 0011 for the fusion.
 
 The dotted edges into `trip` are the *same* two detectors in a different role. `car_trip` consumes
 them as **boundaries** — it pairs them, so their direction has to be right. `trip` consumes them as
@@ -1077,6 +1087,9 @@ flowchart TB
     subgraph geo["Geometry — read the location stream"]
         stw["stay_window<br/>CLUSTER at departure"]
         tw["trip_window<br/>MOVEMENT between two settled fixes"]
+    end
+    subgraph fuse["Fusion — one event over the detectors (ADR 0011)"]
+        cf["claim_fusion<br/>UNION of two claims"]
     end
 ```
 

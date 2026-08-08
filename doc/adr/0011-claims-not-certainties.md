@@ -1,8 +1,20 @@
 # ADR 0011 — Claims, not certainties: detectors detect, one enriched journey carries graded support
 
-Status: **Accepted — phase 1 (parallel-run) implemented 2026-08-08; phase 2 (strip the
-detectors' capabilities, switch the dashboard) pending live validation.**
+Status: **Accepted — implemented 2026-08-08 (both phases).**
 Date: 2026-08-08
+
+> **Phase 2 outcome** (cutover, same day — on replay evidence, ahead of the planned week of live
+> validation, at the user's call): `journey` is the drawn event (`SPAN_EVENTS` + era-aware
+> supersession: detectors fold under a covering `journey`; on pre-phase-2 days `car_trip` still
+> folds under `trip`; pre-Overland days draw `car_trip` — forward-only history makes all three
+> eras real). Two deviations from this ADR's original wording, both measured rather than assumed:
+> **detectors keep `interval`** (supersession compares spans, and interval-less new `trip`s would
+> fall to the dashboard's moment lane as discs; a span is the claim's own extent, not a semantic
+> judgment) and **`trip` keeps its corroboration marks** (evidence, never capabilities — they were
+> the only car evidence on 5 of 38 replayed journeys, the sessions that never paired; shedding
+> them would regress `vehicle` on exactly the #46 cases the gap tolerance recovered). What was
+> shed: `journey` + `vehicle` off `trip` — the two-meanings risk lived in the semantic
+> capabilities, not in the span.
 
 > **Phase 1 outcome** (25-day replay, `scripts/vehicle_eval.py`): 42 `journey`s = 38 `trip`s 1:1
 > plus 4 session-only (all in the pre-25-Jul sparse-sampling era, 3 of 4 CarPlay-corroborated) —
