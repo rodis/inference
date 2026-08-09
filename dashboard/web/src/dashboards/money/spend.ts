@@ -13,8 +13,10 @@ export interface SpendReport {
   merchants: { label: string; placed: boolean; count: number; total: number }[];
 }
 
-/** The shared period control maps to trailing whole-day windows — honest and picker-free. */
-export const SCOPE_DAYS: Partial<Record<Scope, number>> = { week: 7, month: 30 };
+/** The shared period control maps to trailing whole-day windows — honest and picker-free.
+ *  `day` isn't offered on the board (its chart needs a run of days) but the HomeCard uses
+ *  it: days=1 is today, and the previous window the delta compares against is yesterday. */
+export const SCOPE_DAYS: Partial<Record<Scope, number>> = { day: 1, week: 7, month: 30 };
 
 export const spendUrl = (userId: string, scope: Scope): string | null => {
   const days = SCOPE_DAYS[scope] ?? 7;
