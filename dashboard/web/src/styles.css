@@ -535,6 +535,19 @@ footer b { color: var(--ink-2); font-weight: 600; }
 .vt-now .nd { justify-self: center; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .vt-now .nl { font-family: var(--mono); font-size: 10px; color: var(--accent); }
 
+/* the horizontal day strip — the v1 exploration, kept beside the spine on purpose */
+.hstrip { margin-bottom: 14px; }
+.hstrip-track { position: relative; height: 34px; background: var(--lane-fill); border: 1px solid var(--lane-edge); border-radius: 10px; margin-top: 12px; }
+.hstrip-span { position: absolute; top: 5px; bottom: 5px; border-radius: 7px; background: var(--cat); min-width: 3px; }
+.hstrip-span.jour { top: 9px; bottom: 9px; }
+.hstrip-span.hollow { background: transparent; border: 2px dotted var(--cat); }
+.hstrip-now { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--accent); border-radius: 2px; }
+.hstrip-now::after { content: "now"; position: absolute; top: -15px; left: -12px; font-family: var(--mono); font-size: 8.5px; color: var(--accent); }
+.hstrip-labels { position: relative; height: 15px; margin-top: 5px; }
+.hstrip-label { position: absolute; font-family: var(--mono); font-size: 9.5px; color: var(--muted); white-space: nowrap; }
+.hstrip-hours { position: relative; height: 13px; margin-top: 6px; font-family: var(--mono); font-size: 9px; color: var(--muted-2); }
+.hstrip-hours span { position: absolute; transform: translateX(-50%); }
+
 /* the Last-journey card's route line */
 .hc-route { display: flex; align-items: center; gap: 10px; margin-top: 12px; min-width: 0; }
 .hc-dot { width: 11px; height: 11px; border-radius: 50%; flex: none; background: var(--muted-2); }

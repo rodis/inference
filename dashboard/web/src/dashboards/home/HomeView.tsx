@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAware } from "../../app/useAware";
 import { MODULES } from "../../app/registry";
+import TodayStrip from "./TodayStrip";
 import type { AwareEvent } from "../../types";
 import {
   catOf, dayKey, endOf, fmtTime, humanDur, iconOf, isEverydayPlace, isSpan, labelOf,
@@ -58,6 +59,8 @@ export default function HomeView() {
           </h1>
         </div>
       )}
+
+      <TodayStrip events={spine} isToday={isToday} />
 
       <div className="hm-cols">
         <section className="panel hm-spine">
