@@ -60,7 +60,7 @@ export default function HomeView() {
         </div>
       )}
 
-      <TodayStrip events={spine} isToday={isToday} />
+      <TodayStrip events={spine} isToday={isToday} onOpen={openDay} />
 
       <div className="hm-cols">
         <section className="panel hm-spine">

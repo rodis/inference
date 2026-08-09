@@ -1,16 +1,25 @@
 import type { AwareEvent } from "../../types";
-import { catOf, endOf, fmtTime, humanDur, labelOf, placeUnknown, startOf } from "../../view";
+import { catOf, endOf, fmtTime, humanDur, iconOf, inkOn, labelOf, placeUnknown, startOf } from "../../view";
 
-/** The horizontal rendering of the day — the v1 sketch's strip, kept alongside the
- *  vertical spine as a deliberate A/B on real data. One track, spans positioned by time
- *  of day: stays filled in their category colour (hollow when unnamed), journeys thin and
- *  blue, dead time as bare track. Labels draw only for spans wide enough to carry them;
- *  every span has the full facts in its tooltip.
+/** How wide (in % of the window) a journey must be to render as a capsule rather than a
+ *  disc, and a capsule must be to carry text rather than its icon alone. The same instinct
+ *  as the day board's CAP_MIN floor: below the threshold the *form* changes instead of the
+ *  content squeezing. */
+const JOURNEY_CAPSULE_MIN = 4.5;
+const CAPSULE_TEXT_MIN = 7;
+
+/** The horizontal rendering of the day — the day board's own grammar rotated 90° (variant
+ *  B of the style sheet): stays as shadowed capsules with icon + name + duration inside,
+ *  journeys as the moments lane's hollow discs riding a dotted connector — graduating to a
+ *  blue capsule when the drive is long enough to be one — and dead time as the connector
+ *  itself. Hollow capsule = unnamed place, as everywhere.
  *
- *  The window is the data's, not a fixed 08–22: from the first span's hour to the last
- *  end (or now, when the day is today), padded to whole hours, floored to 8h so a
- *  one-errand day doesn't stretch a 40-minute stay across the page. */
-export default function TodayStrip({ events, isToday }: { events: AwareEvent[]; isToday: boolean }) {
+ *  The window is the data's own: first span to last end (or now, when the day is today),
+ *  padded to whole hours, floored to 8h so a one-errand day doesn't stretch a 40-minute
+ *  stay across the page. */
+export default function TodayStrip({ events, isToday, onOpen }: {
+  events: AwareEvent[]; isToday: boolean; onOpen: () => void;
+}) {
   if (events.length === 0) return null;
 
   const now = Date.now() / 1000;
@@ -21,48 +30,65 @@ export default function TodayStrip({ events, isToday }: { events: AwareEvent[]; 
   const span = w1 - w0;
   const pct = (t: number) => ((Math.min(Math.max(t, w0), w1) - w0) / span) * 100;
 
-  // Hour ticks: aim for ~6 labels whatever the window covers.
   const stepH = Math.max(1, Math.round(span / HOUR / 6));
   const ticks: number[] = [];
   for (let t = w0; t <= w1; t += stepH * HOUR) ticks.push(t);
 
+  const discs = events.filter((e) => !e.message.place && pct(endOf(e)) - pct(startOf(e)) < JOURNEY_CAPSULE_MIN);
+
   return (
     <section className="panel hstrip">
       <h3 className="hc-head">Today, across</h3>
-      <div className="psub">the same day as the spine, horizontal — an exploration, not a replacement</div>
-      <div className="hstrip-track">
+      <div className="psub">the same day as the spine, horizontal — the board's capsules and discs, rotated</div>
+      <div className="hstrip-row">
+        <div className="hstrip-link" aria-hidden="true" />
         {events.map((e) => {
           const s = startOf(e), en = endOf(e);
-          const cat = catOf(e.name).c;
+          const left = pct(s), width = pct(en) - pct(s);
           const stay = !!e.message.place;
+          const cat = catOf(e.name).c;
+          const Icon = iconOf(e);
+          const tip = `${labelOf(e)} · ${fmtTime(new Date(s * 1000))}–${fmtTime(new Date(en * 1000))} · ${humanDur(en - s)}`;
+
+          // A short journey is a moment-weight object: a hollow disc at its midpoint.
+          if (!stay && width < JOURNEY_CAPSULE_MIN) {
+            return (
+              <button key={e.id} type="button" className="hstrip-disc"
+                style={{ left: `${left + width / 2}%`, ["--cat" as string]: cat }}
+                title={tip} onClick={onOpen}>
+                <Icon size={12} strokeWidth={2.5} />
+              </button>
+            );
+          }
+
           const hollow = placeUnknown(e);
+          const withText = width >= CAPSULE_TEXT_MIN;
           return (
-            <div
-              key={e.id}
-              className={"hstrip-span" + (stay ? " stay" : " jour") + (hollow ? " hollow" : "")}
+            <button key={e.id} type="button"
+              className={"hstrip-cap" + (hollow ? " hollow" : "") + (withText ? "" : " iconly")}
               style={{
-                left: `${pct(s)}%`,
-                width: `${Math.max(pct(en) - pct(s), 0.6)}%`,
+                left: `${left}%`, width: `${width}%`,
                 ["--cat" as string]: cat,
+                color: hollow ? cat : inkOn(cat),
               }}
-              title={`${labelOf(e)} · ${fmtTime(new Date(s * 1000))}–${fmtTime(new Date(en * 1000))} · ${humanDur(en - s)}`}
-            />
+              title={tip} onClick={onOpen}>
+              <Icon size={13} strokeWidth={2.4} />
+              {withText && stay && <span className="nm">{labelOf(e)}</span>}
+              {withText && <span className="du">{humanDur(en - s)}</span>}
+            </button>
           );
         })}
         {isToday && <div className="hstrip-now" style={{ left: `${pct(now)}%` }} aria-hidden="true" />}
       </div>
-      <div className="hstrip-labels">
-        {events.map((e) => {
-          const s = startOf(e), en = endOf(e);
-          const wide = pct(en) - pct(s) >= 8; // narrower spans keep their tooltip only
-          if (!wide) return null;
-          return (
-            <span key={e.id} className="hstrip-label" style={{ left: `${Math.min(pct(s), 86)}%` }}>
-              {labelOf(e)} · {humanDur(en - s)}
+      {discs.length > 0 && (
+        <div className="hstrip-sub" aria-hidden="true">
+          {discs.map((e) => (
+            <span key={e.id} style={{ left: `${pct(startOf(e)) + (pct(endOf(e)) - pct(startOf(e))) / 2}%` }}>
+              {fmtTime(new Date(startOf(e) * 1000))}
             </span>
-          );
-        })}
-      </div>
+          ))}
+        </div>
+      )}
       <div className="hstrip-hours" aria-hidden="true">
         {ticks.map((t) => (
           <span key={t} style={{ left: `${pct(t)}%` }}>
