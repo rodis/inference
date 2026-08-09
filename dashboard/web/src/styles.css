@@ -535,19 +535,19 @@ footer b { color: var(--ink-2); font-weight: 600; }
 .vt-now .nd { justify-self: center; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .vt-now .nl { font-family: var(--mono); font-size: 10px; color: var(--accent); }
 
-/* the horizontal day strip — the day board's capsule/disc grammar rotated 90° (style
-   sheet variant B). Stays are capsules, short journeys are moment-weight discs on the
-   dotted connector, long journeys graduate to capsules, dead time IS the connector. */
+/* the horizontal day strip — the vertical spine's exact objects rotated 90°: filled
+   capsules in the category colour for everything, journeys included (a short drive is a
+   small blue capsule, never a different shape), hollow = unnamed, dead time IS the dotted
+   connector. min-width floors a narrow capsule to icon width — the CAP_MIN trade. */
 .hstrip { margin-bottom: 14px; }
 .hstrip-row { position: relative; height: 44px; margin-top: 14px; }
 .hstrip-link { position: absolute; top: 50%; left: 1%; right: 1%; border-top: 2px dotted var(--rail); }
-.hstrip-cap { position: absolute; top: 4px; bottom: 4px; border: 0; border-radius: 18px; background: var(--cat); display: flex; align-items: center; gap: 7px; padding: 0 11px; overflow: hidden; cursor: pointer; z-index: 1; box-shadow: 0 3px 8px rgba(24,28,40,0.2); font: inherit; }
+.hstrip-cap { position: absolute; top: 4px; bottom: 4px; border: 0; border-radius: 18px; background: var(--cat); min-width: 30px; display: flex; align-items: center; gap: 7px; padding: 0 11px; overflow: hidden; cursor: pointer; z-index: 1; box-shadow: 0 3px 8px rgba(24,28,40,0.2); font: inherit; }
 .hstrip-cap.iconly { padding: 0; justify-content: center; }
 .hstrip-cap.hollow { background: transparent; border: 2px dotted var(--cat); box-shadow: none; }
 .hstrip-cap .nm { font-family: var(--rounded); font-size: 12.5px; font-weight: 650; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hstrip-cap .du { font-family: var(--mono); font-size: 9.5px; opacity: 0.85; white-space: nowrap; }
-.hstrip-cap:focus-visible, .hstrip-disc:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.hstrip-disc { position: absolute; top: 50%; transform: translate(-50%, -50%); width: 26px; height: 26px; border-radius: 50%; background: var(--card); border: 2px solid var(--cat); color: var(--cat); display: flex; align-items: center; justify-content: center; cursor: pointer; z-index: 2; box-shadow: var(--shadow-sm); }
+.hstrip-cap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .hstrip-now { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--accent); border-radius: 2px; z-index: 3; }
 .hstrip-now::after { content: "now"; position: absolute; top: -14px; left: -12px; font-family: var(--mono); font-size: 8.5px; color: var(--accent); }
 .hstrip-sub { position: relative; height: 13px; margin-top: 4px; }

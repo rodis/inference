@@ -1,18 +1,17 @@
 import type { AwareEvent } from "../../types";
 import { catOf, endOf, fmtTime, humanDur, iconOf, inkOn, labelOf, placeUnknown, startOf } from "../../view";
 
-/** How wide (in % of the window) a journey must be to render as a capsule rather than a
- *  disc, and a capsule must be to carry text rather than its icon alone. The same instinct
- *  as the day board's CAP_MIN floor: below the threshold the *form* changes instead of the
- *  content squeezing. */
-const JOURNEY_CAPSULE_MIN = 4.5;
+/** How wide (in % of the window) a capsule must be to carry text rather than its icon
+ *  alone. Below it the form simplifies instead of the content squeezing — the day board's
+ *  CAP_MIN instinct. */
 const CAPSULE_TEXT_MIN = 7;
 
-/** The horizontal rendering of the day — the day board's own grammar rotated 90° (variant
- *  B of the style sheet): stays as shadowed capsules with icon + name + duration inside,
- *  journeys as the moments lane's hollow discs riding a dotted connector — graduating to a
- *  blue capsule when the drive is long enough to be one — and dead time as the connector
- *  itself. Hollow capsule = unnamed place, as everywhere.
+/** The horizontal rendering of the day — the vertical spine's exact objects rotated 90°:
+ *  every event is a filled capsule in its category colour (hollow when the place is
+ *  unnamed), journeys included — a short drive is a small blue capsule with its time
+ *  beneath, never a different shape. Dead time is the dotted connector. A narrow capsule
+ *  floors to icon width (min-width), trading a few px of proportion for legibility, the
+ *  same trade the board's CAP_MIN makes vertically.
  *
  *  The window is the data's own: first span to last end (or now, when the day is today),
  *  padded to whole hours, floored to 8h so a one-errand day doesn't stretch a 40-minute
@@ -34,12 +33,12 @@ export default function TodayStrip({ events, isToday, onOpen }: {
   const ticks: number[] = [];
   for (let t = w0; t <= w1; t += stepH * HOUR) ticks.push(t);
 
-  const discs = events.filter((e) => !e.message.place && pct(endOf(e)) - pct(startOf(e)) < JOURNEY_CAPSULE_MIN);
+  const narrow = events.filter((e) => pct(endOf(e)) - pct(startOf(e)) < CAPSULE_TEXT_MIN);
 
   return (
     <section className="panel hstrip">
       <h3 className="hc-head">Today, across</h3>
-      <div className="psub">the same day as the spine, horizontal — the board's capsules and discs, rotated</div>
+      <div className="psub">the same day as the spine, horizontal — the same capsules, rotated</div>
       <div className="hstrip-row">
         <div className="hstrip-link" aria-hidden="true" />
         {events.map((e) => {
@@ -49,18 +48,6 @@ export default function TodayStrip({ events, isToday, onOpen }: {
           const cat = catOf(e.name).c;
           const Icon = iconOf(e);
           const tip = `${labelOf(e)} · ${fmtTime(new Date(s * 1000))}–${fmtTime(new Date(en * 1000))} · ${humanDur(en - s)}`;
-
-          // A short journey is a moment-weight object: a hollow disc at its midpoint.
-          if (!stay && width < JOURNEY_CAPSULE_MIN) {
-            return (
-              <button key={e.id} type="button" className="hstrip-disc"
-                style={{ left: `${left + width / 2}%`, ["--cat" as string]: cat }}
-                title={tip} onClick={onOpen}>
-                <Icon size={12} strokeWidth={2.5} />
-              </button>
-            );
-          }
-
           const hollow = placeUnknown(e);
           const withText = width >= CAPSULE_TEXT_MIN;
           return (
@@ -80,9 +67,9 @@ export default function TodayStrip({ events, isToday, onOpen }: {
         })}
         {isToday && <div className="hstrip-now" style={{ left: `${pct(now)}%` }} aria-hidden="true" />}
       </div>
-      {discs.length > 0 && (
+      {narrow.length > 0 && (
         <div className="hstrip-sub" aria-hidden="true">
-          {discs.map((e) => (
+          {narrow.map((e) => (
             <span key={e.id} style={{ left: `${pct(startOf(e)) + (pct(endOf(e)) - pct(startOf(e))) / 2}%` }}>
               {fmtTime(new Date(startOf(e) * 1000))}
             </span>
