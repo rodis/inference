@@ -127,6 +127,7 @@ suspended flow:
 | Re-runnable | Every run is a pure function of recorded events |
 | Debuggable | The process state *is* a query, not a runtime introspection |
 | Correctable | Delete a wrong event; the next run re-reconciles |
+| Voidable | Mark the cycle terminal and start a new one — no stage needs an amendment path |
 
 ### Every stage is `act` or `await`
 
@@ -222,6 +223,35 @@ small editor in the process's own dashboard module — making that module both t
 > but it does not: it is an `act` that reads whatever exists at the moment it fires, defaulting to
 > empty. The blocking is already carried by `approved`, and the final PDF landing in your inbox
 > before submission is the backstop if a total is wrong.
+
+### Correction is re-running, never amending
+
+**A cycle is never amended. It is voided and re-run.** If an expense surfaces after the PDF
+exists, or a figure turns out wrong, the answer is a fresh cycle — not a patch to the old one.
+
+The mechanism is one reserved event and one check:
+
+- **`cycle_voided` is terminal.** The reconciler skips any cycle carrying it, exactly as it skips a
+  completed one. Nothing else in the loop changes.
+- **The re-run is a new `cycle_key`**, so the voided cycle's events stay in Neon as history. This
+  supersedes rather than destroys, which is what append-only events are for and what
+  [invariant 19](../invariants.md) expects — a voided attempt is a fact about what happened, and
+  the second attempt is structurally identical to a first attempt.
+
+That last property is the entire argument, and it is worth stating as the general rule:
+
+> **Amendment adds a code path to every stage; voiding adds one check to the loop.**
+
+Amending means each stage needs an "unless superseded" clause, the total needs to know which
+extras are live, and the already-sent PDF and already-fired emails need reconciling against the new
+figures. Re-running has none of that, because the new cycle has never done anything.
+
+**Voiding is only available before `invoice_sent`.** Once the invoice has left for DreamHost the
+process is past its point of no return, and what is needed is a credit note — an *accounting*
+problem, not a process one. The tier does not model that and should not pretend to.
+
+One consequence to carry: **the invoice number must live on the cycle and be inherited by a
+re-run**, so voiding does not burn a number and leave a gap in the sequence.
 
 ### Semantic classification belongs in the reconciler, not in a capability deriver
 
@@ -357,6 +387,14 @@ tier up.
    silently. A Neon table plus an editor in the dashboard module is the target; the interim is a
    judgement call about how soon the module exists. Either way it is one `collect.extras`
    implementation, so the choice is reversible.
-9. **Should an extra line item be able to arrive late?** Today the window is "before you approve".
-   If an expense surfaces after the PDF is generated, the process has no way to amend — the honest
-   answer may be to void the cycle and re-run it rather than to model amendment.
+9. ~~**Should an extra line item be able to arrive late?**~~ **Resolved 2026-08-15: re-run, never
+   amend.** See *Correction is re-running, never amending* above.
+10. **What is the invoice number, actually?** `current_invoice_number_digits` is a hand-set Redis
+    key that reaches the email subject as `Invoice {n}`. For the surviving cycle it is `4`, while
+    the reference month is also `04` — so it is unclear whether it is a per-year sequence that
+    happens to track the month, or the month itself. This decides whether a voided cycle's re-run
+    reuses the number or takes the next one, and it is the one piece of state that cannot simply be
+    recomputed.
+11. **How is a void triggered?** It is an event like any other, so the candidates are a reply to
+    the approval mail (classified), a control in the dashboard module, or a one-line script. The
+    module is the natural home, but that makes voiding unavailable until the module exists.
