@@ -354,6 +354,48 @@ moment an email lands rather than on the next tick. That is a real pivot — dur
 execution is the paradigm this ADR deliberately declines — and should be taken only with evidence
 that daily is too slow.
 
+### Where it lives: a second package in this monorepo
+
+**Decided 2026-08-15.** The tier lives in this repo, as a package beside `inference` rather than
+inside it, with definitions at the root mirroring `events/`:
+
+```
+processes/*.yml          # definitions — the exact mirror of events/*.yml
+src/reconciler/
+  definition.py          # the ProcessDefinition schema (pydantic — already a dependency)
+  core.py                # PURE: definitions + recorded events → frontier → next action
+  actions/               # act implementations; all I/O lives here
+  flow.py                # the Prefect entry point — composition root
+```
+
+**Beside `inference`, not inside it**, because the ADR's boundary is that the reconciler *acts* and
+Aware *observes*. A package whose whole point is calling out — email, PDF services, an LLM — does
+not belong inside the package that must never do any of that. There is also little to share: the
+reconciler emits **raw** signals through the HTTP gateway like any other producer, so it does not
+use `inference.event`'s `InferredEvent` model at all.
+
+**`core.py` is pure, exactly as `inference.runtime.core` is.** The parallel is deliberate and load
+-bearing in three ways:
+
+- It is the file-layout expression of the constraint already stated above — *no Prefect-specific
+  structure beyond the entry point* — so swapping runners touches `flow.py` and nothing else.
+- It keeps the tier testable with **zero new dependencies**. CI installs only
+  `pytest ruff pydantic pyyaml` plus `pip install -e . --no-deps`, deliberately, so that a stray
+  transport import fails loudly rather than passing on an incidentally-installed package. A
+  reconciler core that imports `prefect` or `httpx` at module scope would either break that job or
+  force the guard to be weakened.
+- Deciding *what to do next* is pure logic over recorded events. Only *doing* it needs the world.
+
+Runner and integration dependencies therefore go in an **optional extra**
+(`[project.optional-dependencies] processes = [...]`), never in the base `dependencies` — the
+runtime image must not grow a Prefect tree for a component it does not run.
+
+> **Gotcha: do not add `workers/reconciler/`.** `publish-images.yml` auto-discovers every
+> `workers/<name>/Dockerfile`, builds `inference-<slug>` and expects to bump
+> `deploy/inference/kustomize/base/<slug>/values.yml`. The reconciler has no image and no
+> deployment — Prefect Managed runs it from source — so a `workers/` entry would build and publish
+> an image nobody runs, against a manifest that does not exist.
+
 ### Semantic classification belongs in the reconciler, not in a capability deriver
 
 Telling *submitted* from *processed* in email prose is real semantic work, and an LLM is the
@@ -478,9 +520,9 @@ tier up.
    first given.** Not flow count — a process is a YAML file, so the flow count stays at one. It
    earns its place as a managed cron with observability, secrets and a parameterised manual
    trigger.
-3. **Where the code lives.** Not `src/inference/` — that is the derivation core. Likely
-   `processes/*.yml` beside `events/*.yml`, with the runner under `workers/`. Or its own repo,
-   if the tier is genuinely independent.
+3. ~~**Where the code lives.**~~ **Resolved 2026-08-15: this monorepo, `src/reconciler/` beside
+   `inference`, definitions in `processes/*.yml`.** See *Where it lives* above — including why
+   there must be no `workers/reconciler/`.
 4. **Cycle keying vs. Aware's entity keying.** Aware keys state by `message.user_id`
    ([`core.Router.key_for`](../../src/inference/runtime/core.py)). A process cycle key is a
    different partitioning concept. If two cycles of the same process are ever open at once, how
