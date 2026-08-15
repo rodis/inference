@@ -105,13 +105,26 @@ for stage in definition.stages:
     if not all(d in events for d in stage.after):
         break                                # frontier not reached
     if stage.kind == "act":
-        emit(stage.name, ACTIONS[stage.action](ctx))
+        result = ACTIONS[stage.action](ctx)
     else:
-        found = classify_signal(stage.signal, since=events[stage.after[-1]].ts)
-        if not found:
+        result = classify_signal(stage.signal, since=events[stage.after[-1]].ts)
+        if not result:
             break                            # still waiting — exit, try tomorrow
-        emit(stage.name, found)
+    emit(stage.name, result)                 # POST to the ingest gateway
+    events[stage.name] = result              # advance the LOCAL view — see below
 ```
+
+**`events[stage.name] = result` is not bookkeeping.** Without it a run performs exactly one stage,
+because the next stage's `after` is checked against a view that has not moved — so a seven-stage
+process would take seven days, and the four `act` stages after `approved` (collect lines, total,
+render, send) would trickle out one per day instead of completing the moment approval lands.
+Advancing the local view lets a run walk the whole chain of ready stages and stop at the first
+genuine wait.
+
+It is also why the emit path's latency does not matter: a milestone reaches Neon through
+Vector and Kafka, which the same run would not see if it re-read. The local view is the run's
+truth; Neon is the *next* run's truth. Crash-safety is unaffected — a run that dies mid-chain has
+already emitted everything it completed, and the next run re-reads and carries on.
 
 This is the Argo CD pattern the deploy chain already uses: declare the desired end state, observe
 what is true, close the gap. **The "trigger the continuation" problem dissolves** — nobody
