@@ -19,10 +19,15 @@ opens:
   - {via: manual}                       # a bonus / ad-hoc invoice, on no cadence at all
 
 stages:
-  # May contribute nothing — a bonus invoice has no worked period.
+  # May contribute nothing — a bonus invoice carries no worked period, and nothing branches
+  # on that. The rate lives here rather than inside an expression, which is where the prior
+  # art kept it (an Edit Fields assignment reading `days_count * 8 * 96`).
   - name: computed_lines
     kind: act
     action: lines.worked_days
+    config:
+      day_rate: 768        # 96/h x 8h
+      hours_per_day: 8
 
   - name: approval_requested
     kind: act

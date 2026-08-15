@@ -74,6 +74,7 @@ class Stage(BaseModel):
     after: list[str] = []
     action: str | None = None   # `act` only — resolved against the action registry
     signal: dict = {}           # `await` only — opaque here; the finder parses it
+    config: dict = {}           # opaque here too; the ACTION parses its own, as engines do
 
     @model_validator(mode="after")
     def _kind_matches_payload(self):
