@@ -1,6 +1,7 @@
 # ADR 0012 — Processes are reconciled, not orchestrated
 
-Status: **Proposed — not implemented.**
+Status: **Accepted — core implemented 2026-08-15** (`processes/*.yml` schema +
+pure reconciliation core + tests). Actions and the Prefect entry point are next.
 Date: 2026-08-15
 
 > This ADR introduces a **process tier**: a sibling of the connector tier (ADR 0008), one
@@ -103,16 +104,25 @@ for stage in definition.stages:
     if stage.name in events:                 # already done
         continue
     if not all(d in events for d in stage.after):
-        break                                # frontier not reached
+        continue                             # a predecessor is unfinished — try a peer branch
     if stage.kind == "act":
         result = ACTIONS[stage.action](ctx)
     else:
-        result = classify_signal(stage.signal, since=events[stage.after[-1]].ts)
+        result = classify_signal(stage.signal, since=max(events[d].ts for d in stage.after))
         if not result:
-            break                            # still waiting — exit, try tomorrow
+            continue                         # still waiting — but a peer branch may be ready
     emit(stage.name, result)                 # POST to the ingest gateway
     events[stage.name] = result              # advance the LOCAL view — see below
 ```
+
+**`continue`, not `break`, on an unsatisfied stage.** Stopping the scan would quietly make
+`after` a chain: given `a → (b await, c act)`, a stalled `b` would also hold back `c`, which
+depends on nothing but `a`. Scanning on is what makes "parallel stages cost nothing" true
+rather than aspirational.
+
+**`max(...)`, not `after[-1]`.** In a DAG the list order carries no meaning, so an await must
+look from its *latest* predecessor; looking from an earlier branch's timestamp would
+re-examine evidence that predates the stage becoming ready.
 
 **`events[stage.name] = result` is not bookkeeping.** Without it a run performs exactly one stage,
 because the next stage's `after` is checked against a view that has not moved — so a seven-stage
@@ -156,8 +166,9 @@ chain and parallel stages cost nothing later.
 name: dreamhost_invoice
 cycle_key: "dh_invoice_{year}_{seq:03d}"      # seq is a per-YEAR sequence, not the month
 opens:
-  - {on: schedule, cron: "0 9 1 * *"}         # the regular monthly invoice
-  - {on: manual}                              # a bonus / ad-hoc invoice
+  # `via`, not `on` — YAML 1.1 resolves a bare `on` key to boolean true.
+  - {via: schedule, cron: "0 9 1 * *"}        # the regular monthly invoice
+  - {via: manual}                             # a bonus / ad-hoc invoice
 
 stages:
   - {name: computed_lines,     kind: act,   action: lines.worked_days}   # may produce ZERO lines
@@ -340,7 +351,7 @@ sufficient:
 |---|---|
 | Reliable daily trigger | A scheduler that actually fires on time |
 | Somewhere to run | Managed execution, zero infra |
-| Manual ad-hoc invoice | A deployment run with **parameters** — the `on: manual` genesis path |
+| Manual ad-hoc invoice | A deployment run with **parameters** — the `via: manual` genesis path |
 | Credentials | Secret blocks, so no second secret store |
 | "Did it stop running?" | Run history plus automations (10 on free tier) |
 | Debugging | The read-only MCP server |

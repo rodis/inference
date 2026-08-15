@@ -1,0 +1,80 @@
+# The monthly DreamHost invoice (ADR 0012) — the first process.
+#
+# An invoice is a SET OF LINES, not worked-days x day-rate with decorations: some carry no
+# worked days at all (a Christmas bonus is one manual line). So `computed_lines` may produce
+# ZERO lines and nothing branches on it — absence is graceful everywhere, or this file grows
+# conditionals (trip-wire 7).
+#
+# `cycle_key` numbers by a per-YEAR sequence rather than the month, because more than one
+# invoice can exist in a month. That also retires the padding mismatch that used to empty the
+# extras table silently (the live n8n table is `dh_invoice_4_2026`, the abandoned globals said
+# `dh_invoice_04_2026`).
+
+name: dreamhost_invoice
+cycle_key: "dh_invoice_{year}_{seq:03d}"
+
+opens:
+  # `via`, not `on` — YAML 1.1 resolves a bare `on` key to boolean true.
+  - {via: schedule, cron: "0 9 1 * *"}  # the regular monthly invoice
+  - {via: manual}                       # a bonus / ad-hoc invoice, on no cadence at all
+
+stages:
+  # May contribute nothing — a bonus invoice has no worked period.
+  - name: computed_lines
+    kind: act
+    action: lines.worked_days
+
+  - name: approval_requested
+    kind: act
+    after: [computed_lines]
+    action: notify.approval_request
+
+  # Its own stage, not bookkeeping: without a recorded `approval_requested` the reconciler
+  # re-sends this email every single day until answered.
+  - name: approved
+    kind: await
+    after: [approval_requested]
+    signal:
+      source: gmail
+      classify: "Does this reply approve the invoice figures?"
+
+  # AFTER `approved` on purpose. The approval wait is the window in which a human is
+  # actually looking at the numbers; the prior art read extras seconds after the run
+  # started, so the table had to be filled in before you had seen the draft.
+  - name: manual_lines
+    kind: act
+    after: [approved]
+    action: lines.manual
+
+  - name: total_computed
+    kind: act
+    after: [manual_lines]
+    action: compute.total
+
+  - name: invoice_generated
+    kind: act
+    after: [total_computed]
+    action: createmypdf.render
+
+  - name: invoice_sent
+    kind: act
+    after: [invoice_generated]
+    action: notify.invoice
+
+  - name: payment_submitted
+    kind: await
+    after: [invoice_sent]
+    signal:
+      source: gmail
+      from: accounting@dreamhost.com
+      classify: >-
+        Does this say the payment was SUBMITTED? Be careful to distinguish a submitted
+        payment from a merely processed one — only submitted counts.
+
+  - name: payment_confirmed
+    kind: await
+    after: [payment_submitted]
+    signal:
+      source: gmail
+      from: accounting@dreamhost.com
+      classify: "Does this confirm the payment actually cleared?"

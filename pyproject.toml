@@ -21,7 +21,11 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/inference"]
+# `reconciler` is the process tier (ADR 0012) — a package BESIDE `inference`, not inside it:
+# it acts (email, PDF, LLM), and `inference` must never do any of that. Its core is pure, so
+# it needs nothing beyond the deps above; the runner/integration deps live in the
+# `processes` extra so the runtime image never grows a Prefect tree for code it doesn't run.
+packages = ["src/inference", "src/reconciler"]
 
 [project.optional-dependencies]
 dev = [
