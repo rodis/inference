@@ -300,6 +300,60 @@ problem, not a process one. The tier does not model that and should not pretend 
 One consequence to carry: **the invoice number must live on the cycle and be inherited by a
 re-run**, so voiding does not burn a number and leave a gap in the sequence.
 
+### The runner: Prefect Cloud on a Managed work pool
+
+**Decided 2026-08-15.** The free tier includes **Managed Execution** — Prefect runs the code on its
+own infrastructure, with no worker, no cloud account and nothing on our cluster. Limits are 10
+compute-hours per workspace per month, 2 GB RAM and a 24-hour maximum run; a daily reconciler at
+~1 minute a run spends well under an hour a month, so the ceiling is roughly an order of magnitude
+above the need.
+
+This is the question that actually decided it, and it is worth asking of any managed offering: **a
+scheduler that still requires a self-hosted worker buys no infra reduction at all**, only an extra
+dependency. Prefect Managed passes; that is what makes external the cheaper answer here rather than
+merely the preferred one.
+
+Nothing about the reconciler needs to be inside our network — Neon, the LLM API, SMTP, createmypdf
+and the n8n API are all reachable over the public internet with credentials. Had any of them been
+cluster-local, this decision would have gone the other way.
+
+**A correction to the reasoning that opened this question.** The earlier framing was *"Prefect earns
+its place if you expect more flows."* More processes are expected — but in this design a process is
+a **YAML file**, not a flow, and one reconciler loops over all of them. The flow count stays at one
+(two, with cycle-opening). So flow count is the wrong reason. The right ones are narrower and
+sufficient:
+
+| Need | What Prefect gives |
+|---|---|
+| Reliable daily trigger | A scheduler that actually fires on time |
+| Somewhere to run | Managed execution, zero infra |
+| Manual ad-hoc invoice | A deployment run with **parameters** — the `on: manual` genesis path |
+| Credentials | Secret blocks, so no second secret store |
+| "Did it stop running?" | Run history plus automations (10 on free tier) |
+| Debugging | The read-only MCP server |
+
+That is a managed cron with observability, secrets and a parameterised manual trigger — which is
+precisely the list, and no more. Note what is *not* on it: task graphs, retries, caching,
+concurrency. **This ADR designs orchestration away, so an orchestration platform has little of its
+core left to do here** — which is a reason to use a small slice of Prefect deliberately, not a
+reason to avoid it.
+
+**Known risks.** Managed Execution is **beta** and its docs warn features may change without
+notice; it also pins you to Prefect's own image, so a heavy native dependency could become a
+problem (ours are light — the PDF render is an external API call, not a local library).
+
+If either bites, the fallback is **GitHub Actions** — already in this repo, already holding
+secrets, and `workflow_dispatch` gives the manual trigger a form for free. Its cron is genuinely
+unreliable (10–30 minute delays typical, multi-hour delays and dropped days reported through 2026),
+but **the reconciler is unusually tolerant of exactly that**: a missed run costs one day of latency
+and nothing else, because the next run recomputes everything from recorded events. That property is
+worth noting as a design dividend rather than a fallback detail.
+
+The escape hatch in the other direction is **Inngest**, if a process ever needs to advance the
+moment an email lands rather than on the next tick. That is a real pivot — durable event-driven
+execution is the paradigm this ADR deliberately declines — and should be taken only with evidence
+that daily is too slow.
+
 ### Semantic classification belongs in the reconciler, not in a capability deriver
 
 Telling *submitted* from *processed* in email prose is real semantic work, and an LLM is the
@@ -363,6 +417,11 @@ tier up.
   server](https://github.com/PrefectHQ/prefect-mcp-server) (beta) inspects deployments, runs and
   logs; it does not trigger. Useful for debugging a process conversationally, not for driving one.
   Actuation stays on the REST API.
+- **Negative — the tier depends on a beta feature of an external service.** Prefect Managed
+  Execution is beta and pins us to Prefect's image. Accepted because the fallback is cheap: the
+  reconciler is a plain Python function with no Prefect-specific structure, so moving it to GitHub
+  Actions or anything else is a change of *caller*, not of design. Keeping the reconciler free of
+  Prefect decorators beyond the entry point is therefore a deliberate constraint, not an accident.
 
 ## How we will know if this was wrong
 
@@ -412,13 +471,13 @@ tier up.
 
 ## Open questions
 
-1. **Execution environment.** Prefect Cloud's free tier gives 1 workspace, 2 users and 400 flow
-   runs/min — ample. Whether it includes managed execution is unconfirmed; if not, the reconciler
-   needs a worker on the existing K8s cluster. A `workers/reconciler/Dockerfile` would be
-   auto-discovered by `publish-images.yml` and cost no new CI wiring.
-2. **Is Prefect earning its place?** A daily idempotent loop is also just a CronJob on a cluster
-   that already runs everything else. Prefect buys run history, alerting and the MCP inspection
-   surface. Worth it if more flows follow; not obviously worth it for one.
+1. ~~**Execution environment.**~~ **Resolved 2026-08-15: Prefect Cloud on a Managed work pool** —
+   the free tier runs the code on Prefect's infrastructure, so nothing lands on our cluster. See
+   *The runner* above.
+2. ~~**Is Prefect earning its place?**~~ **Resolved 2026-08-15: yes, for a narrower reason than
+   first given.** Not flow count — a process is a YAML file, so the flow count stays at one. It
+   earns its place as a managed cron with observability, secrets and a parameterised manual
+   trigger.
 3. **Where the code lives.** Not `src/inference/` — that is the derivation core. Likely
    `processes/*.yml` beside `events/*.yml`, with the runner under `workers/`. Or its own repo,
    if the tier is genuinely independent.
