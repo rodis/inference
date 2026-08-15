@@ -141,18 +141,20 @@ chain and parallel stages cost nothing later.
 
 ```yaml
 name: dreamhost_invoice
-cycle_key: "dh_invoice_{year}_{month:02d}"
-schedule: "0 9 1 * *"
+cycle_key: "dh_invoice_{year}_{seq:03d}"      # seq is a per-YEAR sequence, not the month
+opens:
+  - {on: schedule, cron: "0 9 1 * *"}         # the regular monthly invoice
+  - {on: manual}                              # a bonus / ad-hoc invoice
 
 stages:
-  - {name: draft_computed,     kind: act,   action: compute.main_amount}
-  - {name: approval_requested, kind: act,   after: [draft_computed], action: notify.email}
+  - {name: computed_lines,     kind: act,   action: lines.worked_days}   # may produce ZERO lines
+  - {name: approval_requested, kind: act,   after: [computed_lines], action: notify.email}
   - name: approved
     kind: await
     after: [approval_requested]
     signal: {source: gmail, classify: "Does this reply approve the figures?"}
-  - {name: extras_collected,   kind: act,   after: [approved], action: collect.extras}
-  - {name: total_computed,     kind: act,   after: [extras_collected], action: compute.total}
+  - {name: manual_lines,       kind: act,   after: [approved], action: lines.manual}
+  - {name: total_computed,     kind: act,   after: [manual_lines], action: compute.total}
   - {name: invoice_generated,  kind: act,   after: [total_computed], action: createmypdf.render}
   - {name: invoice_sent,       kind: act,   after: [invoice_generated], action: notify.email}
   - name: payment_submitted
@@ -171,6 +173,45 @@ stages:
 `approval_requested` being its own `act` stage is load-bearing, not bookkeeping: without it the
 reconciler re-sends the approval email every single day until answered.
 
+### An invoice is a set of lines, and a cycle is opened by an event
+
+The tempting model — *worked days × day rate, plus the occasional extra* — is wrong, and its
+wrongness shows up in the invoice number. **Some invoices have no worked days at all**: a Christmas
+bonus is a single line with no period behind it. So more than one invoice can exist in a month, and
+the number cannot be the month. It is a **per-year sequence**.
+
+Two things follow, and both are generic rather than invoice-specific.
+
+**1. Every line-producing stage may produce zero lines.** An invoice is the sum of the lines its
+producers contribute, and `lines.worked_days` is one producer among several rather than the spine
+with decorations attached. A regular month: one computed line, zero-to-two manual ones. A Christmas
+bonus: zero computed, one manual. No stage becomes conditional, no `when:` guard enters the
+definition language — the stage always runs and sometimes contributes nothing, exactly as the
+extras table already behaves when it is absent.
+
+> **Absence is graceful everywhere, or the definition language grows conditionals.** This is the
+> same property that made a missing extras table harmless, promoted to a rule.
+
+It also dissolves a special case that the prior art carried: `invoice_reference_datetime_start/end`
+were treated as properties of the *invoice*, which is why a bonus invoice had nowhere to live. They
+are properties of the **worked-days line**. An invoice without that line simply has no period.
+
+**2. A cycle is opened by an event, not by a schedule.** The reconciler does not create cycles; it
+advances the ones that exist. A `cycle_opened` event is the genesis fact, and it carries the
+invoice number and whatever shape the cycle needs.
+
+The schedule is then just *one producer* of that event, which is why the definition has an `opens:`
+list rather than a `schedule:` field. The monthly invoice is opened on a cron; a bonus invoice is
+opened by hand, at a time nothing can predict. Had the schedule remained the definition of a cycle,
+manual invoices would have needed a parallel mechanism — a second entry point, a fake cron, or a
+per-process hack. Making genesis an event costs one reserved event name and buys ad-hoc cycles for
+every future process for free.
+
+**Invoice numbers are allocated at `cycle_opened`**, and a voided cycle's re-run **inherits** its
+number rather than taking the next one. The invoice was never sent, so DreamHost never saw the
+number, and reusing it keeps the sequence gap-free — which is the conservative choice for invoice
+records generally, and costs nothing if it turns out not to be required.
+
 ### The invoice is not computable — variable line items are the reason `approved` sits early
 
 An invoice is *usually* worked-days × day-rate, but some months carry an expense or a bonus: a
@@ -187,10 +228,16 @@ Everything else about it is a defect the new design must not inherit:
 
 - **The ordering is backwards.** Extras were read seconds after the flow started, so the table had
   to be populated *before* the run — before you had seen what the invoice would say. You want the
-  draft first, then to decide what to add to it. **This is why `extras_collected` comes after
+  draft first, then to decide what to add to it. **This is why `manual_lines` comes after
   `approved`**: the approval wait is exactly the window in which a human is looking at the numbers,
   and whatever they add during it is picked up when the gate closes. The contract the approval
   email must state: *add your lines, then approve.*
+
+  This ordering survives the bonus case, which is the one that could have broken it. A cycle with
+  no computed lines sends an approval mail showing nothing and asking for lines — which reads
+  oddly but is correct, because a manually-opened cycle exists precisely because a human decided
+  it should. Approval still means *these are all my lines*, and it is still the last gate before
+  anything is generated.
 - **Descriptions became keys.** `invoice_amount_extra_<description>` was written as a Redis key,
   so two rows both described "travel" silently overwrite — and since the total sums by the
   `invoice_amount*` prefix, the money just quietly goes missing. (`dotNotation: false` on the Set
@@ -332,6 +379,10 @@ tier up.
    ADR 0008's trip-wire 5, and it is the one that matters most.
 6. **Milestone events pollute the Aware timeline.** If process events need suppressing everywhere
    they are displayed, they may not belong on `raw_sensors` at all.
+7. **A `when:` guard appears in a definition.** Conditionals are the symptom that some stage's
+   absence is not being handled gracefully; the fix is almost always to let it produce nothing
+   rather than to skip it. The Christmas-bonus invoice was the case that would have justified one,
+   and it did not need it.
 
 ## Alternatives considered
 
@@ -378,8 +429,10 @@ tier up.
 5. **Should Aware derive a `process_cycle` event?** A `session_window` pairing the first and last
    milestone would give the whole cycle an `interval` capability for free — pleasingly symmetric
    with `car_trip`. But it is only worth doing if something consumes the span.
-6. **Who owns the `cycle_key` template?** `dh_invoice_{year}_{month:02d}` encodes a monthly
-   cadence in a string. A quarterly or event-triggered process needs something else.
+6. **Who owns the `cycle_key` template?** Partly answered by keying on a sequence rather than a
+   month — `dh_invoice_{year}_{seq:03d}` no longer encodes a cadence, and the padding mismatch that
+   silently emptied the extras table goes with it. What is still open is where the substituted
+   values come from for a process whose cycles are not numbered at all.
 7. **Backfill.** The current invoice history exists only as email. Whether past cycles are worth
    reconstructing as process events, or the tier simply starts empty, is unresolved.
 8. **Where extra line items live.** Keeping the n8n Data Table costs nothing and works today, but
@@ -389,12 +442,13 @@ tier up.
    implementation, so the choice is reversible.
 9. ~~**Should an extra line item be able to arrive late?**~~ **Resolved 2026-08-15: re-run, never
    amend.** See *Correction is re-running, never amending* above.
-10. **What is the invoice number, actually?** `current_invoice_number_digits` is a hand-set Redis
-    key that reaches the email subject as `Invoice {n}`. For the surviving cycle it is `4`, while
-    the reference month is also `04` — so it is unclear whether it is a per-year sequence that
-    happens to track the month, or the month itself. This decides whether a voided cycle's re-run
-    reuses the number or takes the next one, and it is the one piece of state that cannot simply be
-    recomputed.
+10. ~~**What is the invoice number, actually?**~~ **Resolved 2026-08-15: a per-year sequence.** It
+    coincided with the month only because every invoice so far happened to be a monthly one. A
+    re-run inherits its voided cycle's number. What remains open is the smaller mechanical
+    question: **where the sequence counter lives** now that Redis is gone. It is the one piece of
+    process state that cannot be recomputed from events — though `max(seq) + 1` over the year's
+    `cycle_opened` events is a candidate that keeps the "pure function of recorded events" property
+    intact, provided cycle opening is serialised.
 11. **How is a void triggered?** It is an event like any other, so the candidates are a reply to
     the approval mail (classified), a control in the dashboard module, or a one-line script. The
     module is the natural home, but that makes voiding unavailable until the module exists.
