@@ -396,6 +396,60 @@ runtime image must not grow a Prefect tree for a component it does not run.
 > deployment — Prefect Managed runs it from source — so a `workers/` entry would build and publish
 > an image nobody runs, against a manifest that does not exist.
 
+### Cycle identity is a body field; `user_id` stays the entity key
+
+**Decided 2026-08-15.** Milestone events carry `user_id` = the human, exactly like every other
+producer, and the cycle's identity rides in the body:
+
+```json
+{"name": "invoice_approved", "user_id": "<user>", "timestamp": 1755…,
+ "process": "dreamhost_invoice", "cycle_key": "dh_invoice_2026_004"}
+```
+
+**`user_id` must not carry the cycle.** `Router.key_for`'s own docstring makes the argument: it
+keys on `user_id` rather than `source_app` because anything else "would silently fragment one
+entity's state across two keys". A cycle key in that slot would do precisely that — every invoice
+becoming its own entity, and one user's events scattered across as many state buckets as they have
+ever had invoices.
+
+**The keying collision then never arises, because no definition consumes process events.**
+`Router.route` walks the consumers map built from each definition's `input_event_names()`; a name
+nothing consumes is routed nowhere, touches no state, and simply flows on to Neon through Vector's
+persister. Process milestones are therefore exactly ADR 0008 Stage 1's shape — **raw events, visible
+in Neon, with no derivation** — and the entity key is only a partitioning detail for a topic that
+has one partition.
+
+> **Process event names must be namespaced** (`invoice_*`, or a `process_` prefix) so a milestone
+> can never accidentally match an existing definition's `input_event_names()` and get routed into
+> an engine that was not expecting it. This is the one thing that would turn a no-op into a bug.
+
+### Why Aware should *not* derive a `process_cycle` event
+
+This answers open question 5, and answers it **no** — which is worth recording because it is the
+attractive idea that the section above quietly kills.
+
+A `session_window` pairing `cycle_opened` with `payment_confirmed` would give a whole cycle an
+`interval` capability for free, pleasingly symmetric with `car_trip`. It does not work, and the
+reason is the Christmas bonus:
+
+- `session_window` keeps **one** open slot per (entity key, definition) — `state.set("open", …)`,
+  commented *"remember the (latest) open start"*. It overwrites.
+- Entity key is `user_id`, so **all** of one person's cycles share that slot.
+- We have established that two cycles can be open at once — a monthly invoice and an ad-hoc bonus.
+  The second `cycle_opened` would evict the first, and the first cycle's completion would pair
+  against the wrong start, minting a span that never happened.
+
+That is the same class of defect ADR 0011's fusion engine spent three replay-caught mechanics
+guarding against, and here it would be introduced for no gain: **a completed cycle's span is
+`max(timestamp) - min(timestamp)` grouped by `cycle_key`** — one SQL query the dashboard can run
+directly, with no engine, no state, and no concurrency hazard.
+
+The general form, which is the useful part:
+
+> **Aware derives facts it can only learn by watching. A process's own span is not one of those —
+> the process knows it.** Deriving it would move a process concern inside the observer to
+> re-discover something already recorded.
+
 ### Semantic classification belongs in the reconciler, not in a capability deriver
 
 Telling *submitted* from *processed* in email prose is real semantic work, and an LLM is the
@@ -523,13 +577,14 @@ tier up.
 3. ~~**Where the code lives.**~~ **Resolved 2026-08-15: this monorepo, `src/reconciler/` beside
    `inference`, definitions in `processes/*.yml`.** See *Where it lives* above — including why
    there must be no `workers/reconciler/`.
-4. **Cycle keying vs. Aware's entity keying.** Aware keys state by `message.user_id`
-   ([`core.Router.key_for`](../../src/inference/runtime/core.py)). A process cycle key is a
-   different partitioning concept. If two cycles of the same process are ever open at once, how
-   do their events stay distinguishable to a consumer?
-5. **Should Aware derive a `process_cycle` event?** A `session_window` pairing the first and last
-   milestone would give the whole cycle an `interval` capability for free — pleasingly symmetric
-   with `car_trip`. But it is only worth doing if something consumes the span.
+4. ~~**Cycle keying vs. Aware's entity keying.**~~ **Resolved 2026-08-15: `user_id` stays the
+   entity key; the cycle rides in the body as `cycle_key`.** No definition consumes process
+   events, so nothing is ever routed and the collision does not arise. Names must be namespaced.
+   See *Cycle identity is a body field* above.
+5. ~~**Should Aware derive a `process_cycle` event?**~~ **Resolved 2026-08-15: no.**
+   `session_window` keeps one open slot per (user, definition), so two concurrent cycles mispair —
+   and the span is a `GROUP BY cycle_key` the dashboard can run directly. See *Why Aware should
+   not derive a `process_cycle` event* above.
 6. **Who owns the `cycle_key` template?** Partly answered by keying on a sequence rather than a
    month — `dh_invoice_{year}_{seq:03d}` no longer encodes a cadence, and the padding mismatch that
    silently emptied the extras table goes with it. What is still open is where the substituted
