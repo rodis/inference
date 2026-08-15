@@ -144,13 +144,15 @@ cycle_key: "dh_invoice_{year}_{month:02d}"
 schedule: "0 9 1 * *"
 
 stages:
-  - {name: data_gathered,      kind: act,   action: compute.invoice_amounts}
-  - {name: approval_requested, kind: act,   after: [data_gathered], action: notify.email}
+  - {name: draft_computed,     kind: act,   action: compute.main_amount}
+  - {name: approval_requested, kind: act,   after: [draft_computed], action: notify.email}
   - name: approved
     kind: await
     after: [approval_requested]
     signal: {source: gmail, classify: "Does this reply approve the figures?"}
-  - {name: invoice_generated,  kind: act,   after: [approved], action: createmypdf.render}
+  - {name: extras_collected,   kind: act,   after: [approved], action: collect.extras}
+  - {name: total_computed,     kind: act,   after: [extras_collected], action: compute.total}
+  - {name: invoice_generated,  kind: act,   after: [total_computed], action: createmypdf.render}
   - {name: invoice_sent,       kind: act,   after: [invoice_generated], action: notify.email}
   - name: payment_submitted
     kind: await
@@ -167,6 +169,59 @@ stages:
 
 `approval_requested` being its own `act` stage is load-bearing, not bookkeeping: without it the
 reconciler re-sends the approval email every single day until answered.
+
+### The invoice is not computable — variable line items are the reason `approved` sits early
+
+An invoice is *usually* worked-days × day-rate, but some months carry an expense or a bonus: a
+line or two that exists nowhere in any system and can only come from a human. The prior art
+handled this with **one n8n Data Table per cycle, named exactly the namespace**, columns
+`description` (string) and `amount` (number). One survives — `dh_invoice_4_2026`, holding
+`{"Coursera Annual sbscription", 239.4}`.
+
+The mechanism got one important thing right, and it is preserved here: **absence is graceful and
+default.** A missing table yields `{}` and the process carries on, because most months have no
+extras and a process that blocks waiting to be told "nothing this month" is worse than useless.
+
+Everything else about it is a defect the new design must not inherit:
+
+- **The ordering is backwards.** Extras were read seconds after the flow started, so the table had
+  to be populated *before* the run — before you had seen what the invoice would say. You want the
+  draft first, then to decide what to add to it. **This is why `extras_collected` comes after
+  `approved`**: the approval wait is exactly the window in which a human is looking at the numbers,
+  and whatever they add during it is picked up when the gate closes. The contract the approval
+  email must state: *add your lines, then approve.*
+- **Descriptions became keys.** `invoice_amount_extra_<description>` was written as a Redis key,
+  so two rows both described "travel" silently overwrite — and since the total sums by the
+  `invoice_amount*` prefix, the money just quietly goes missing. (`dotNotation: false` on the Set
+  node is already a workaround for a description containing a `.`.) **Extras belong on the event as
+  a list**, never flattened into key names:
+
+  ```json
+  {"stage": "extras_collected",
+   "extras": [{"description": "Coursera Annual sbscription", "amount": 239.40}]}
+  ```
+
+- **Decimal parsing is wrong above 999.** The total's Code node does
+  `parseFloat(String(v).replace(',', '.'))`, and `String.replace` with a string argument replaces
+  only the **first** occurrence: `1,234.50` → `1.234.50` → `parseFloat` → **1.234**. A €1,234.50
+  expense becomes €1.23. Latent at current amounts, but it is a money bug, and it argues for typed
+  decimal handling rather than string coercion through a key-value store.
+- **Matching a table by its name is a silent-failure surface.** The live table is
+  `dh_invoice_4_2026` (unpadded), the abandoned `_Process: Global Vars` says `dh_invoice_04_2026`
+  (padded), and `cycle_key` above renders `{month:02d}` — padded. Any mismatch produces *no error*,
+  just an invoice missing its expenses.
+
+**Where extras live is deliberately not an architectural commitment.** `collect.extras` is a stage
+action like any other, so the source is swappable: the existing n8n Data Table works today and
+costs nothing to keep, while the target is a Neon table read directly by the reconciler with a
+small editor in the process's own dashboard module — making that module both the visualization
+*and* the input surface, with the approval email linking straight to it.
+
+> **This was the first real test of the `act`/`await` binary** — trip-wire 1 below — and the binary
+> held. Collecting extras looked like it might need a third kind (an input the process waits for),
+> but it does not: it is an `act` that reads whatever exists at the moment it fires, defaulting to
+> empty. The blocking is already carried by `approved`, and the final PDF landing in your inbox
+> before submission is the backstop if a total is wrong.
 
 ### Semantic classification belongs in the reconciler, not in a capability deriver
 
@@ -214,7 +269,8 @@ tier up.
   IDs, no callback endpoint outliving the runtime, no suspended-run state to lose.
 - **Positive:** 12 n8n workflows, 79 nodes, 7 webhooks, the Redis keyspace, the namespace-prefix
   flattening, the UUID-as-API contract and the manual `current_invoice_number_digits` gate all
-  retire. What survives is one reconciler plus a Gmail label rule.
+  retire. What survives is one reconciler, a Gmail label rule, and — at least initially — the
+  per-cycle extras table.
 - **Positive:** process N+1 is a YAML file plus any genuinely new action. `notify`,
   `await_email` and `render_pdf` are written once.
 - **Positive:** Aware needs **no runtime change, no new engine, no new topic**. Milestones enter
@@ -296,3 +352,11 @@ tier up.
    cadence in a string. A quarterly or event-triggered process needs something else.
 7. **Backfill.** The current invoice history exists only as email. Whether past cycles are worth
    reconstructing as process events, or the tier simply starts empty, is unresolved.
+8. **Where extra line items live.** Keeping the n8n Data Table costs nothing and works today, but
+   it is the last reason n8n stays in the process path, and per-cycle tables matched by name fail
+   silently. A Neon table plus an editor in the dashboard module is the target; the interim is a
+   judgement call about how soon the module exists. Either way it is one `collect.extras`
+   implementation, so the choice is reversible.
+9. **Should an extra line item be able to arrive late?** Today the window is "before you approve".
+   If an expense surfaces after the PDF is generated, the process has no way to amend — the honest
+   answer may be to void the cycle and re-run it rather than to model amendment.
