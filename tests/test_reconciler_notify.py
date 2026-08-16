@@ -226,3 +226,22 @@ def test_a_rejected_relay_call_raises_rather_than_stalling(monkeypatch):
     with pytest.raises(RuntimeError, match="403"):
         N8nRelayMailer(url="https://n8n.example/webhook/abc", token="wrong",
                        recipient="me@example.com").send(subject="x", html="", text="")
+
+
+def test_the_mail_tells_you_to_apply_the_label_not_to_reply():
+    """The gate is closed by a Gmail label. An instruction to reply would be a mechanism that
+    does not exist — worse than saying nothing, because it looks actionable."""
+    _, html, text = render_approval(_july_ctx())
+    assert "aware/invoice-approved" in text
+    assert "aware/invoice-approved" in html
+    assert "reply" not in text.lower()
+    assert "reply" not in html.lower()
+
+
+def test_the_approve_instruction_follows_the_configured_label():
+    ctx = _july_ctx()
+    ctx = ActionContext(cycle=ctx.cycle, milestones=ctx.milestones,
+                        config={"approve_hint": "Apply the Approved label."},
+                        services=Services())
+    _, _, text = render_approval(ctx)
+    assert "Apply the Approved label." in text

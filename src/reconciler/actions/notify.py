@@ -18,6 +18,9 @@ logger = logging.getLogger("reconciler.actions.notify")
 
 _CENTS = Decimal("0.01")
 
+# The gate is closed by a Gmail label, never by replying — see the `data_approved` stage.
+DEFAULT_APPROVE_HINT = "To approve, apply the aware/invoice-approved label to this email."
+
 
 class Mailer(Protocol):
     """Sending mail, as a port.
@@ -58,6 +61,10 @@ def render_approval(ctx: ActionContext) -> tuple[str, str, str]:
         "extras_hint",
         "To add an expense or bonus line, add a row before you approve.",
     )
+    # How to approve is CONFIG, not prose: the gate is closed by a Gmail label, and if the
+    # label in the definition ever changes, the mail telling you which one to apply must
+    # change with it. An instruction that drifts from the mechanism is worse than none.
+    approve = ctx.config.get("approve_hint", DEFAULT_APPROVE_HINT)
 
     if lines:
         rows = "".join(
@@ -87,7 +94,7 @@ def render_approval(ctx: ActionContext) -> tuple[str, str, str]:
   <p style="margin:0;color:#666">{escape(hint)} Expense and bonus lines are collected when
   you approve, so anything added afterwards will not appear on this invoice — if that
   happens, void the cycle and re-run it.</p>
-  <p style="margin:16px 0 0;color:#999;font-size:12px">Reply to approve. Cycle
+  <p style="margin:16px 0 0;color:#999;font-size:12px">{escape(approve)} Cycle
   {escape(cycle.key)}.</p>
 </div>"""
 
@@ -99,7 +106,7 @@ def render_approval(ctx: ActionContext) -> tuple[str, str, str]:
         f"Add your lines, then approve. {hint}\n"
         "Lines are collected when you approve; anything added afterwards will not appear — "
         "void and re-run if that happens.\n\n"
-        f"Reply to approve. Cycle {cycle.key}.\n"
+        f"{approve} Cycle {cycle.key}.\n"
     )
     return subject, html, text
 
@@ -120,17 +127,18 @@ def invoice_ready(ctx: ActionContext) -> dict:
     number = ctx.cycle.context.get("invoice_number", ctx.cycle.key)
     currency = ctx.config.get("currency", "EUR")
 
+    approve_hint = ctx.config.get("approve_hint", DEFAULT_APPROVE_HINT)
     subject = f"Invoice {number} — PDF ready to submit"
     body = (f"Invoice {number} is rendered and ready.\n\n"
             f"  Total: {currency} {total}\n\n"
-            "Check the PDF. Approve it the same way to record that you are submitting it.\n"
+            f"Check the PDF. {approve_hint}\n"
             "If anything is wrong, void the cycle and re-run rather than editing the invoice.\n"
             f"\nCycle {ctx.cycle.key}.\n")
     html = (f"<div style=\"font-family:-apple-system,Segoe UI,sans-serif;font-size:14px\">"
             f"<h2 style=\"margin:0 0 8px\">Invoice {escape(str(number))} — ready to submit</h2>"
             f"<p style=\"margin:0 0 12px\">Total: <strong>{currency} {escape(str(total))}"
-            f"</strong></p><p style=\"margin:0 0 12px\">Check the PDF, then approve it the "
-            "same way to record that you are submitting it.</p>"
+            f"</strong></p><p style=\"margin:0 0 12px\">Check the PDF, then "
+            f"{escape(approve_hint)}</p>"
             "<p style=\"margin:0;color:#666\">If anything is wrong, void the cycle and "
             "re-run rather than editing the invoice.</p>"
             f"<p style=\"margin:16px 0 0;color:#999;font-size:12px\">Cycle "
