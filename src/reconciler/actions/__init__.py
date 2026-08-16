@@ -33,11 +33,16 @@ class ExtrasSource(Protocol):
     def lines_for(self, cycle: Cycle) -> list[dict]: ...
 
 
+class Mailer(Protocol):
+    def send(self, *, subject: str, html: str, text: str) -> None: ...
+
+
 @dataclass(frozen=True)
 class Services:
     """Ports the impure actions need. Optional so a pure action needs none of them wired."""
 
     extras: ExtrasSource | None = None
+    mailer: Mailer | None = None
 
 
 @dataclass(frozen=True)
@@ -74,4 +79,4 @@ def registered_actions() -> list[str]:
 
 
 # Importing the package registers the built-ins, mirroring inference/engines/__init__.py.
-from reconciler.actions import compute, lines  # noqa: E402,F401  (side-effect imports)
+from reconciler.actions import compute, lines, notify  # noqa: E402,F401  (side-effect imports)

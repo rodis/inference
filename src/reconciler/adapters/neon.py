@@ -1,0 +1,101 @@
+"""Reading recorded milestones back out of Neon (ADR 0012).
+
+Neon is the process's state store, and it is already there: Vector persists every raw event
+it receives, so a milestone POSTed to the ingest gateway lands in `events` without this tier
+owning a table. That is the whole reason the reconciler needs no store of its own — and why
+"what state is this process in?" is a query rather than a runtime introspection.
+
+Reads only. Nothing here writes: milestones reach Neon the same way every other event does,
+through the gateway (`adapters.gateway`), so the tier never becomes a second writer competing
+with the persister.
+"""
+
+import json
+import logging
+
+import psycopg
+
+from reconciler.core import Cycle, Milestone
+from reconciler.definition import GENESIS_STAGE, ProcessDefinition
+
+logger = logging.getLogger("reconciler.adapters.neon")
+
+# Milestones are raw events named `<process>_<stage>` carrying `cycle_key` in the body. The
+# jsonb GIN index on `message` makes the containment test cheap.
+_MILESTONES_SQL = """
+    SELECT name, user_id,
+           EXTRACT(EPOCH FROM occurred_at)::bigint AS ts,
+           message
+      FROM events
+     WHERE event_class = 'raw'
+       AND name LIKE %(prefix)s
+       AND message @> %(match)s
+     ORDER BY occurred_at
+"""
+
+_OPEN_CYCLES_SQL = """
+    SELECT DISTINCT ON (message->>'cycle_key')
+           message->>'cycle_key' AS cycle_key,
+           user_id,
+           EXTRACT(EPOCH FROM occurred_at)::bigint AS ts,
+           message
+      FROM events
+     WHERE event_class = 'raw'
+       AND name = %(genesis)s
+     ORDER BY message->>'cycle_key', occurred_at
+"""
+
+
+class NeonMilestones:
+    """Loads cycles and their milestones for a process."""
+
+    def __init__(self, dsn: str):
+        self._dsn = dsn
+
+    def _query(self, sql: str, params: dict) -> list[tuple]:
+        # A fresh connection per call, deliberately. Neon's compute suspends when idle
+        # (suspend_timeout=0), so a long-lived pooled connection is a dead socket waiting to
+        # happen — the failure the dashboard hit. A reconciler run is short and infrequent;
+        # connecting per query costs nothing worth optimising.
+        with psycopg.connect(self._dsn) as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            return cur.fetchall()
+
+    def cycles(self, definition: ProcessDefinition) -> list[Cycle]:
+        """Every cycle ever opened for this process, oldest genesis first.
+
+        Returns cycles regardless of state — completed and voided ones included. Deciding
+        what to do with them is `core.reconcile`'s job, and it already skips both cheaply.
+        """
+        rows = self._query(_OPEN_CYCLES_SQL,
+                           {"genesis": definition.event_name(GENESIS_STAGE)})
+        cycles = []
+        for cycle_key, user_id, ts, message in rows:
+            body = message if isinstance(message, dict) else json.loads(message)
+            context = {k: v for k, v in body.items()
+                       if k not in {"id", "name", "user_id", "timestamp",
+                                    "cycle_key", "process"}}
+            cycles.append(Cycle(key=cycle_key, process=definition.name, user_id=user_id,
+                                opened_at=int(ts), context=context))
+        logger.info("process %s has %d cycle(s)", definition.name, len(cycles))
+        return cycles
+
+    def milestones(self, definition: ProcessDefinition, cycle: Cycle) -> dict[str, Milestone]:
+        """The milestones recorded for one cycle, keyed by stage name.
+
+        The genesis event is included under its own reserved name so a stage may depend on
+        nothing and still have somewhere to look back to.
+        """
+        prefix_len = len(definition.name) + 1
+        rows = self._query(_MILESTONES_SQL, {
+            "prefix": f"{definition.name}\\_%",
+            "match": json.dumps({"cycle_key": cycle.key}),
+        })
+        found: dict[str, Milestone] = {}
+        for name, _user_id, ts, message in rows:
+            body = message if isinstance(message, dict) else json.loads(message)
+            stage = name[prefix_len:]
+            # Last write wins: a re-emitted milestone (a retry that got through twice)
+            # should not produce two conflicting views of the same stage.
+            found[stage] = Milestone(stage=stage, timestamp=int(ts), payload=body)
+        return found
