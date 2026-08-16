@@ -92,6 +92,12 @@ class N8nRelayMailer:
     The token is the only secret the reconciler holds, and deliberately so: we mint it, it is
     scoped to one webhook, it is revocable in seconds, and it carries no personal data —
     categorically unlike a mail account password.
+
+    **Deliberately does NOT retry**, unlike the Gmail query. The relay answers only *after* its
+    send node, so a timeout is ambiguous: the mail may well have gone out and only the response
+    was lost. Retrying would send a second invoice mail. A read-only search can be repeated for
+    free; an email cannot be un-sent, so this fails once and lets the next reconciler run
+    decide — and since the milestone was never recorded, that run simply tries again.
     """
 
     def __init__(self, *, url: str, token: str, recipient: str,

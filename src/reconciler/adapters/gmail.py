@@ -11,6 +11,7 @@ rows once already, and here it is unit-tested.
 
 import json
 import logging
+import time
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
@@ -18,6 +19,7 @@ from datetime import UTC, datetime
 logger = logging.getLogger("reconciler.adapters.gmail")
 
 DEFAULT_LIMIT = 25
+DEFAULT_ATTEMPTS = 3
 
 
 def build_query(signal: dict) -> str:
@@ -79,18 +81,29 @@ def message_time(message: dict) -> int:
 class N8nGmailQuery:
     """Candidates come from a live Gmail search, asked at decision time.
 
-    Failure raises. That is the whole point of moving off a polling connector: an unreachable
-    n8n must not look like "nothing has been labelled yet", because the two are
-    indistinguishable to everything downstream and one of them stalls the process forever.
+    Failure raises once retries are exhausted. That is the whole point of moving off a polling
+    connector: an unreachable n8n must not look like "nothing has been labelled yet", because
+    the two are indistinguishable to everything downstream and one of them stalls the process
+    forever.
+
+    Retries, unlike an `await`. This is the distinction the whole tier turns on: a stage that
+    has not happened yet must NOT be retried — that is the wait-as-retry mistake the prior art
+    made. A transport error is different in kind: nothing was learned, so asking again is
+    correct rather than a stall in disguise. Observed 2026-08-16, this instance's egress to
+    Google times out at ~20s on roughly two calls in three and answers in ~1.1s otherwise.
+
+    The mail relay deliberately does NOT retry — see `adapters.mail`.
     """
 
     def __init__(self, *, url: str, token: str, header: str = "X-Relay-Token",
-                 timeout: float = 30.0, limit: int = DEFAULT_LIMIT):
+                 timeout: float = 30.0, limit: int = DEFAULT_LIMIT,
+                 attempts: int = DEFAULT_ATTEMPTS):
         self._url = url
         self._token = token
         self._header = header
         self._timeout = timeout
         self._limit = limit
+        self._attempts = attempts
 
     def candidates(self, signal: dict, since: int) -> list[tuple[int, dict]]:
         body = {
@@ -104,13 +117,7 @@ class N8nGmailQuery:
             headers={"Content-Type": "application/json", self._header: self._token},
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as response:
-                payload = json.loads(response.read() or b"[]")
-        except urllib.error.HTTPError as e:
-            raise RuntimeError(f"gmail query rejected: HTTP {e.code} {e.reason}") from e
-        except urllib.error.URLError as e:
-            raise RuntimeError(f"gmail query unreachable: {e}") from e
+        payload = self._ask(request)
 
         messages = payload if isinstance(payload, list) else payload.get("data", [])
         # An empty search is a normal answer — most days nothing has been labelled — so the
@@ -120,3 +127,23 @@ class N8nGmailQuery:
         logger.info("gmail query %r since %s -> %d candidate(s)",
                     body["q"], body["received_after"], len(found))
         return found
+
+    def _ask(self, request):
+        """POST, retrying transport failures. A search is read-only, so a repeat is free."""
+        last = None
+        for attempt in range(1, self._attempts + 1):
+            try:
+                with urllib.request.urlopen(request, timeout=self._timeout) as response:
+                    return json.loads(response.read() or b"[]")
+            except urllib.error.HTTPError as e:
+                if e.code in (401, 403):
+                    # A bad token will never come good; retrying only delays the real message.
+                    raise RuntimeError(f"gmail query rejected: HTTP {e.code} {e.reason}") from e
+                last = RuntimeError(f"gmail query failed: HTTP {e.code} {e.reason}")
+            except urllib.error.URLError as e:
+                last = RuntimeError(f"gmail query unreachable: {e}")
+            if attempt < self._attempts:
+                logger.warning("gmail query attempt %d/%d failed (%s); retrying",
+                               attempt, self._attempts, last)
+                time.sleep(2 ** (attempt - 1))
+        raise last

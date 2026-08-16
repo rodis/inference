@@ -155,6 +155,7 @@ def test_an_unreachable_query_raises_rather_than_reporting_nothing_found(monkeyp
         raise urllib.error.URLError("connection refused")
 
     monkeypatch.setattr(urllib.request, "urlopen", boom)
+    monkeypatch.setattr("reconciler.adapters.gmail.time.sleep", lambda s: None)
 
     with pytest.raises(RuntimeError, match="unreachable"):
         N8nGmailQuery(url="https://x/y", token="t").candidates({"label": "l"}, 0)
@@ -171,3 +172,77 @@ def test_a_rejected_query_raises(monkeypatch):
 
     with pytest.raises(RuntimeError, match="403"):
         N8nGmailQuery(url="https://x/y", token="bad").candidates({"label": "l"}, 0)
+
+
+def test_an_unreachable_query_is_retried_before_raising(monkeypatch):
+    import urllib.error
+    import urllib.request
+    monkeypatch.setattr("reconciler.adapters.gmail.time.sleep", lambda s: None)
+
+    def boom(request, timeout=None):
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+    with pytest.raises(RuntimeError, match="unreachable"):
+        N8nGmailQuery(url="https://x/y", token="t").candidates({"label": "l"}, 0)
+
+
+# --- retrying transport failures (but never waits) -------------------------------------------
+
+def test_a_transient_failure_is_retried(monkeypatch):
+    """Retrying a TRANSPORT error is not the wait-as-retry mistake: nothing was learned, so
+    asking again is correct. Retrying an unmet *await* would be the mistake."""
+    import urllib.error
+    import urllib.request
+
+    calls = {"n": 0}
+
+    def flaky(request, timeout=None):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise urllib.error.URLError("timeout exceeded when trying to connect")
+        return _Response([RAW])
+
+    monkeypatch.setattr(urllib.request, "urlopen", flaky)
+    monkeypatch.setattr("reconciler.adapters.gmail.time.sleep", lambda s: None)
+
+    found = N8nGmailQuery(url="https://x/y", token="t").candidates({"label": "l"}, 0)
+
+    assert calls["n"] == 3
+    assert len(found) == 1
+
+
+def test_retries_are_bounded_and_then_it_raises(monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    calls = {"n": 0}
+
+    def always_fail(request, timeout=None):
+        calls["n"] += 1
+        raise urllib.error.URLError("nope")
+
+    monkeypatch.setattr(urllib.request, "urlopen", always_fail)
+    monkeypatch.setattr("reconciler.adapters.gmail.time.sleep", lambda s: None)
+
+    with pytest.raises(RuntimeError, match="unreachable"):
+        N8nGmailQuery(url="https://x/y", token="t", attempts=3).candidates({"label": "l"}, 0)
+    assert calls["n"] == 3
+
+
+def test_an_auth_failure_is_not_retried(monkeypatch):
+    """A bad token will never come good; retrying only delays the real message."""
+    import urllib.error
+    import urllib.request
+
+    calls = {"n": 0}
+
+    def forbidden(request, timeout=None):
+        calls["n"] += 1
+        raise urllib.error.HTTPError(request.full_url, 403, "Forbidden", {}, None)
+
+    monkeypatch.setattr(urllib.request, "urlopen", forbidden)
+
+    with pytest.raises(RuntimeError, match="403"):
+        N8nGmailQuery(url="https://x/y", token="bad").candidates({"label": "l"}, 0)
+    assert calls["n"] == 1
