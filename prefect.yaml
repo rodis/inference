@@ -85,6 +85,11 @@ deployments:
     parameters:
       process: dreamhost_invoice
     work_pool: *managed
+    # PAUSED in Prefect Cloud until the runtime secrets are set on the deployment — without
+    # NEON_DATABASE_URL this raises ConfigurationError on every firing, and an hourly schedule
+    # would turn that into 24 failed runs a day. Unpause from the UI (or
+    # `prefect deployment resume-schedule`) once the secrets are in; a re-deploy does NOT
+    # unpause it, so this comment is the only reminder.
     schedules:
       # :17 rather than :00 — nothing else here is on the hour, and an off-peak minute avoids
       # queueing behind everyone else's midnight cron on a shared free tier.
