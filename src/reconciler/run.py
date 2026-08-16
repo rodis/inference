@@ -24,7 +24,12 @@ from datetime import UTC, date, datetime
 
 from reconciler.actions import Services
 from reconciler.adapters.gateway import DryRunMilestones, GatewayMilestones
-from reconciler.adapters.mail import ConsoleMailer, FileMailer, SmtpMailer
+from reconciler.adapters.mail import (
+    ConsoleMailer,
+    FileMailer,
+    N8nRelayMailer,
+    SmtpMailer,
+)
 from reconciler.adapters.neon import NeonMilestones
 from reconciler.core import Cycle, Milestone, reconcile
 from reconciler.finder import EventFinder
@@ -44,18 +49,34 @@ def _definition(name: str, processes_dir: pathlib.Path) -> ProcessDefinition:
 
 
 def _mailer(args):
+    """Pick a transport: file > console(dry-run) > n8n relay > SMTP.
+
+    The relay is the normal path — it keeps the SMTP credential in n8n's store rather than in
+    this repo. Direct SMTP stays available for local-only testing, and is only reached when no
+    relay is configured.
+    """
     if args.mail_to_file:
         return FileMailer(pathlib.Path(args.mail_to_file))
-    if args.dry_run or not os.environ.get("SMTP_HOST"):
+    if args.dry_run:
         return ConsoleMailer()
-    return SmtpMailer(
-        host=os.environ["SMTP_HOST"],
-        port=int(os.environ.get("SMTP_PORT", 587)),
-        username=os.environ["SMTP_USERNAME"],
-        password=os.environ["SMTP_PASSWORD"],
-        sender=os.environ["SMTP_SENDER"],
-        recipient=os.environ["SMTP_RECIPIENT"],
-    )
+    if os.environ.get("MAIL_RELAY_URL"):
+        return N8nRelayMailer(
+            url=os.environ["MAIL_RELAY_URL"],
+            token=os.environ["MAIL_RELAY_TOKEN"],
+            header=os.environ.get("MAIL_RELAY_HEADER", "X-Relay-Token"),
+            recipient=os.environ["MAIL_TO"],
+            sender=os.environ.get("MAIL_FROM"),
+        )
+    if os.environ.get("SMTP_HOST"):
+        return SmtpMailer(
+            host=os.environ["SMTP_HOST"],
+            port=int(os.environ.get("SMTP_PORT", 587)),
+            username=os.environ["SMTP_USERNAME"],
+            password=os.environ["SMTP_PASSWORD"],
+            sender=os.environ["SMTP_SENDER"],
+            recipient=os.environ["MAIL_TO"],
+        )
+    return ConsoleMailer()
 
 
 def _services(args) -> Services:

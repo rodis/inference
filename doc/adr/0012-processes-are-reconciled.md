@@ -474,6 +474,34 @@ The general form, which is the useful part:
 > the process knows it.** Deriving it would move a process concern inside the observer to
 > re-discover something already recorded.
 
+### n8n holds credentials, never state
+
+The tier uses n8n on both sides, and the distinction matters because ADR 0012 elsewhere
+*rejects* n8n (as a place to keep process state, via Wait nodes). What is adopted here is
+narrower and compatible:
+
+| Direction | Workflow | What it does |
+|---|---|---|
+| in | `gmail-labeled-invoice-approved` | a Gmail label becomes a raw event (ADR 0008 Stage 1) |
+| out | `mail-relay` | a composed message becomes an email |
+
+> **An outbound relay may authenticate and transmit. It may not compose, decide, or
+> interpret.** — the mirror of ADR 0008's connector rule.
+
+The reconciler builds every byte of subject, HTML and text, and decides *whether* to send;
+n8n moves bytes using a credential it already holds. No process state, no branching, no
+interpretation crosses over — so "the reconciler acts, Aware observes" is untouched.
+
+The reason to do it this way is not architectural neatness: **a personal mail credential
+should not live in this repo, gitignored or not.** n8n has a credential store; the repo does
+not. The reconciler is left holding exactly **one** secret — a relay token we mint, scoped to
+one webhook, revocable in seconds, carrying no personal data — instead of a mail account
+password. Direct SMTP remains implemented as a local-testing escape hatch.
+
+Auth on that webhook is mandatory, not a nicety: an unauthenticated endpoint that sends mail
+from your own address is an **open relay**, materially worse than the unauthenticated ingest
+gateway, which can only write events you can delete.
+
 ### Semantic classification belongs in the reconciler, not in a capability deriver
 
 Telling *submitted* from *processed* in email prose is real semantic work, and an LLM is the

@@ -4,6 +4,8 @@ The approval mail is the one place a human meets the process, and the wire body 
 a milestone routable, attributable and non-colliding. Both are worth pinning exactly.
 """
 
+import json
+
 import pytest
 
 from reconciler.actions import ActionContext, Services, build_action
@@ -171,3 +173,56 @@ def test_reaching_an_unbuilt_await_is_loud_not_silent():
 
     with pytest.raises(NotYetImplemented, match="no finder is wired"):
         world.find({"source": "gmail"}, _cycle(), 0, {})
+
+
+# --- the n8n mail relay ---------------------------------------------------------------------
+
+def test_the_relay_posts_a_composed_message_with_its_token(monkeypatch):
+    """n8n only transmits: every byte of the message is composed here and passed through."""
+    import urllib.request
+
+    from reconciler.adapters.mail import N8nRelayMailer
+
+    seen = {}
+
+    class FakeResponse:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_urlopen(request, timeout=None):
+        seen["url"] = request.full_url
+        seen["headers"] = dict(request.headers)
+        seen["body"] = json.loads(request.data)
+        return FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    N8nRelayMailer(url="https://n8n.example/webhook/abc", token="s3cret",
+                   recipient="me@example.com", sender="Invoices <bot@example.com>").send(
+        subject="Invoice 7", html="<p>hi</p>", text="hi")
+
+    assert seen["url"] == "https://n8n.example/webhook/abc"
+    assert seen["headers"]["X-relay-token"] == "s3cret"      # urllib title-cases header names
+    assert seen["body"] == {
+        "to": "me@example.com", "subject": "Invoice 7",
+        "html": "<p>hi</p>", "text": "hi", "from": "Invoices <bot@example.com>",
+    }
+
+
+def test_a_rejected_relay_call_raises_rather_than_stalling(monkeypatch):
+    """The relay responds only AFTER its send node, so a failure here is a mail that did not
+    go out. Swallowing it would leave the process at a gate nobody is watching."""
+    import urllib.error
+    import urllib.request
+
+    from reconciler.adapters.mail import N8nRelayMailer
+
+    def fake_urlopen(request, timeout=None):
+        raise urllib.error.HTTPError(request.full_url, 403, "Forbidden", {}, None)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(RuntimeError, match="403"):
+        N8nRelayMailer(url="https://n8n.example/webhook/abc", token="wrong",
+                       recipient="me@example.com").send(subject="x", html="", text="")

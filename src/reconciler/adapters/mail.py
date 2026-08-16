@@ -1,14 +1,24 @@
 """Mail transports (ADR 0012).
 
-Two implementations behind one port. `ConsoleMailer` exists because the first thing you want
-from an approval mail is to *read* it — before a transport is configured, and before anything
-is sent to a real inbox. `SmtpMailer` is stdlib, so any provider's app password works and the
-tier gains no dependency.
+Four implementations behind one port.
+
+`N8nRelayMailer` is the default: it POSTs a fully-composed message to a tiny n8n workflow that
+holds the SMTP credential, so **no personal credential ever has to live in the repo**, not even
+gitignored. The reconciler still composes every byte and decides whether to send — n8n only
+authenticates and transmits, which is the outbound mirror of ADR 0008's connector rule and is
+why this does not reintroduce the "process state in n8n" that ADR 0012 rejected.
+
+`ConsoleMailer` and `FileMailer` exist because the first thing you want from an approval mail
+is to *read* it. `SmtpMailer` remains the escape hatch for local-only testing or if n8n is
+down; it is stdlib, so keeping it costs nothing.
 """
 
+import json
 import logging
 import smtplib
 import sys
+import urllib.error
+import urllib.request
 from email.message import EmailMessage
 
 logger = logging.getLogger("reconciler.adapters.mail")
@@ -71,3 +81,51 @@ class SmtpMailer:
             server.login(self._username, self._password)
             server.send_message(message)
         logger.info("sent %r to %s", subject, self._recipient)
+
+
+DEFAULT_RELAY_HEADER = "X-Relay-Token"
+
+
+class N8nRelayMailer:
+    """Sends by POSTing a composed message to the n8n mail relay.
+
+    The token is the only secret the reconciler holds, and deliberately so: we mint it, it is
+    scoped to one webhook, it is revocable in seconds, and it carries no personal data —
+    categorically unlike a mail account password.
+    """
+
+    def __init__(self, *, url: str, token: str, recipient: str,
+                 sender: str | None = None, header: str = DEFAULT_RELAY_HEADER,
+                 timeout: float = 30.0):
+        self._url = url
+        self._token = token
+        self._recipient = recipient
+        self._sender = sender
+        self._header = header
+        self._timeout = timeout
+
+    def send(self, *, subject: str, html: str, text: str) -> None:
+        body = {"to": self._recipient, "subject": subject, "html": html, "text": text}
+        if self._sender:
+            body["from"] = self._sender
+        request = urllib.request.Request(
+            self._url,
+            data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json", self._header: self._token},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self._timeout) as response:
+                status = response.status
+        except urllib.error.HTTPError as e:
+            # 401/403 means the token is wrong; anything else means SMTP refused it. Either
+            # way this must raise: the relay responds only AFTER the send node, so a failure
+            # here is a mail that did not go out, and swallowing it would stall the process
+            # at a gate nobody is watching.
+            raise RuntimeError(
+                f"mail relay rejected {subject!r}: HTTP {e.code} {e.reason}"
+            ) from e
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"mail relay unreachable: {e}") from e
+
+        logger.info("relayed %r to %s (HTTP %s)", subject, self._recipient, status)
