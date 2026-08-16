@@ -36,6 +36,17 @@ VAT_ITEM_NAME = "VAT"
 # point of them.
 DEFAULT_WORKED_ITEM_NAME = "Amount"
 
+# Money crosses the wire as a FORMATTED STRING, not a number. JSON numbers drop trailing
+# zeros, so 17664.00 printed as "17664", 239.40 as "239.4" and 0.00 as "0" — three different
+# shapes in one column of an invoice a client reads. Formatting here also means the Decimal
+# never becomes a float at all, so the exactness kept all the way from `parse_amount` survives
+# to the page.
+MONEY_FORMAT = "{:,.2f}"
+
+
+def money_str(amount: Decimal, fmt: str = MONEY_FORMAT) -> str:
+    return fmt.format(amount)
+
 
 def _cycle_year(ctx: ActionContext) -> int:
     period = ctx.cycle.context.get("worked_period")
@@ -77,14 +88,13 @@ def build_invoice_data(ctx: ActionContext) -> dict:
             worked_hours = milestone.payload["hours"]
 
     worked_name = config.get("worked_item_name", DEFAULT_WORKED_ITEM_NAME)
+    fmt = config.get("money_format", MONEY_FORMAT)
     items = [{"name": worked_name if line.kind == "worked_days" else line.description,
               "currency": currency,
-              # Decimal internally, number on the wire: the template's own sample sends
-              # numbers, and amounts are already quantized to cents so this round-trips
-              # exactly. This is the ONLY place a money value becomes a float.
-              "value": float(line.amount)}
+              "value": money_str(line.amount, fmt)}
              for line in lines]
-    items.append({"name": VAT_ITEM_NAME, "currency": currency, "value": 0.00})
+    items.append({"name": VAT_ITEM_NAME, "currency": currency,
+                  "value": money_str(Decimal(0), fmt)})
 
     grand_total = sum((line.amount for line in lines), Decimal(0))
     invoice_date = _invoice_date(ctx)
@@ -99,10 +109,11 @@ def build_invoice_data(ctx: ActionContext) -> dict:
         "invoice_number": number,
         "invoice_date": invoice_date.strftime(config.get("date_format", DEFAULT_DATE_FORMAT)),
         "month": month_of.strftime(config.get("month_format", DEFAULT_MONTH_FORMAT)),
+        # A count, not money — stays a number.
         "worked_hours": worked_hours,
-        "rate_per_hour": float(rate) if rate is not None else None,
+        "rate_per_hour": money_str(Decimal(str(rate)), fmt) if rate is not None else None,
         "items": items,
-        "grand_total": float(grand_total),
+        "grand_total": money_str(grand_total, fmt),
     }
 
 

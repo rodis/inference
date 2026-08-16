@@ -57,14 +57,14 @@ def test_the_month_comes_from_the_period_not_the_render_day():
 def test_hours_and_rate_travel_as_their_own_fields():
     data = build_invoice_data(_ctx())
     assert data["worked_hours"] == 184
-    assert data["rate_per_hour"] == 96
+    assert data["rate_per_hour"] == "96.00"
 
 
 def test_the_rate_can_be_derived_from_the_day_rate():
     config = {**CONFIG}
     del config["rate_per_hour"]
     config.update({"day_rate": 768, "hours_per_day": 8})
-    assert build_invoice_data(_ctx(config=config))["rate_per_hour"] == 96
+    assert build_invoice_data(_ctx(config=config))["rate_per_hour"] == "96.00"
 
 
 # --- items -----------------------------------------------------------------------------------
@@ -72,7 +72,7 @@ def test_the_rate_can_be_derived_from_the_day_rate():
 def test_the_computed_line_prints_as_a_bare_amount():
     # Its description would only repeat what the template already says in prose.
     items = build_invoice_data(_ctx())["items"]
-    assert items[0] == {"name": "Amount", "currency": "USD", "value": 17664.0}
+    assert items[0] == {"name": "Amount", "currency": "USD", "value": "17,664.00"}
 
 
 def test_manual_lines_keep_their_own_descriptions():
@@ -87,15 +87,15 @@ def test_vat_is_always_present_and_always_zero():
     """Exempt as an export of services, but the template requires the row."""
     for lines in ([], [{"description": "Bonus", "amount": "2000", "kind": "manual"}]):
         items = build_invoice_data(_ctx(lines=lines))["items"]
-        assert items[-1] == {"name": "VAT", "currency": "USD", "value": 0.0}
+        assert items[-1] == {"name": "VAT", "currency": "USD", "value": "0.00"}
 
 
 def test_vat_is_not_a_process_line_and_does_not_reach_the_total():
     """It is a rendering requirement, not a fact. A zero VAT *line* would inflate line_count
     and put a spurious row in the approval mail."""
     data = build_invoice_data(_ctx())
-    assert data["grand_total"] == 17664.0
-    assert sum(i["value"] for i in data["items"]) == data["grand_total"]
+    assert data["grand_total"] == "17,664.00"
+    assert data["items"][-1]["value"] == "0.00"     # VAT contributes nothing
 
 
 def test_a_bonus_invoice_renders_with_no_worked_period():
@@ -111,11 +111,22 @@ def test_a_bonus_invoice_renders_with_no_worked_period():
     assert data["invoice_date"].endswith("2026")     # falls back to the cycle open date
 
 
-def test_amounts_are_exact_on_the_wire():
+def test_money_crosses_the_wire_as_a_formatted_string():
+    """JSON numbers drop trailing zeros, so 17664.00 printed as "17664", 239.40 as "239.4" and
+    0.00 as "0" — three shapes in one column of a document a client reads. Formatting here also
+    means the Decimal never becomes a float, so exactness survives to the page."""
     data = build_invoice_data(_ctx(lines=[
-        {"description": "Conference", "amount": "1,234.50", "kind": "manual"}]))
-    assert data["items"][0]["value"] == 1234.50
+        {"description": "Conference", "amount": "1,234.50", "kind": "manual"},
+        {"description": "Rounding", "amount": "0.1", "kind": "manual"}]))
+
+    assert [i["value"] for i in data["items"]] == ["1,234.50", "0.10", "0.00"]
+    assert data["grand_total"] == "1,234.60"
     assert json.dumps(data)          # must be serialisable — Decimal would not be
+
+
+def test_hours_stay_a_number():
+    # A count, not money. Formatting it would print "184.00" hours.
+    assert build_invoice_data(_ctx())["worked_hours"] == 184
 
 
 # --- the API adapter ---------------------------------------------------------------------------
@@ -170,7 +181,7 @@ def test_the_render_action_records_what_it_sent(monkeypatch):
 
     assert result["invoice_number"] == "08-2026"
     assert result["transaction_ref"] == "75e710a8"
-    assert result["sent"]["grand_total"] == 17664.0
+    assert result["sent"]["grand_total"] == "17,664.00"
 
 
 def test_a_missing_template_id_is_loud():
