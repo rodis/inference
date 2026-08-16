@@ -34,6 +34,7 @@ from reconciler.adapters.mail import (
 )
 from reconciler.adapters.neon import NeonMilestones
 from reconciler.core import Cycle, Milestone, reconcile
+from reconciler.adapters.craftmypdf import CraftMyPdf
 from reconciler.adapters.gmail import N8nGmailQuery
 from reconciler.finder import SignalFinder
 from reconciler.definition import GENESIS_STAGE, ProcessDefinition, load_definitions
@@ -85,7 +86,9 @@ def _mailer(args):
 def _services(args) -> Services:
     # `extras` stays unwired: manual lines are collected after approval, which this
     # increment does not reach, and ADR 0012 open question 8 has not been settled.
-    return Services(mailer=_mailer(args))
+    key = os.environ.get("CRAFTMYPDF_API_KEY")
+    return Services(mailer=_mailer(args),
+                    pdf=CraftMyPdf(api_key=key) if key else None)
 
 
 def _sink(args, definition: ProcessDefinition):

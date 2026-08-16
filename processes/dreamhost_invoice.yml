@@ -71,11 +71,29 @@ stages:
     kind: act
     after: [manual_lines]
     action: compute.total
+    config:
+      currency: USD
 
+  # Called DIRECTLY, not through n8n: the CraftMyPDF n8n node is a community plugin and the
+  # cluster has no persistence, so it is lost on every pod restart. The REST API needs only an
+  # API key, so nothing here needs n8n's credential store the way Gmail and SMTP do.
+  #
+  # VAT is NOT a line here. The services are an export of services and exempt from Swiss VAT;
+  # the template requires a zero VAT row, so the render action appends it. Modelling it as a
+  # process line would inflate line_count and put a spurious VAT row in the approval mail.
   - name: invoice_generated
     kind: act
     after: [total_computed]
     action: craftmypdf.render
+    config:
+      template_id: fc677b23e92ad700     # "Inv. n. 2 - The DreamHost, Inc."
+      currency: USD
+      rate_per_hour: 96
+      worked_item_name: Amount          # the computed line prints as a bare "Amount"
+      # Printed verbatim. The invoice is dated to the LAST DAY OF THE WORKED PERIOD, not to
+      # whenever it is rendered — so a re-run weeks later prints the same date it replaced.
+      date_format: "%A, %-d %B %Y"      # Friday, 31 July 2026
+      month_format: "%B %Y"             # July 2026
 
   # ② the rendered PDF, mailed back for a second look. A wrong total caught here is a void
   # and a re-run, never an amendment — which is why no stage below needs a correction path.

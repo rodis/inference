@@ -121,23 +121,42 @@ def invoice_ready(ctx: ActionContext) -> dict:
     the finder correlates on subject, so neither mail can close the other's gate.
     """
     total = None
+    pdf_url = None
+    number = None
     for milestone in ctx.milestones.values():
         if "total" in milestone.payload:
             total = milestone.payload["total"]
-    number = ctx.cycle.context.get("invoice_number", ctx.cycle.key)
+        # The rendered PDF's link. It is a presigned URL with a 7-day life, which is why the
+        # mail says so: a reader who files this away and comes back next month will find a
+        # dead link, and should re-run rather than wonder.
+        if milestone.payload.get("file"):
+            pdf_url = milestone.payload["file"]
+        if milestone.payload.get("invoice_number"):
+            number = milestone.payload["invoice_number"]
+    number = number or ctx.cycle.context.get("invoice_number", ctx.cycle.key)
     currency = ctx.config.get("currency", "EUR")
 
     approve_hint = ctx.config.get("approve_hint", DEFAULT_APPROVE_HINT)
     subject = f"Invoice {number} — PDF ready to submit"
+    link_text = (f"  {pdf_url}\n\n  (this link expires 7 days after rendering)\n"
+                 if pdf_url else "  [no PDF link recorded — check the render milestone]\n")
     body = (f"Invoice {number} is rendered and ready.\n\n"
             f"  Total: {currency} {total}\n\n"
+            f"{link_text}\n"
             f"Check the PDF. {approve_hint}\n"
             "If anything is wrong, void the cycle and re-run rather than editing the invoice.\n"
             f"\nCycle {ctx.cycle.key}.\n")
     html = (f"<div style=\"font-family:-apple-system,Segoe UI,sans-serif;font-size:14px\">"
             f"<h2 style=\"margin:0 0 8px\">Invoice {escape(str(number))} — ready to submit</h2>"
             f"<p style=\"margin:0 0 12px\">Total: <strong>{currency} {escape(str(total))}"
-            f"</strong></p><p style=\"margin:0 0 12px\">Check the PDF, then "
+            f"</strong></p>"
+            + (f"<p style=\"margin:0 0 4px\"><a href=\"{escape(pdf_url)}\" "
+               "style=\"display:inline-block;padding:10px 16px;background:#222;color:#fff;"
+               "border-radius:6px;text-decoration:none\">Open the invoice PDF</a></p>"
+               "<p style=\"margin:0 0 12px;color:#999;font-size:12px\">Link expires 7 days "
+               "after rendering.</p>" if pdf_url else
+               "<p style=\"margin:0 0 12px;color:#c00\">No PDF link was recorded.</p>")
+            + f"<p style=\"margin:0 0 12px\">Check the PDF, then "
             f"{escape(approve_hint)}</p>"
             "<p style=\"margin:0;color:#666\">If anything is wrong, void the cycle and "
             "re-run rather than editing the invoice.</p>"
@@ -149,7 +168,7 @@ def invoice_ready(ctx: ActionContext) -> dict:
         raise RuntimeError("notify.invoice_ready needs a mailer; none configured.")
     mailer.send(subject=subject, html=html, text=body)
     logger.info("cycle %s: invoice mailed for check (%s)", ctx.cycle.key, subject)
-    return {"subject": subject, "total": total}
+    return {"subject": subject, "total": total, "pdf_url": pdf_url}
 
 
 @register_action("notify.approval_request")

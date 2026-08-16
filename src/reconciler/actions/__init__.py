@@ -37,12 +37,17 @@ class Mailer(Protocol):
     def send(self, *, subject: str, html: str, text: str) -> None: ...
 
 
+class PdfRenderer(Protocol):
+    def render(self, *, template_id: str, data: dict) -> dict: ...
+
+
 @dataclass(frozen=True)
 class Services:
     """Ports the impure actions need. Optional so a pure action needs none of them wired."""
 
     extras: ExtrasSource | None = None
     mailer: Mailer | None = None
+    pdf: PdfRenderer | None = None
 
 
 @dataclass(frozen=True)
@@ -79,4 +84,9 @@ def registered_actions() -> list[str]:
 
 
 # Importing the package registers the built-ins, mirroring inference/engines/__init__.py.
-from reconciler.actions import compute, lines, notify  # noqa: E402,F401  (side-effect imports)
+from reconciler.actions import (  # noqa: E402,F401  (side-effect imports)
+    compute,
+    lines,
+    notify,
+    render,
+)

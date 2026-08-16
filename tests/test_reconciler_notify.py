@@ -254,4 +254,4 @@ def test_an_unbuilt_action_stops_cleanly_rather_than_crashing():
     world = RealWorld(definition, sink=DryRunMilestones(definition), services=Services())
 
     with pytest.raises(NotYetImplemented, match="not built yet"):
-        world.act("craftmypdf.render", _cycle(), {})
+        world.act("nobody.wrote.this", _cycle(), {})
