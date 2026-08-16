@@ -32,11 +32,18 @@ dev = [
     "pytest>=8",
     "ruff>=0.6",
 ]
-# NOTE: the process tier still adds NO dependency of its own. Every outside-world adapter —
-# mail, PDF, Gmail query, LLM — is plain `urllib` against an HTTP endpoint, so `reconciler`
-# installs and tests with nothing beyond the base. The `processes` extra referenced above is
-# where the RUNNER (Prefect) will land when `flow.py` is written; it does not exist yet, and
-# adding an empty one would only imply a dependency that isn't there.
+# The RUNNER only (ADR 0012). Every outside-world adapter the tier owns — mail, PDF, Gmail
+# query, LLM — is plain `urllib` against an HTTP endpoint, so `reconciler.core`, `.app` and the
+# adapters install and test with nothing beyond the base deps. `reconciler.flow` is the single
+# module that imports Prefect, which is what makes the runner swappable and what keeps this
+# extra out of the runtime image.
+#
+# Note the Managed work pool does NOT install this extra (or the project): it pip-installs the
+# four real deps listed in prefect.yaml and runs against PYTHONPATH=src. The extra is for
+# deploying and for running a flow locally.
+processes = [
+    "prefect>=3.0,<4",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

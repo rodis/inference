@@ -1,0 +1,100 @@
+# Prefect deployments for the process tier (ADR 0012).
+#
+# RUNNER CHOICE: Prefect Cloud on a **Managed** work pool. The deciding test for any managed
+# offering was whether the free tier includes *execution* or only scheduling — a scheduler that
+# still needs a self-hosted worker buys no infra reduction, which is the whole point. Managed
+# pools execute the code on Prefect's infrastructure, so nothing lands on the k8s cluster and
+# there is no `workers/reconciler/` image to build (there must not be one: that path
+# auto-builds against a manifest that does not exist).
+#
+# HOW THE CODE GETS THERE: cloned from the public GitHub repo at run time. Public is doing real
+# work here — a private repo would need a credential block, and the tier's whole credential
+# story is "one token, held by us". Nothing secret is in the repo; the secrets arrive as
+# environment variables on the deployment (below).
+#
+# DEPLOY:
+#     uv run --with prefect prefect cloud login          # once, interactive
+#     uv run --with prefect prefect work-pool create aware-managed --type prefect:managed
+#     uv run --with prefect prefect deploy --all
+#
+# The two schedules mirror the process definition's own `opens:` block, and
+# tests/test_reconciler_app.py asserts they still agree — a cron edited in one place and not
+# the other is otherwise invisible until an invoice does not happen.
+
+name: aware-processes
+prefect-version: 3.0.0
+
+pull:
+  - prefect.deployments.steps.git_clone:
+      repository: https://github.com/rodis/inference.git
+      branch: main
+
+definitions:
+  work_pool: &managed
+    name: aware-managed
+    job_variables:
+      # The reconciler's real dependencies, and only those. The project itself is deliberately
+      # NOT installed: `pyproject.toml`'s base deps include quixstreams (the inference runtime's
+      # data plane), which this tier never imports and which would drag confluent-kafka into
+      # every managed run for nothing.
+      pip_packages:
+        - psycopg[binary]>=3.1
+        - pydantic>=2.6
+        - pyyaml
+        - python-dotenv
+      env:
+        # `reconciler` lives under src/, and nothing pip-installs it here — so point Python at
+        # it directly rather than installing the package.
+        PYTHONPATH: src
+        # Set these as Prefect Cloud secrets on the deployment, not here:
+        #   NEON_DATABASE_URL, VECTOR_BASE_URL, MAIL_RELAY_URL, MAIL_RELAY_TOKEN, MAIL_TO,
+        #   GMAIL_QUERY_URL, LLM_RELAY_URL, CRAFTMYPDF_API_KEY
+        PREFECT_LOGGING_LEVEL: INFO
+        # Delivers the tier's own `reconciler.*` records into the run log. `flow.py` raises
+        # their level; this is what attaches Prefect's handler to them. Without it the run
+        # shows only Prefect's own lines and none of the reasoning.
+        PREFECT_LOGGING_EXTRA_LOGGERS: reconciler
+
+deployments:
+  # Opens one cycle a month. Creates; never advances.
+  - name: dreamhost-invoice-open
+    entrypoint: src/reconciler/flow.py:open_cycle_flow
+    description: >-
+      Opens the monthly DreamHost invoice cycle for the month that just ended. The sequence
+      number is derived from the cycles already recorded, so opening one by hand in between
+      does not collide.
+    parameters:
+      process: dreamhost_invoice
+    work_pool: *managed
+    schedules:
+      # Must match `opens: {via: schedule, cron: ...}` in processes/dreamhost_invoice.yml.
+      - cron: "0 9 1 * *"
+        timezone: Europe/Zurich
+
+  # Advances whatever exists. Never creates.
+  - name: dreamhost-invoice-advance
+    entrypoint: src/reconciler/flow.py:advance_flow
+    description: >-
+      Walks every open cycle to its frontier. Hourly rather than continuous because every
+      stage it waits on — a human applying a label, a bank sending a notification — moves on
+      human timescales, and a pure function of recorded events loses nothing by being asked
+      less often.
+    parameters:
+      process: dreamhost_invoice
+    work_pool: *managed
+    schedules:
+      # :17 rather than :00 — nothing else here is on the hour, and an off-peak minute avoids
+      # queueing behind everyone else's midnight cron on a shared free tier.
+      - cron: "17 * * * *"
+        timezone: Europe/Zurich
+
+  # Unscheduled: the manual opener. `opens: {via: manual}` in the definition is what this is.
+  - name: dreamhost-invoice-open-manual
+    entrypoint: src/reconciler/flow.py:open_and_advance_flow
+    description: >-
+      Opens a cycle on demand and immediately walks it — an ad-hoc invoice (a bonus, with no
+      worked days at all: run it with use_previous_month=false), or a re-run after a void.
+      Also the fast feedback loop when changing what the approval mail says.
+    parameters:
+      process: dreamhost_invoice
+    work_pool: *managed

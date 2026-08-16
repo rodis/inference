@@ -1,7 +1,9 @@
 # ADR 0012 — Processes are reconciled, not orchestrated
 
-Status: **Accepted — core implemented 2026-08-15** (`processes/*.yml` schema +
-pure reconciliation core + tests). Actions and the Prefect entry point are next.
+Status: **Accepted — implemented.** Core + schema 2026-08-15; actions, the classifier and the
+Prefect entry point 2026-08-16. The first cycle (`dh_invoice_2026_008`) has run through approval,
+PDF and submission by hand; the scheduled deployments are written but not yet applied to a
+Prefect Cloud workspace.
 Date: 2026-08-15
 
 > This ADR introduces a **process tier**: a sibling of the connector tier (ADR 0008), one
@@ -341,6 +343,32 @@ Nothing about the reconciler needs to be inside our network — Neon, the LLM AP
 and the n8n API are all reachable over the public internet with credentials. Had any of them been
 cluster-local, this decision would have gone the other way.
 
+**Implemented 2026-08-16** as `prefect.yaml` + `src/reconciler/flow.py`, and three details of the
+shape are decisions rather than mechanics:
+
+- **Two deployments, because opening and advancing are different acts.** `open_cycle_flow` runs on
+  the process's own `opens:` cron and creates exactly one cycle; `advance_flow` runs hourly and
+  creates none, ever. Merging them would make the loop a scheduler and turn "why does this process
+  have two Decembers?" into a question about a race. It also sets what a missed run costs: a missed
+  advance costs nothing, because advancing is a pure function of recorded milestones and the next
+  run re-derives the same frontier, while a missed open is *visible* as a month with no cycle.
+- **Managed pools clone from the public repo, and the deployment installs four packages, not this
+  project.** `pyproject.toml`'s base dependencies include `quixstreams` — the inference runtime's
+  data plane, which this tier never imports — so installing the project would drag confluent-kafka
+  into every managed run for nothing. The deployment pip-installs psycopg/pydantic/pyyaml/dotenv
+  and runs with `PYTHONPATH=src`. That the repo is public is load-bearing: a private one would need
+  a credential block, against a tier whose credential story is "one token, held by us".
+- **The cron now exists in two files**, the definition's `opens:` and `prefect.yaml`, and that
+  duplication is the price of the runner being external. It is guarded by a test asserting the two
+  agree, because the failure mode is otherwise silent — not an error, just a month in which no
+  invoice happens, noticed when someone wonders why they were not paid.
+
+One thing did *not* need to be built: a Prefect-side retry or alert policy. A stage waiting on a
+human is the normal resting state of a long-running process, so `advance_flow` returns a summary
+rather than failing when a cycle stops; only a genuine fault — an unreachable relay, a bad
+credential — raises and fails the run. Failing on "still waiting" would make every ordinary Tuesday
+an alert, and alerts nobody reads are worse than none.
+
 **A correction to the reasoning that opened this question.** The earlier framing was *"Prefect earns
 its place if you expect more flows."* More processes are expected — but in this design a process is
 a **YAML file**, not a flow, and one reconciler loops over all of them. The flow count stays at one
@@ -388,9 +416,19 @@ processes/*.yml          # definitions — the exact mirror of events/*.yml
 src/reconciler/
   definition.py          # the ProcessDefinition schema (pydantic — already a dependency)
   core.py                # PURE: definitions + recorded events → frontier → next action
+  classify.py            # PURE: the classifier's prompt and verdict shape
+  finder.py              # PURE: does a candidate satisfy an `await`?
   actions/               # act implementations; all I/O lives here
-  flow.py                # the Prefect entry point — composition root
+  adapters/              # the outside world: gateway, Neon, mail, PDF, Gmail query, LLM
+  app.py                 # composition — environment → a wired run
+  run.py                 # the CLI entry point
+  flow.py                # the Prefect entry point — the ONLY module importing prefect
 ```
+
+`app.py` arrived with the flow and is the reason the two entry points do not drift: `run.py` and
+`flow.py` are both thin skins over the same `open_cycle` / `advance`, so the CLI is not a
+second implementation that quietly diverges from what the schedule actually runs. The test for
+whether something belongs in `app.py` is that it knows neither argparse nor Prefect.
 
 **Beside `inference`, not inside it**, because the ADR's boundary is that the reconciler *acts* and
 Aware *observes*. A package whose whole point is calling out — email, PDF services, an LLM — does
@@ -779,13 +817,18 @@ tier up.
    implementation, so the choice is reversible.
 9. ~~**Should an extra line item be able to arrive late?**~~ **Resolved 2026-08-15: re-run, never
    amend.** See *Correction is re-running, never amending* above.
-10. ~~**What is the invoice number, actually?**~~ **Resolved 2026-08-15: a per-year sequence.** It
-    coincided with the month only because every invoice so far happened to be a monthly one. A
-    re-run inherits its voided cycle's number. What remains open is the smaller mechanical
-    question: **where the sequence counter lives** now that Redis is gone. It is the one piece of
-    process state that cannot be recomputed from events — though `max(seq) + 1` over the year's
-    `cycle_opened` events is a candidate that keeps the "pure function of recorded events" property
-    intact, provided cycle opening is serialised.
+10. ~~**What is the invoice number, actually?**~~ **Resolved 2026-08-15: a per-year sequence**, and
+    the remaining mechanical half — *where the counter lives* — **resolved 2026-08-16: nowhere.**
+    There is no counter. `app.next_sequence` reads the sequence back out of the `cycle_key`s
+    already recorded and returns `max + 1`, so the tier's defining property holds here too: the
+    answer is a function of what has been recorded, not of stored state. Two details worth having
+    made explicit by writing it. It reads **keys, not bodies**, which keeps it generic — nothing in
+    `app` knows the number is called an invoice number. And it is `max + 1` rather than the first
+    free slot, so a gap left by a hand-opened cycle is never reused: a number already on a client's
+    invoice must not be minted twice, and a gap is much cheaper than a collision. The serialisation
+    caveat stands and is now bounded rather than hypothetical — only the monthly `open` deployment
+    and a deliberate manual run can mint one, and they are minutes-long events a human initiates,
+    not a loop. A re-run still inherits its voided cycle's number.
 11. **How is a void triggered?** It is an event like any other, so the candidates are a reply to
     the approval mail (classified), a control in the dashboard module, or a one-line script. The
     module is the natural home, but that makes voiding unavailable until the module exists.

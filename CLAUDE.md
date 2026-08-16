@@ -190,6 +190,24 @@ kustomize build deploy/inference/kustomize/base --enable-helm | grep -A 4 'strat
 uv run python scripts/emit_event_schema.py            # -> contracts/inferred_event.schema.json
 (cd dashboard/web && npm run gen:types)               # -> src/generated/events.ts
 
+# --- the PROCESS tier (ADR 0012) -------------------------------------------------------------
+# A process is `processes/*.yml`; the reconciler advances it and is a pure function of the
+# milestones recorded so far, so it is always safe to re-run. `--dry-run` writes nothing and
+# sends nothing — use it to see exactly what a mail or an invoice payload would contain.
+(cd workers && uv run python -m reconciler.run open --process dreamhost_invoice \
+    --seq 9 --period 2026-08-01:2026-08-31 --dry-run)
+(cd workers && uv run python -m reconciler.run reconcile --process dreamhost_invoice [--cycle KEY])
+# --seq may be omitted: it becomes max(sequence in this year's cycle_keys) + 1.
+
+# The same two entry points on a schedule (Prefect Cloud, Managed pool — nothing on the
+# cluster, and there must be NO workers/reconciler/ or CI will build an image for it).
+uv run --with prefect prefect cloud login                                    # once
+uv run --with prefect prefect work-pool create aware-managed --type prefect:managed
+uv run --with prefect prefect deploy --all                                   # reads prefect.yaml
+# `open` fires on the definition's own `opens:` cron and creates ONE cycle; `advance` runs
+# hourly and creates none. A test asserts prefect.yaml's cron still matches the definition's.
+
 # Install into a venv for editing
 uv sync --extra dev          # dev extras = pytest + ruff; or: pip install -e .
+uv sync --extra processes    # + prefect, only needed to deploy or run a flow locally
 ```

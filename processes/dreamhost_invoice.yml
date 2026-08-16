@@ -31,10 +31,17 @@ stages:
 
   # Its own stage, not bookkeeping: without a recorded `approval_requested` the reconciler
   # re-sends this email every single day until answered.
+  # `currency` is stated on EVERY money-rendering stage, not just the ones that compute a
+  # total. It was missing here and on `invoice_emailed`, and the default in
+  # `actions/notify.py` is EUR — so the approval mail a human reads showed "EUR 16,128.00"
+  # while the PDF said USD. Same digits, different symbol, on the one document whose entire
+  # job is to be checked by a person before the invoice is real.
   - name: approval_requested
     kind: act
     after: [computed_lines]
     action: notify.approval_request
+    config:
+      currency: USD
 
   # GATE ①. Approval is a Gmail LABEL, not a reply — so no interpretation is involved:
   # applying the label IS the decision. The reconciler ASKS Gmail (through n8n) at decision
@@ -101,6 +108,8 @@ stages:
     kind: act
     after: [invoice_generated]
     action: notify.invoice_ready
+    config:
+      currency: USD
 
   # GATE ②. Same label, different subject, so the finder cannot confuse it with gate ①.
   # Closing this means "the PDF is right, I am submitting it": submission itself is manual
@@ -121,12 +130,9 @@ stages:
   # time rather than the run's; otherwise this stage would search from the following morning
   # and never see the 18:12 mail. See core.EVIDENCE_TIME_KEY.
   #
-  # Unlike the approval gates, this genuinely needs reading: submitted and processed come from
-  # the same sender, hours apart, and differ only in wording. That is the semantic work ADR
-  # 0012 puts in the reconciler.
-  # The two payment stages are the ONLY place in this process that needs a reading rather than
-  # a comparison. Both mails come from the same sender, about the same invoice, hours apart
-  # (2026-07-15: submitted 15:17, processed 18:12) — nothing structural separates them.
+  # These two stages are the ONLY place in this process that needs a READING rather than a
+  # comparison: the mails share a sender and an invoice and differ only in wording, so nothing
+  # structural separates them. That is the semantic work ADR 0012 puts in the reconciler.
   #
   # `mentions: invoice_number` is the deterministic half and is NOT the classifier's job: the
   # mail must name this cycle's invoice ("Invoice 7-2026" in DreamHost's wording, matched
