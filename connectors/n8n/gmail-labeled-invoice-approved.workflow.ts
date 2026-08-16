@@ -14,6 +14,9 @@
  * mapping below already emits — so nothing cycle-specific belongs in this workflow, and this
  * file stays as free of process knowledge as the boundary rule requires.
  *
+ * Workflow ID: qOEr2Fx7GHuZXYyc  (pass to update_workflow when editing this file)
+ * Deployed: PUBLISHED and polling (2026-08-16).
+ *
  * Deploy:  validate_workflow -> create_workflow_from_code -> publish_workflow
  *          (this repo copy is the source of truth; edit here, then update_workflow)
  */

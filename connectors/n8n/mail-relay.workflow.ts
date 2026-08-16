@@ -27,6 +27,12 @@
  *
  * Request body:  { "to": "...", "subject": "...", "html": "...", "text": "..." }
  *
+ * Workflow ID: Ozr1TCuzYKpA8ehl  (pass to update_workflow when editing this file)
+ * Deployed: created but NOT published — n8n refuses to publish while the
+ *           `Aware mail relay token` Header Auth credential is missing. That refusal is
+ *           the fail-closed behaviour this workflow wants: it cannot go live as an open
+ *           relay. Create the credential, then publish.
+ *
  * Deploy:  validate_workflow -> create_workflow_from_code -> publish_workflow
  *          (this repo copy is the source of truth; edit here, then update_workflow)
  */
