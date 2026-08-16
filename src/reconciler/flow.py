@@ -20,11 +20,30 @@ Deployed from `prefect.yaml` at the repo root.
 """
 
 import logging
+import pathlib
+import sys
 from datetime import UTC, datetime
 
 from prefect import flow
 
-from reconciler import app
+# Put `src/` on the path before importing the package this module belongs to.
+#
+# Necessary because the Managed pool runs this file **as an entrypoint from a git clone**, with
+# `reconciler` neither pip-installed nor importable: Prefect resolves
+# `src/reconciler/flow.py:advance_flow` by loading the file directly, so `from reconciler import
+# app` runs with only Prefect's own site-packages on `sys.path`.
+#
+# `PYTHONPATH` was the obvious lever and does NOT work — verified 2026-08-16 against the live
+# pool, with both a relative `src` and the absolute clone path (`/opt/prefect/inference-main/src`).
+# Both crashed identically with `ModuleNotFoundError: No module named 'reconciler'`, so
+# `job_variables.env` is not reaching the process that loads the flow. Bootstrapping here needs
+# no environment cooperation at all, and is correct in every context — an installed package
+# finds itself first and this is a no-op.
+_SRC = str(pathlib.Path(__file__).resolve().parents[1])
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
+
+from reconciler import app  # noqa: E402  — must follow the sys.path bootstrap above
 
 logger = logging.getLogger("reconciler.flow")
 

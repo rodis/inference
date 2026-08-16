@@ -24,8 +24,6 @@ import pathlib
 import sys
 from datetime import date
 
-from dotenv import find_dotenv, load_dotenv
-
 from reconciler.app import (
     DEFAULT_PROCESSES_DIR,
     ConfigurationError,
@@ -122,6 +120,13 @@ def main(argv=None) -> int:
     runner.set_defaults(func=cmd_reconcile)
 
     args = parser.parse_args(argv)
+
+    # Imported here rather than at module scope so this module stays importable with nothing
+    # third-party installed — CI runs `pip install -e . --no-deps` plus only pytest, ruff,
+    # pydantic and pyyaml, and a top-level `from dotenv import ...` breaks collection there
+    # while passing locally. Same reasoning as `adapters/neon.py`'s psycopg import.
+    from dotenv import find_dotenv, load_dotenv
+
     # Same convention as the Quix entrypoint: walk upward from the CWD for a .env, so
     # credentials live in `workers/.env` and never in the repo. In a deployed runner
     # find_dotenv returns "" and the environment already carries the values.

@@ -113,6 +113,36 @@ def test_the_deployments_point_at_flows_that_exist():
         assert func in names, f"{deployment['name']} points at missing {path}:{func}"
 
 
+def test_the_wiring_imports_with_no_third_party_packages_installed():
+    """CI installs with `pip --no-deps`, so every module a test reaches must import against a
+    bare interpreter. `app.py` pulls in every adapter, and `adapters/neon.py` had a
+    module-level `import psycopg` — which collapsed the ENTIRE pytest collection in CI while
+    passing locally, where psycopg is installed. Simulated here rather than discovered there.
+    """
+    import importlib
+    import sys
+
+    # Exactly what CI does NOT install: it has pytest, ruff, pydantic and pyyaml,
+    # then `pip install -e . --no-deps`. Everything else must be imported lazily.
+    blocked = {"psycopg", "dotenv", "prefect", "anthropic", "quixstreams"}
+    saved = {k: v for k, v in sys.modules.items()
+             if k.startswith("reconciler") or k.split(".")[0] in blocked}
+    try:
+        for name in list(sys.modules):
+            if name.startswith("reconciler") or name.split(".")[0] in blocked:
+                del sys.modules[name]
+        for name in blocked:
+            sys.modules[name] = None      # makes `import <name>` raise ImportError
+
+        importlib.import_module("reconciler.app")
+        importlib.import_module("reconciler.run")
+    finally:
+        for name in list(sys.modules):
+            if name.startswith("reconciler") or name.split(".")[0] in blocked:
+                del sys.modules[name]
+        sys.modules.update(saved)
+
+
 def test_no_worker_image_directory_was_added_for_the_reconciler():
     """ADR 0012, explicitly: there must be NO `workers/reconciler/`. That path is
     auto-discovered by publish-images.yml, which would start building an image and bumping a

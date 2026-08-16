@@ -43,9 +43,12 @@ definitions:
         - pyyaml
         - python-dotenv
       env:
-        # `reconciler` lives under src/, and nothing pip-installs it here — so point Python at
-        # it directly rather than installing the package.
-        PYTHONPATH: src
+        # NOTE: `PYTHONPATH` is deliberately NOT set here. It does not work — verified against
+        # the live pool with both `src` and the absolute clone path; the flow-loading process
+        # never sees `job_variables.env`, and both crashed with `ModuleNotFoundError: No module
+        # named 'reconciler'`. `src/reconciler/flow.py` bootstraps its own `sys.path` instead.
+        # Treat everything in this block as best-effort for the same reason.
+        #
         # Set these as Prefect Cloud secrets on the deployment, not here:
         #   NEON_DATABASE_URL, VECTOR_BASE_URL, MAIL_RELAY_URL, MAIL_RELAY_TOKEN, MAIL_TO,
         #   GMAIL_QUERY_URL, LLM_RELAY_URL, CRAFTMYPDF_API_KEY

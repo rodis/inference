@@ -13,8 +13,6 @@ with the persister.
 import json
 import logging
 
-import psycopg
-
 from reconciler.core import Cycle, Milestone
 from reconciler.definition import GENESIS_STAGE, ProcessDefinition
 
@@ -61,6 +59,13 @@ class NeonMilestones:
         self._dsn = dsn
 
     def _query(self, sql: str, params: dict) -> list[tuple]:
+        # psycopg is imported HERE, not at module scope, and that is a CI contract rather than
+        # a style choice: the checks workflow installs with `pip --no-deps`, so anything a test
+        # imports transitively must be importable with no third-party packages present. This
+        # module is reached from `reconciler.app`, which the flow and CLI tests both import —
+        # a module-level `import psycopg` collapsed the whole pytest collection.
+        import psycopg
+
         # A fresh connection per call, deliberately. Neon's compute suspends when idle
         # (suspend_timeout=0), so a long-lived pooled connection is a dead socket waiting to
         # happen — the failure the dashboard hit. A reconciler run is short and infrequent;
