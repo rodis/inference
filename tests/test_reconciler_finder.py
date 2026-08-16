@@ -160,3 +160,27 @@ def test_where_and_correlation_both_apply():
          "where": {"from_domain": "dreamhost.com"}},
         _cycle(), 2000, _requested("Invoice 7"))
     assert found["matched_at"] == 2300
+
+
+# --- event time is the evidence's, not the run's ------------------------------------------
+
+def test_a_satisfied_await_is_stamped_with_the_evidence_time():
+    """Load-bearing, not tidiness. DreamHost's payment mails arrive ~3h apart (submitted
+    15:17, processed 18:12) — both between two runs of a daily reconciler. If the submitted
+    milestone carried the RUN's clock, the processed stage would look from the next morning
+    and never see the 18:12 mail, stalling in a way that looks like patient waiting."""
+    from reconciler.adapters.gateway import event_time
+
+    submitted_at = 1784301420          # 2026-07-15 15:17
+    noticed_at = submitted_at + 60_000  # the run that noticed, next day
+
+    found = EventFinder(FakeSignals([(submitted_at, {"subject": "Invoice 7"})])).find(
+        {"event": APPROVED, "correlate_on": "subject"},
+        _cycle(), submitted_at - 100, _requested("Invoice 7"))
+
+    assert event_time(found, noticed_at) == submitted_at
+
+
+def test_an_act_payload_is_stamped_with_now():
+    from reconciler.adapters.gateway import event_time
+    assert event_time({"lines": []}, 4242) == 4242

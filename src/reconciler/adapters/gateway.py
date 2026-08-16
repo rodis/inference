@@ -20,12 +20,24 @@ import urllib.error
 import urllib.request
 from datetime import UTC, datetime
 
-from reconciler.core import Cycle, Milestone
+from reconciler.core import EVIDENCE_TIME_KEY, Cycle, Milestone
 from reconciler.definition import ProcessDefinition
 
 logger = logging.getLogger("reconciler.adapters.gateway")
 
 DEFAULT_APP = "process"
+
+
+def event_time(payload: dict, now: int) -> int:
+    """When the milestone's fact actually happened.
+
+    For an `act` that is now — the reconciler did it. For a satisfied `await` it is the
+    evidence's own time, which a finder reports under `EVIDENCE_TIME_KEY`. See the comment on
+    that constant: with a daily run and two mails hours apart, stamping the run's clock makes
+    the next stage look past evidence that already arrived.
+    """
+    matched = payload.get(EVIDENCE_TIME_KEY)
+    return int(matched) if isinstance(matched, int | float) else now
 
 
 def milestone_body(definition: ProcessDefinition, cycle: Cycle, stage: str,
@@ -63,7 +75,7 @@ class GatewayMilestones:
         self._timeout = timeout
 
     def record(self, cycle: Cycle, stage: str, payload: dict) -> Milestone:
-        now = int(datetime.now(UTC).timestamp())
+        now = event_time(payload, int(datetime.now(UTC).timestamp()))
         body = milestone_body(self._definition, cycle, stage, payload, now)
         request = urllib.request.Request(
             self._url,
@@ -95,7 +107,7 @@ class DryRunMilestones:
         self.written: list[tuple[str, dict]] = []
 
     def record(self, cycle: Cycle, stage: str, payload: dict) -> Milestone:
-        now = int(datetime.now(UTC).timestamp())
+        now = event_time(payload, int(datetime.now(UTC).timestamp()))
         self.written.append((self._definition.event_name(stage), payload))
         logger.info("[dry-run] would record %s for %s",
                     self._definition.event_name(stage), cycle.key)

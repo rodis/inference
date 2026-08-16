@@ -23,6 +23,20 @@ from reconciler.definition import VOID_STAGE, ProcessDefinition, Stage
 
 logger = logging.getLogger("reconciler.core")
 
+# When an `await` is satisfied, the fact happened when the EVIDENCE happened — not when a run
+# noticed it. A finder therefore reports the evidence's time under this key, and a sink stamps
+# the milestone with it instead of "now".
+#
+# This is not tidiness; it is load-bearing. DreamHost's two payment mails arrive ~3 hours
+# apart (submitted 15:17, processed 18:12 on 2026-07-15) — comfortably between two runs of a
+# daily reconciler. If `payment_submitted` were stamped with the run's clock, the next stage
+# would look for the processed mail from *the following morning* and never see the 18:12 one,
+# stalling forever in a way indistinguishable from legitimately waiting.
+#
+# It is also just the house rule: event-time is the fact's time, and "when the system handled
+# it" is the DB's `ingested_at`.
+EVIDENCE_TIME_KEY = "matched_at"
+
 
 @dataclass(frozen=True)
 class Cycle:

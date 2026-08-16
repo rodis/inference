@@ -36,12 +36,15 @@ stages:
 
   # Its own stage, not bookkeeping: without a recorded `approval_requested` the reconciler
   # re-sends this email every single day until answered.
-  # Approval is a Gmail LABEL, not a reply — so no interpretation is involved. Applying the
-  # label IS the decision, the connector reports it (ADR 0008 Stage 1), and this matches it.
-  # `correlate_on: subject` ties the labelled mail to THIS cycle: the connector emits the
-  # subject, and `approval_requested` recorded the one it sent, so two invoices open at once
-  # (a monthly and a bonus) can never satisfy each other's gate.
-  - name: approved
+  # GATE ①. Approval is a Gmail LABEL, not a reply — so no interpretation is involved.
+  # Applying the label IS the decision, the connector reports it (ADR 0008 Stage 1), and this
+  # matches it. `correlate_on: subject` ties the labelled mail to THIS cycle: the connector
+  # emits the subject, and `approval_requested` recorded the one it sent, so two invoices open
+  # at once (a monthly and a bonus) can never satisfy each other's gate.
+  #
+  # Note both gates share ONE label. Correlation is on subject, not on the label, so gate ②
+  # below cannot be closed by gate ①'s mail — which is why you need only one label in Gmail.
+  - name: data_approved
     kind: await
     after: [approval_requested]
     signal:
@@ -53,12 +56,12 @@ stages:
       # the milestone that asked for it. correlate_on is what keeps this window safe.
       slack_seconds: 900
 
-  # AFTER `approved` on purpose. The approval wait is the window in which a human is
-  # actually looking at the numbers; the prior art read extras seconds after the run
-  # started, so the table had to be filled in before you had seen the draft.
+  # AFTER gate ① on purpose. The approval wait is the window in which a human is actually
+  # looking at the numbers; the prior art read extras seconds after the run started, so the
+  # table had to be filled in before you had seen the draft.
   - name: manual_lines
     kind: act
-    after: [approved]
+    after: [data_approved]
     action: lines.manual
 
   - name: total_computed
@@ -71,25 +74,55 @@ stages:
     after: [total_computed]
     action: createmypdf.render
 
-  - name: invoice_sent
+  # ② the rendered PDF, mailed back for a second look. A wrong total caught here is a void
+  # and a re-run, never an amendment — which is why no stage below needs a correction path.
+  - name: invoice_emailed
     kind: act
     after: [invoice_generated]
-    action: notify.invoice
+    action: notify.invoice_ready
 
+  # GATE ②. Same label, different subject, so the finder cannot confuse it with gate ①.
+  # Closing this means "the PDF is right, I am submitting it": submission itself is manual
+  # today and nothing observes it. When it is automated, an `invoice_submitted` act stage
+  # slots in here — a YAML change, no code.
+  - name: invoice_approved
+    kind: await
+    after: [invoice_emailed]
+    signal:
+      source: event
+      event: email_labeled_invoice_approved
+      correlate_on: subject
+      slack_seconds: 900
+
+  # The two payment mails are ~3 HOURS apart (observed 2026-07-15: submitted 15:17, processed
+  # 18:12) — well inside one daily run, so both will already be sitting in Neon when the
+  # reconciler next looks. That is only survivable because a satisfied await is stamped with
+  # its EVIDENCE's time rather than the run's; otherwise this stage would look for the
+  # processed mail from the following morning and never see it. See core.EVIDENCE_TIME_KEY.
+  #
+  # Unlike the approval gates, this genuinely needs reading: submitted and processed come from
+  # the same sender, hours apart, and differ only in wording. That is the semantic work ADR
+  # 0012 puts in the reconciler.
   - name: payment_submitted
     kind: await
-    after: [invoice_sent]
+    after: [invoice_approved]
     signal:
-      source: gmail
-      from: accounting@dreamhost.com
+      source: classify
+      event: email_labeled_invoice_payment
+      where: {from: accounting@dreamhost.com}
       classify: >-
-        Does this say the payment was SUBMITTED? Be careful to distinguish a submitted
-        payment from a merely processed one — only submitted counts.
+        Does this email say the payment has been SUBMITTED to the recipient — that is, the
+        money has been sent? A later email will say the payment was PROCESSED; that is a
+        different, subsequent step and must NOT match here.
 
-  - name: payment_confirmed
+  - name: payment_processed
     kind: await
     after: [payment_submitted]
     signal:
-      source: gmail
-      from: accounting@dreamhost.com
-      classify: "Does this confirm the payment actually cleared?"
+      source: classify
+      event: email_labeled_invoice_payment
+      where: {from: accounting@dreamhost.com}
+      classify: >-
+        Does this email confirm the payment has been PROCESSED — the step that follows
+        submission? An earlier email announced the payment was SUBMITTED; that one must NOT
+        match here.

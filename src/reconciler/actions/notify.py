@@ -104,6 +104,46 @@ def render_approval(ctx: ActionContext) -> tuple[str, str, str]:
     return subject, html, text
 
 
+@register_action("notify.invoice_ready")
+def invoice_ready(ctx: ActionContext) -> dict:
+    """Mail the rendered PDF back for a second look, before it is submitted.
+
+    A separate gate from the figures check because they catch different mistakes: gate ① is
+    "are these the right numbers", gate ② is "did the template render them correctly". The
+    subject deliberately differs from gate ①'s, which is what lets both use ONE Gmail label —
+    the finder correlates on subject, so neither mail can close the other's gate.
+    """
+    total = None
+    for milestone in ctx.milestones.values():
+        if "total" in milestone.payload:
+            total = milestone.payload["total"]
+    number = ctx.cycle.context.get("invoice_number", ctx.cycle.key)
+    currency = ctx.config.get("currency", "EUR")
+
+    subject = f"Invoice {number} — PDF ready to submit"
+    body = (f"Invoice {number} is rendered and ready.\n\n"
+            f"  Total: {currency} {total}\n\n"
+            "Check the PDF. Approve it the same way to record that you are submitting it.\n"
+            "If anything is wrong, void the cycle and re-run rather than editing the invoice.\n"
+            f"\nCycle {ctx.cycle.key}.\n")
+    html = (f"<div style=\"font-family:-apple-system,Segoe UI,sans-serif;font-size:14px\">"
+            f"<h2 style=\"margin:0 0 8px\">Invoice {escape(str(number))} — ready to submit</h2>"
+            f"<p style=\"margin:0 0 12px\">Total: <strong>{currency} {escape(str(total))}"
+            f"</strong></p><p style=\"margin:0 0 12px\">Check the PDF, then approve it the "
+            "same way to record that you are submitting it.</p>"
+            "<p style=\"margin:0;color:#666\">If anything is wrong, void the cycle and "
+            "re-run rather than editing the invoice.</p>"
+            f"<p style=\"margin:16px 0 0;color:#999;font-size:12px\">Cycle "
+            f"{escape(ctx.cycle.key)}.</p></div>")
+
+    mailer = ctx.services.mailer
+    if mailer is None:
+        raise RuntimeError("notify.invoice_ready needs a mailer; none configured.")
+    mailer.send(subject=subject, html=html, text=body)
+    logger.info("cycle %s: invoice mailed for check (%s)", ctx.cycle.key, subject)
+    return {"subject": subject, "total": total}
+
+
 @register_action("notify.approval_request")
 def approval_request(ctx: ActionContext) -> dict:
     """Send the human the figures and ask them to approve.

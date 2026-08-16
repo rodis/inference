@@ -149,7 +149,32 @@ def test_the_invoice_collects_manual_lines_after_approval():
     """The ordering the prior art got backwards, pinned so it can't regress."""
     invoice = load_definitions(PROCESSES_DIR)[0]
     order = [s.name for s in invoice.stages]
-    assert order.index("manual_lines") > order.index("approved")
+    assert order.index("manual_lines") > order.index("data_approved")
+
+
+def test_the_invoice_has_two_approval_gates():
+    """Figures first, then the rendered PDF — they catch different mistakes."""
+    invoice = load_definitions(PROCESSES_DIR)[0]
+    order = [s.name for s in invoice.stages]
+    assert order.index("data_approved") < order.index("invoice_generated")
+    assert order.index("invoice_approved") > order.index("invoice_emailed")
+
+
+def test_both_gates_share_one_label_and_are_told_apart_by_subject():
+    """One Gmail label is enough because correlation is on subject, not on the label — so
+    gate ①'s mail can never close gate ②."""
+    invoice = load_definitions(PROCESSES_DIR)[0]
+    gates = [s for s in invoice.stages if s.name in ("data_approved", "invoice_approved")]
+    assert len({g.signal["event"] for g in gates}) == 1
+    assert all(g.signal["correlate_on"] == "subject" for g in gates)
+
+
+def test_payment_stages_follow_the_observed_order():
+    """Observed 2026-07-15: submitted 15:17, then processed 18:12. Backwards would stall the
+    process forever, in a way indistinguishable from legitimately waiting."""
+    invoice = load_definitions(PROCESSES_DIR)[0]
+    order = [s.name for s in invoice.stages]
+    assert order.index("payment_submitted") < order.index("payment_processed")
 
 
 def test_the_invoice_opens_on_a_schedule_and_by_hand():
