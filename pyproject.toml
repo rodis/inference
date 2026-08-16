@@ -32,6 +32,11 @@ dev = [
     "pytest>=8",
     "ruff>=0.6",
 ]
+# NOTE: the process tier still adds NO dependency of its own. Every outside-world adapter —
+# mail, PDF, Gmail query, LLM — is plain `urllib` against an HTTP endpoint, so `reconciler`
+# installs and tests with nothing beyond the base. The `processes` extra referenced above is
+# where the RUNNER (Prefect) will land when `flow.py` is written; it does not exist yet, and
+# adding an empty one would only imply a dependency that isn't there.
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

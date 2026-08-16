@@ -568,6 +568,96 @@ follow, all good:
 A misclassification stays cheap and visible: the decision is recorded as an event carrying its
 evidence, the raw mail is still in Neon, and correcting it means deleting the event.
 
+#### Identity is deterministic; only semantics are read (implemented 2026-08-16)
+
+Building the two payment stages surfaced a sharper rule than "classify in the reconciler", and it
+is the one to carry into every later process: **a classifier is never asked which cycle a piece of
+evidence belongs to.**
+
+`SignalFinder` runs its filters cheapest-first, and the classifier runs last, on candidates that
+already passed every deterministic test — sender, and `mentions: invoice_number`, a substring
+check against the mail's text. Only then is the reading asked, and it is asked exactly one thing:
+of the mail we already know is ours, which of the two steps does it describe?
+
+The reason is a difference in blast radius, not in tidiness. A misread *step* stalls one cycle
+visibly — the next stage waits for a confirmation that already arrived, and a human notices. A
+misread *identity* closes a different invoice's stage, which is a silent cross-cycle corruption
+of exactly the kind `correlate_on` was introduced to prevent; putting that judgement behind a
+model would hand back the guarantee. `mentions` is `correlate_on`'s counterpart for evidence
+somebody else composed: our own approval request carries the invoice number in a field, so
+equality works, while Tipalti's notification carries it mid-sentence, so the tie is a substring
+test. (It also absorbs a real formatting gap: we render `08-2026`, DreamHost writes `8-2026`.)
+
+Two further consequences of running the reading last: a reconcile with no plausible mail spends
+nothing, and a *no* verdict `continue`s rather than ending the search — both real mails are
+plausible candidates, so the earlier one must be rejected without hiding the later one.
+
+**Why an LLM here at all, when the subjects happen to be disjoint.** They are — `DreamHost
+submitted a payment to you` versus `[Tipalti payment processed successfully]` — and a substring
+match on either would work today, for free and deterministically. It was proposed and rejected by
+the user on one ground: the subject line is Tipalti's template, not a contract, and a vendor
+rewording it fails *silently* — the stage simply waits forever, which is the failure mode this
+tier exists to avoid. That is a legitimate reading of the trade: the deterministic version is
+cheaper and exact but brittle at a seam we do not control, while the reading survives rewording
+and degrades into a stall the same way.
+
+**Prompts are written around the payment's state, never the vendor's vocabulary — and this is
+not a style note.** A first draft asked whether the payment had been "SENT or ISSUED" and matched
+the **wrong mail**: the completion notice says verbatim *"A USD 16,896.00 payment was sent to you
+today"*. The one verb that reads as decisive was the one both mails share. Symmetrically, the
+word "processed" appears only in Tipalti's subject and nowhere in its body, so the classifier is
+shown both fields. The working pair asks about **initiation versus outcome** and says so
+explicitly ("Judge initiation versus outcome, not the particular verb used"). Both prompts are
+now verified against both real mails in all four combinations, live, in
+`tests/test_reconciler_classify.py` — and the row that earns its keep is the negative one, which
+nothing offline could have caught.
+
+**Transport: Gemini, via an n8n relay** (`connectors/n8n/llm-relay.workflow.ts`). The credential
+rule decides this, not a model preference: a Gemini key already lives in n8n from the retired
+workflows, so the relay keeps the reconciler holding exactly one secret — the relay token we mint
+ourselves. The workflow maps two fields onto Gemini's request shape and returns the reply
+verbatim; the question is composed from the definition and the verdict parsed in
+`reconciler.classify`, which is what keeps it inside ADR 0008's relay boundary. The retired
+`Workflow: Check Payment Was Submitted` is the counter-example, with `invoice 03-2026` hardcoded
+in its prompt.
+
+Mechanically: `temperature: 0`, since the same reading of the same mail should not depend on a
+sampling draw; `maxOutputTokens` set explicitly, because the node's default is **16** and
+truncates the verdict into a JSON parse error that reads like model failure; the reply parsed
+from `content.parts[0].text` (`jsonOutput: true` does not pre-parse). **Uncertainty resolves to
+`false`**, and the asymmetry is the whole safety argument: a missed match costs an hour and is
+retried, a wrong match is recorded as fact.
+
+**Known cost of this route: it rides backlog #70 — and building it diagnosed #70.** Measured
+2026-08-16, a relay call either succeeds in ~1.2–2s or fails after ~20.5s, about one in three
+succeeding. The failures were assumed to be egress to Google. **They are not**, and the evidence
+is that the Gemini node has `runData` of length **zero** on every failure: nothing ran, so nothing
+could have failed to connect *outward*. The error's stack is Bull —
+`Queue.onFailed (bull/lib/job.js)` — i.e. n8n's own queue-mode job layer, before any node
+executes.
+
+The cause is in the cluster: of three `n8n-worker` pods, **two have their `n8n-worker` container
+`ready=False`**, logging `Database connection timed out` from `db-connection.js ping` every 7
+seconds against the Aiven Postgres — which is itself `RUNNING`. Uptime 97 days. It is the same
+shape as the Neon stale-pool failure already recorded for the dashboard: a long-lived pool whose
+sockets died under it and which never revalidates, so the process stays up, stays scheduled, and
+fails everything routed to it. One healthy worker of three is exactly the observed ~1-in-3.
+
+Three corrections follow. #70 is **not Gmail-specific and not egress**; it degraded *every* n8n
+workflow equally, which is why the parking connector had ingested nothing for 16 days. Retrying
+inside the workflow (`retryOnFail` on the node) **cannot help** — that setting retries a node
+that started and threw, and here the node never started; it is kept only for genuine Gemini-side
+errors. What does work is **client-side** retry, because each attempt is a fresh enqueue with a
+fresh chance of landing on a healthy worker. Retrying at all is safe here only because asking a
+question is a *read* — the mail relay and CraftMyPDF deliberately do the opposite, since a repeat
+there sends a second invoice or bills a second render.
+
+The workers were restarted the same day and the fault cleared, so the retry budget is sized for
+transport flakiness (3 attempts) rather than for a broken fleet. It is deliberately *small*, and
+the second lesson is why: the retries multiply with the node's own, the Gemini key is on a quota'd
+tier, and a generous budget spent against a **quota** error does not eventually succeed — it
+exhausts the day's allowance faster. Which is precisely what testing this stage did.
+
 ### The visualization comes free
 
 The stated goal was that each step become a node in a diagram, later added to the Aware UI. In

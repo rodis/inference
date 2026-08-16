@@ -36,6 +36,7 @@ from reconciler.adapters.neon import NeonMilestones
 from reconciler.core import Cycle, Milestone, reconcile
 from reconciler.adapters.craftmypdf import CraftMyPdf
 from reconciler.adapters.gmail import N8nGmailQuery
+from reconciler.adapters.llm import N8nGeminiRelay
 from reconciler.finder import SignalFinder
 from reconciler.definition import GENESIS_STAGE, ProcessDefinition, load_definitions
 from reconciler.world import NotYetImplemented, RealWorld
@@ -161,20 +162,38 @@ def cmd_reconcile(args) -> int:
 def _finders(args) -> dict:
     """Finders by signal `source`.
 
-    `gmail` asks n8n a question at decision time — every loop stays on this side, and an
-    unreachable n8n raises instead of looking like "nothing labelled yet".
+    Both read the same Gmail mailbox through the same n8n question — asked at decision time, so
+    every loop stays on this side and an unreachable n8n raises instead of looking like
+    "nothing labelled yet". They differ only in what settles the match:
 
-    `classify` (an LLM reading prose, for submitted-vs-processed) is not wired, so a process
-    reaching one fails loudly rather than appearing to wait patiently.
+    - `gmail`   — a label somebody applied. The label IS the decision; nothing to interpret.
+    - `classify` — the same candidates, plus a reading, for the one distinction a label cannot
+      carry (a payment *sent* vs the same payment *completed*).
+
+    An unwired `classify` is left absent rather than degraded to `gmail`: `world.find` then
+    raises `NotYetImplemented` naming the source, which is the loud stop. Silently falling back
+    would match the first Tipalti mail mentioning the invoice and record the wrong step.
     """
     url = os.environ.get("GMAIL_QUERY_URL")
     if not url:
         return {}
-    return {"gmail": SignalFinder(N8nGmailQuery(
+    query = N8nGmailQuery(
         url=url,
         token=os.environ["MAIL_RELAY_TOKEN"],
         header=os.environ.get("MAIL_RELAY_HEADER", "X-Relay-Token"),
-    ))}
+    )
+    finders = {"gmail": SignalFinder(query)}
+
+    if os.environ.get("LLM_RELAY_URL"):
+        finders["classify"] = SignalFinder(query, classifier=N8nGeminiRelay(
+            url=os.environ["LLM_RELAY_URL"],
+            token=os.environ["MAIL_RELAY_TOKEN"],
+            header=os.environ.get("MAIL_RELAY_HEADER", "X-Relay-Token"),
+        ))
+    else:
+        logger.warning("LLM_RELAY_URL is not set; `classify` stages will stop rather than "
+                       "advance (see connectors/n8n/llm-relay.workflow.ts)")
+    return finders
 
 
 def _advance(definition, cycle: Cycle, milestones: dict[str, Milestone], args, sink) -> int:

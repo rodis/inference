@@ -124,16 +124,40 @@ stages:
   # Unlike the approval gates, this genuinely needs reading: submitted and processed come from
   # the same sender, hours apart, and differ only in wording. That is the semantic work ADR
   # 0012 puts in the reconciler.
+  # The two payment stages are the ONLY place in this process that needs a reading rather than
+  # a comparison. Both mails come from the same sender, about the same invoice, hours apart
+  # (2026-07-15: submitted 15:17, processed 18:12) — nothing structural separates them.
+  #
+  # `mentions: invoice_number` is the deterministic half and is NOT the classifier's job: the
+  # mail must name this cycle's invoice ("Invoice 7-2026" in DreamHost's wording, matched
+  # against our zero-padded "07-2026"). The question below is asked only of mail that already
+  # passed it, so the reading decides which step, never whose invoice.
+  #
+  # Both questions are worded around INITIATION vs OUTCOME, never around vocabulary, and that
+  # is not a stylistic preference — an earlier draft asked whether the payment had been "SENT
+  # or ISSUED" and matched the WRONG mail, because the completion notice says verbatim "A USD
+  # 16,896.00 payment was sent to you today". The one verb that reads as decisive is the one
+  # both mails share. (Symmetrically, "processed" appears only in Tipalti's subject line and
+  # nowhere in its body, so the classifier is shown both.) Keying on either would also
+  # reintroduce exactly the template-brittleness a classifier was chosen to avoid.
+  #
+  # Verified against both real 2026-07-15 mails, all four combinations — see
+  # tests/test_reconciler_classify.py. Re-run it after ANY edit here; the failure mode is a
+  # stage that matches the wrong mail, which is invisible until the next one never arrives.
   - name: payment_submitted
     kind: await
     after: [invoice_approved]
     signal:
       source: classify
       from: accounting@dreamhost.com
+      mentions: invoice_number
       classify: >-
-        Does this email say the payment has been SUBMITTED to the recipient — that is, the
-        money has been sent? A later email will say the payment was PROCESSED; that is a
-        different, subsequent step and must NOT match here.
+        Does this email announce that a payment has been INITIATED — set in motion, submitted
+        for processing, or released for delivery — WITHOUT confirming that it has completed?
+        Answer true only for that initial announcement. Answer false if the email reports the
+        outcome of a payment: that it completed, succeeded, settled, cleared, or was
+        processed. Judge initiation versus outcome, not the particular verb used — an outcome
+        report may still describe the money as having been sent.
 
   - name: payment_processed
     kind: await
@@ -141,7 +165,9 @@ stages:
     signal:
       source: classify
       from: accounting@dreamhost.com
+      mentions: invoice_number
       classify: >-
-        Does this email confirm the payment has been PROCESSED — the step that follows
-        submission? An earlier email announced the payment was SUBMITTED; that one must NOT
-        match here.
+        Is this email confirming that a payment already sent has now COMPLETED — processed,
+        settled, or successfully delivered? Answer true only for a confirmation of the
+        outcome. An earlier, separate email announced that the payment was being sent; that
+        announcement must NOT match here.
