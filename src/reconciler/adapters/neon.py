@@ -33,6 +33,14 @@ _MILESTONES_SQL = """
      ORDER BY occurred_at
 """
 
+_SIGNAL_SQL = """
+    SELECT EXTRACT(EPOCH FROM occurred_at)::bigint AS ts, message
+      FROM events
+     WHERE name = %(name)s
+       AND occurred_at >= to_timestamp(%(since)s)
+     ORDER BY occurred_at
+"""
+
 _OPEN_CYCLES_SQL = """
     SELECT DISTINCT ON (message->>'cycle_key')
            message->>'cycle_key' AS cycle_key,
@@ -99,3 +107,14 @@ class NeonMilestones:
             # should not produce two conflicting views of the same stage.
             found[stage] = Milestone(stage=stage, timestamp=int(ts), payload=body)
         return found
+
+    def signals(self, name: str, since: int) -> list[tuple[int, dict]]:
+        """Raw events of one name at or after `since`, oldest first.
+
+        The finder's read side. Deliberately dumb — no matching, no interpretation: deciding
+        whether one of these *satisfies* a stage is `finder`'s job, and keeping the SQL free
+        of that keeps the correlation rules testable without a database.
+        """
+        rows = self._query(_SIGNAL_SQL, {"name": name, "since": since})
+        return [(int(ts), message if isinstance(message, dict) else json.loads(message))
+                for ts, message in rows]

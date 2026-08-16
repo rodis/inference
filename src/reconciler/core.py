@@ -75,11 +75,14 @@ class World(Protocol):
         """Perform `action` and return its payload. Side effects live here."""
         ...
 
-    def find(self, signal: dict, cycle: Cycle, since: int) -> dict | None:
+    def find(self, signal: dict, cycle: Cycle, since: int,
+             milestones: dict[str, "Milestone"]) -> dict | None:
         """Look for evidence satisfying `signal` at or after `since`; None if not yet.
 
         `signal` is opaque to the core — the implementation parses its own config, as
-        engines parse their own `engine_config`.
+        engines parse their own `engine_config`. `milestones` is passed because evidence
+        usually has to be tied back to *this* cycle, and what identifies it (a subject line,
+        an upstream id) is something an earlier stage recorded.
         """
         ...
 
@@ -150,7 +153,8 @@ def reconcile(
         if stage.kind == "act":
             payload = world.act(stage.action, cycle, milestones)
         else:
-            payload = world.find(stage.signal, cycle, _since(stage, cycle, milestones))
+            payload = world.find(stage.signal, cycle,
+                                 _since(stage, cycle, milestones), milestones)
             if payload is None:
                 waiting_on.append(stage.name)
                 continue

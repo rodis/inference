@@ -169,5 +169,5 @@ def test_reaching_an_unbuilt_await_is_loud_not_silent():
     definition = load_definitions(PROCESSES_DIR)[0]
     world = RealWorld(definition, sink=DryRunMilestones(definition), services=Services())
 
-    with pytest.raises(NotYetImplemented, match="no finder is configured"):
-        world.find({"source": "gmail"}, _cycle(), 0)
+    with pytest.raises(NotYetImplemented, match="no finder is wired"):
+        world.find({"source": "gmail"}, _cycle(), 0, {})

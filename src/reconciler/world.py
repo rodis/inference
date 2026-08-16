@@ -30,11 +30,14 @@ class RealWorld:
     """Dispatches `act`, `find` and `record` for one process."""
 
     def __init__(self, definition: ProcessDefinition, sink, services: Services | None = None,
-                 finder=None):
+                 finders: dict | None = None):
         self._definition = definition
         self._sink = sink
         self._services = services or Services()
-        self._finder = finder
+        # Keyed by the signal's `source`, so a process can mix deterministic evidence
+        # (a label someone applied) with interpreted evidence (an LLM reading prose) and
+        # each stage says which it is.
+        self._finders = finders or {}
         self._config_for = {stage.name: stage.config for stage in definition.stages}
         self._action_for = {stage.name: stage.action for stage in definition.stages}
 
@@ -55,13 +58,15 @@ class RealWorld:
         )
         return build_action(action)(context)
 
-    def find(self, signal: dict, cycle: Cycle, since: int) -> dict | None:
-        if self._finder is None:
+    def find(self, signal: dict, cycle: Cycle, since: int,
+             milestones: dict[str, Milestone]) -> dict | None:
+        finder = self._finders.get(signal.get("source"))
+        if finder is None:
             raise NotYetImplemented(
-                f"cycle {cycle.key} reached an await ({signal.get('source', '?')}) but no "
-                "finder is configured — the classification pass is not built yet"
+                f"cycle {cycle.key} reached an await whose source is "
+                f"{signal.get('source', '?')!r}, and no finder is wired for it"
             )
-        return self._finder.find(signal, cycle, since)
+        return finder.find(signal, cycle, since, milestones)
 
     def record(self, cycle: Cycle, stage: str, payload: dict) -> Milestone:
         return self._sink.record(cycle, stage, payload)

@@ -36,12 +36,22 @@ stages:
 
   # Its own stage, not bookkeeping: without a recorded `approval_requested` the reconciler
   # re-sends this email every single day until answered.
+  # Approval is a Gmail LABEL, not a reply — so no interpretation is involved. Applying the
+  # label IS the decision, the connector reports it (ADR 0008 Stage 1), and this matches it.
+  # `correlate_on: subject` ties the labelled mail to THIS cycle: the connector emits the
+  # subject, and `approval_requested` recorded the one it sent, so two invoices open at once
+  # (a monthly and a bonus) can never satisfy each other's gate.
   - name: approved
     kind: await
     after: [approval_requested]
     signal:
-      source: gmail
-      classify: "Does this reply approve the invoice figures?"
+      source: event
+      event: email_labeled_invoice_approved
+      correlate_on: subject
+      # The connector's event time is the mail's `Date` header — i.e. roughly when WE sent
+      # the request, not when the label was applied — so the evidence legitimately predates
+      # the milestone that asked for it. correlate_on is what keeps this window safe.
+      slack_seconds: 900
 
   # AFTER `approved` on purpose. The approval wait is the window in which a human is
   # actually looking at the numbers; the prior art read extras seconds after the run

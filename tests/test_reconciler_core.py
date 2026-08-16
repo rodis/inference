@@ -26,7 +26,7 @@ class FakeWorld:
         self.acted.append(action)
         return {"action": action}
 
-    def find(self, signal, cycle, since):
+    def find(self, signal, cycle, since, milestones):
         stage = signal["_stage"]             # test-only: lets the fake key off the stage
         self.looked.append((stage, since))
         return self.available.get(stage)
