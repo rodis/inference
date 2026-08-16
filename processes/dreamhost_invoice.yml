@@ -75,7 +75,7 @@ stages:
   - name: invoice_generated
     kind: act
     after: [total_computed]
-    action: createmypdf.render
+    action: craftmypdf.render
 
   # ② the rendered PDF, mailed back for a second look. A wrong total caught here is a void
   # and a re-run, never an amendment — which is why no stage below needs a correction path.

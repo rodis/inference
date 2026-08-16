@@ -20,7 +20,7 @@ is the monthly DreamHost invoice, which was built and then abandoned:
 
 1. On the 1st, gather the data needed to generate the invoice
 2. Email it for validation, and wait for approval
-3. Generate a PDF (createmypdf — never implemented)
+3. Generate a PDF (CraftMyPDF — never implemented)
 4. Email the invoice so it can be submitted
 5. Wait for the submission confirmation email
 6. Wait for the payment to be submitted
@@ -179,7 +179,7 @@ stages:
     signal: {source: gmail, classify: "Does this reply approve the figures?"}
   - {name: manual_lines,       kind: act,   after: [approved], action: lines.manual}
   - {name: total_computed,     kind: act,   after: [manual_lines], action: compute.total}
-  - {name: invoice_generated,  kind: act,   after: [total_computed], action: createmypdf.render}
+  - {name: invoice_generated,  kind: act,   after: [total_computed], action: craftmypdf.render}
   - {name: invoice_sent,       kind: act,   after: [invoice_generated], action: notify.email}
   - name: payment_submitted
     kind: await

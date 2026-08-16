@@ -245,3 +245,13 @@ def test_the_approve_instruction_follows_the_configured_label():
                         services=Services())
     _, _, text = render_approval(ctx)
     assert "Apply the Approved label." in text
+
+
+def test_an_unbuilt_action_stops_cleanly_rather_than_crashing():
+    """A stage naming an action nobody wrote is "the tier doesn't reach here yet". It must be
+    loud — but as a stop, not a traceback, since the stages before it really did happen."""
+    definition = load_definitions(PROCESSES_DIR)[0]
+    world = RealWorld(definition, sink=DryRunMilestones(definition), services=Services())
+
+    with pytest.raises(NotYetImplemented, match="not built yet"):
+        world.act("craftmypdf.render", _cycle(), {})

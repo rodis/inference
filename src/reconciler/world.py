@@ -56,7 +56,16 @@ class RealWorld:
             config=self._config_for.get(stage, {}),
             services=self._services,
         )
-        return build_action(action)(context)
+        try:
+            run = build_action(action)
+        except KeyError as e:
+            # Same treatment as an unwired finder: a stage naming an action nobody wrote is
+            # "the tier does not reach here yet", not a crash. Loud either way — what must
+            # never happen is skipping it and looking like progress.
+            raise NotYetImplemented(
+                f"cycle {cycle.key} reached stage action {action!r}, which is not built yet"
+            ) from e
+        return run(context)
 
     def find(self, signal: dict, cycle: Cycle, since: int,
              milestones: dict[str, Milestone]) -> dict | None:

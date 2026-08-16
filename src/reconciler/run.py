@@ -22,6 +22,8 @@ import pathlib
 import sys
 from datetime import UTC, date, datetime
 
+from dotenv import find_dotenv, load_dotenv
+
 from reconciler.actions import Services
 from reconciler.adapters.gateway import DryRunMilestones, GatewayMilestones
 from reconciler.adapters.mail import (
@@ -222,6 +224,10 @@ def main(argv=None) -> int:
     runner.set_defaults(func=cmd_reconcile)
 
     args = parser.parse_args(argv)
+    # Same convention as the Quix entrypoint: walk upward from the CWD for a .env, so
+    # credentials live in `workers/.env` and never in the repo. In a deployed runner
+    # find_dotenv returns "" and the environment already carries the values.
+    load_dotenv(find_dotenv(usecwd=True))
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(levelname)s %(name)s: %(message)s")
     return args.func(args)
