@@ -32,7 +32,8 @@ from reconciler.adapters.mail import (
 )
 from reconciler.adapters.neon import NeonMilestones
 from reconciler.core import Cycle, Milestone, reconcile
-from reconciler.finder import EventFinder
+from reconciler.adapters.gmail import N8nGmailQuery
+from reconciler.finder import SignalFinder
 from reconciler.definition import GENESIS_STAGE, ProcessDefinition, load_definitions
 from reconciler.world import NotYetImplemented, RealWorld
 
@@ -155,13 +156,20 @@ def cmd_reconcile(args) -> int:
 def _finders(args) -> dict:
     """Finders by signal `source`.
 
-    Only `event` exists today — deterministic evidence, a fact someone stated. The
-    `classify` source (an LLM reading prose, for submitted-vs-processed) is not wired, so a
-    process reaching one fails loudly rather than looking like it is patiently waiting.
+    `gmail` asks n8n a question at decision time — every loop stays on this side, and an
+    unreachable n8n raises instead of looking like "nothing labelled yet".
+
+    `classify` (an LLM reading prose, for submitted-vs-processed) is not wired, so a process
+    reaching one fails loudly rather than appearing to wait patiently.
     """
-    if args.dry_run and not os.environ.get("NEON_DATABASE_URL"):
+    url = os.environ.get("GMAIL_QUERY_URL")
+    if not url:
         return {}
-    return {"event": EventFinder(_neon())}
+    return {"gmail": SignalFinder(N8nGmailQuery(
+        url=url,
+        token=os.environ["MAIL_RELAY_TOKEN"],
+        header=os.environ.get("MAIL_RELAY_HEADER", "X-Relay-Token"),
+    ))}
 
 
 def _advance(definition, cycle: Cycle, milestones: dict[str, Milestone], args, sink) -> int:

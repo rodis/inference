@@ -165,8 +165,16 @@ def test_both_gates_share_one_label_and_are_told_apart_by_subject():
     gate ①'s mail can never close gate ②."""
     invoice = load_definitions(PROCESSES_DIR)[0]
     gates = [s for s in invoice.stages if s.name in ("data_approved", "invoice_approved")]
-    assert len({g.signal["event"] for g in gates}) == 1
+    assert len({g.signal["label"] for g in gates}) == 1
     assert all(g.signal["correlate_on"] == "subject" for g in gates)
+
+
+def test_no_await_waits_to_be_told():
+    """Every loop belongs to the reconciler. A signal source that pushes (a polling connector
+    depositing events) makes "nothing is watching" indistinguishable from "not yet"."""
+    invoice = load_definitions(PROCESSES_DIR)[0]
+    sources = {s.signal["source"] for s in invoice.stages if s.kind == "await"}
+    assert sources <= {"gmail", "classify"}
 
 
 def test_payment_stages_follow_the_observed_order():

@@ -474,19 +474,55 @@ The general form, which is the useful part:
 > the process knows it.** Deriving it would move a process concern inside the observer to
 > re-discover something already recorded.
 
-### n8n holds credentials, never state
+### n8n answers questions; it never notices anything
 
-The tier uses n8n on both sides, and the distinction matters because ADR 0012 elsewhere
-*rejects* n8n (as a place to keep process state, via Wait nodes). What is adopted here is
-narrower and compatible:
+The tier uses n8n on both sides, and the distinction matters because this ADR elsewhere
+*rejects* n8n (as a place to keep process state, via Wait nodes). What is adopted is narrower:
 
 | Direction | Workflow | What it does |
 |---|---|---|
-| in | `gmail-labeled-invoice-approved` | a Gmail label becomes a raw event (ADR 0008 Stage 1) |
-| out | `mail-relay` | a composed message becomes an email |
+| in | `gmail-query` | answers a Gmail search, on demand |
+| out | `mail-relay` | sends a composed message |
 
-> **An outbound relay may authenticate and transmit. It may not compose, decide, or
-> interpret.** — the mirror of ADR 0008's connector rule.
+> **A relay may authenticate and transmit. It may not compose, decide, interpret, or
+> _notice_.** — the mirror of ADR 0008's connector rule, with one word added.
+
+**That word is the correction.** The first implementation used a *connector*: a polling n8n
+workflow that watched the label and POSTed `email_labeled_invoice_approved` into `raw_sensors`,
+which the reconciler then read from Neon. It was built, published, and archived the same day,
+because it split the tier's central loop in two.
+
+The reconciler's job is *look at the world, decide what is next*. For the approval gate, "look
+at the world" means "has the label been applied?" — a question **Gmail** answers. With a
+connector the reconciler never asked Gmail; it asked Neon, a cache of what n8n happened to
+notice. So "has it happened yet?" was being asked twice, on two cadences, by two components.
+
+The failure that makes this unacceptable rather than merely inelegant:
+
+> If n8n is down, or its Gmail Trigger drops a message — **a documented weakness of that
+> node** — the reconciler sees no approval event and concludes *"not approved yet."* It cannot
+> distinguish **"you haven't labelled it"** from **"nothing is watching."**
+
+That is the silent stall this entire tier is built to avoid, reintroduced at the one place it
+matters most. Asking synchronously turns it into an HTTP error: the run fails, and the runner
+alerts. A missing push is silent; a failed question is loud.
+
+Two smaller findings fell out:
+
+- **The 60-second polling bought nothing.** The reconciler acts daily, so the freshness was
+  discarded. A polling loop existed purely to produce latency nobody consumed.
+- **Mapping moved into Python and became testable.** The connector extracted an address from
+  mailparser's `from` object in a GUI expression; an earlier version of that same expression
+  shipped `[objectobject]` to 15 rows. `reconciler.adapters.gmail.normalise` now does it under
+  unit test.
+
+The cost, stated plainly: **labelled mail no longer lands in Neon as a raw event**, so it is not
+available to derive anything else from later. Accepted, because the evidence a decision used is
+embedded in the milestone that used it (`{"matched", "matched_at", "evidence"}`) — and because
+there is a real line here. **An Aware connector ingests facts the system wants to know about
+your life** (parking mail is a fact regardless of any process). **Process evidence is something
+one process needs at decision time**, and should not become a permanent raw signal merely to be
+readable.
 
 The reconciler builds every byte of subject, HTML and text, and decides *whether* to send;
 n8n moves bytes using a credential it already holds. No process state, no branching, no
@@ -586,7 +622,10 @@ tier up.
    ADR 0008's trip-wire 5, and it is the one that matters most.
 6. **Milestone events pollute the Aware timeline.** If process events need suppressing everywhere
    they are displayed, they may not belong on `raw_sensors` at all.
-7. **A `when:` guard appears in a definition.** Conditionals are the symptom that some stage's
+7. **A signal source starts pushing again.** Any n8n workflow with a trigger that deposits
+   evidence for a process to find later re-creates the split loop above, and with it the
+   inability to tell "nothing is watching" from "not yet".
+8. **A `when:` guard appears in a definition.** Conditionals are the symptom that some stage's
    absence is not being handled gracefully; the fix is almost always to let it produce nothing
    rather than to skip it. The Christmas-bonus invoice was the case that would have justified one,
    and it did not need it.

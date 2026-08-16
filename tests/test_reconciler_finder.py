@@ -6,7 +6,7 @@ open at once, that is not hypothetical.
 """
 
 from reconciler.core import Cycle, Milestone
-from reconciler.finder import EventFinder
+from reconciler.finder import NeonEvents, SignalFinder
 
 APPROVED = "email_labeled_invoice_approved"
 
@@ -22,6 +22,11 @@ class FakeSignals:
         self.asked.append((name, since))
         return [(ts, body) for ts, body in self.events
                 if body.get("name", name) == name and ts >= since]
+
+
+def _finder(source):
+    """A finder over recorded events — the matcher is shared with the Gmail source."""
+    return SignalFinder(NeonEvents(source))
 
 
 def _cycle(key="dh_invoice_2026_007"):
@@ -40,19 +45,18 @@ def _mail(ts, subject, **extra):
 
 def test_a_labelled_mail_satisfies_the_gate():
     signals = FakeSignals([_mail(2100, "Invoice 7 — please check and approve")])
-    finder = EventFinder(signals)
+    finder = _finder(signals)
 
     found = finder.find(
         {"event": APPROVED, "correlate_on": "subject"},
         _cycle(), 2000, _requested("Invoice 7 — please check and approve"))
 
-    assert found["matched"] == APPROVED
     assert found["matched_at"] == 2100
     assert found["evidence"]["label"] == "aware/invoice-approved"
 
 
 def test_nothing_labelled_means_still_waiting():
-    finder = EventFinder(FakeSignals([]))
+    finder = _finder(FakeSignals([]))
     found = finder.find({"event": APPROVED, "correlate_on": "subject"},
                         _cycle(), 2000, _requested("Invoice 7"))
     assert found is None
@@ -64,7 +68,7 @@ def test_another_cycles_approval_does_not_close_this_gate():
     """A monthly invoice and a Christmas bonus can be open at once. The bonus being approved
     must not advance the monthly one."""
     signals = FakeSignals([_mail(2100, "Invoice 12 — please check and approve")])
-    finder = EventFinder(signals)
+    finder = _finder(signals)
 
     found = finder.find({"event": APPROVED, "correlate_on": "subject"},
                         _cycle(), 2000, _requested("Invoice 7 — please check and approve"))
@@ -78,7 +82,7 @@ def test_the_right_mail_is_picked_out_of_several():
         _mail(2200, "Invoice 7 — please check and approve"),
         _mail(2300, "Invoice 13 — please check and approve"),
     ])
-    found = EventFinder(signals).find(
+    found = _finder(signals).find(
         {"event": APPROVED, "correlate_on": "subject"},
         _cycle(), 2000, _requested("Invoice 7 — please check and approve"))
 
@@ -88,7 +92,7 @@ def test_the_right_mail_is_picked_out_of_several():
 def test_without_something_to_correlate_against_nothing_matches():
     """Fail closed. Matching on "any approval at all" is exactly the bug this guards."""
     signals = FakeSignals([_mail(2100, "Invoice 7")])
-    found = EventFinder(signals).find(
+    found = _finder(signals).find(
         {"event": APPROVED, "correlate_on": "subject"}, _cycle(), 2000, {})
     assert found is None
 
@@ -101,7 +105,7 @@ def test_correlation_uses_the_most_recent_request():
     }
     signals = FakeSignals([_mail(3100, "Invoice 7 v1"), _mail(3200, "Invoice 7 v2")])
 
-    found = EventFinder(signals).find(
+    found = _finder(signals).find(
         {"event": APPROVED, "correlate_on": "subject"}, _cycle(), 3000, milestones)
 
     assert found["evidence"]["subject"] == "Invoice 7 v2"
@@ -114,7 +118,7 @@ def test_slack_lets_the_mail_we_sent_ourselves_match():
     out, not when the label was applied. A strict `>= since` would never match it."""
     signals = FakeSignals([_mail(1995, "Invoice 7")])   # 5s BEFORE the milestone
 
-    found = EventFinder(signals).find(
+    found = _finder(signals).find(
         {"event": APPROVED, "correlate_on": "subject", "slack_seconds": 900},
         _cycle(), 2000, _requested("Invoice 7"))
 
@@ -124,14 +128,14 @@ def test_slack_lets_the_mail_we_sent_ourselves_match():
 
 def test_slack_never_produces_a_negative_lower_bound():
     signals = FakeSignals([])
-    EventFinder(signals).find(
+    _finder(signals).find(
         {"event": APPROVED, "slack_seconds": 900}, _cycle(), 100, {})
     assert signals.asked == [(APPROVED, 0)]
 
 
 def test_evidence_older_than_the_window_is_not_matched():
     signals = FakeSignals([_mail(500, "Invoice 7")])
-    found = EventFinder(signals).find(
+    found = _finder(signals).find(
         {"event": APPROVED, "correlate_on": "subject", "slack_seconds": 60},
         _cycle(), 2000, _requested("Invoice 7"))
     assert found is None
@@ -144,7 +148,7 @@ def test_where_filters_on_equality():
         _mail(2100, "s", from_domain="spam.example"),
         _mail(2200, "s", from_domain="dreamhost.com"),
     ])
-    found = EventFinder(signals).find(
+    found = _finder(signals).find(
         {"event": APPROVED, "where": {"from_domain": "dreamhost.com"}}, _cycle(), 2000, {})
     assert found["matched_at"] == 2200
 
@@ -155,7 +159,7 @@ def test_where_and_correlation_both_apply():
         _mail(2200, "Invoice 9", from_domain="dreamhost.com"),
         _mail(2300, "Invoice 7", from_domain="dreamhost.com"),
     ])
-    found = EventFinder(signals).find(
+    found = _finder(signals).find(
         {"event": APPROVED, "correlate_on": "subject",
          "where": {"from_domain": "dreamhost.com"}},
         _cycle(), 2000, _requested("Invoice 7"))
@@ -174,7 +178,7 @@ def test_a_satisfied_await_is_stamped_with_the_evidence_time():
     submitted_at = 1784301420          # 2026-07-15 15:17
     noticed_at = submitted_at + 60_000  # the run that noticed, next day
 
-    found = EventFinder(FakeSignals([(submitted_at, {"subject": "Invoice 7"})])).find(
+    found = _finder(FakeSignals([(submitted_at, {"subject": "Invoice 7"})])).find(
         {"event": APPROVED, "correlate_on": "subject"},
         _cycle(), submitted_at - 100, _requested("Invoice 7"))
 
