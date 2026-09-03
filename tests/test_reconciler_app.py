@@ -306,6 +306,39 @@ def _minutes(field: str) -> set[int]:
     return fired
 
 
+def test_the_cron_workflows_use_the_plural_schedules_field():
+    """`schedules` is a LIST in Argo Workflows v4; the singular `schedule:` was removed.
+
+    Nothing else in this repo can catch that. We install the CRDs minified
+    (`crds.full: false` in deploy/workflows/.../values.yml, because the full ones only install
+    via a pre-install hook Job that is the wrong shape under Argo CD), and minified CRDs carry
+    `x-kubernetes-preserve-unknown-fields` — so the API server accepts a field that no longer
+    exists, `kubectl get cronworkflow` shows a healthy object with the schedule right there in
+    the spec, and the ONLY signal is a controller log line: "cron workflow must have at least
+    one schedule". The crons simply never fire.
+
+    That shipped on 2026-09-03 and neither cron fired once. It cost a full deploy cycle to find
+    and was invisible to every check that existed, which is the whole argument for this test:
+    it is the validation the minified CRDs gave up.
+    """
+    values = yaml.safe_load(RECONCILER_VALUES.read_text())
+    crons = [o for o in values["extraObjects"] if o["kind"] == "CronWorkflow"]
+    assert crons, "no CronWorkflows found — has the schedule moved?"
+
+    for cron in crons:
+        spec = cron["spec"]
+        name = cron["metadata"]["name"]
+        assert "schedule" not in spec, (
+            f"CronWorkflow {name!r} uses the singular `schedule:`, removed in Argo Workflows "
+            f"v4. The API will accept it and the controller will never fire it. Use "
+            f"`schedules:` with a list.")
+        assert isinstance(spec.get("schedules"), list) and spec["schedules"], (
+            f"CronWorkflow {name!r} must set `schedules:` to a non-empty list")
+        for entry in spec["schedules"]:
+            assert len(entry.split()) == 5, (
+                f"CronWorkflow {name!r} schedule {entry!r} is not a 5-field cron expression")
+
+
 def test_the_two_runners_never_do_the_same_job_in_the_same_minute():
     """Two runners performing the same act at the same instant is a duplicate-action bug.
 
@@ -332,7 +365,8 @@ def test_the_two_runners_never_do_the_same_job_in_the_same_minute():
     argo: dict[str, list[tuple[str, str]]] = {}
     for name, cron in _cron_workflows().items():
         act = templates[cron["spec"]["workflowSpec"]["entrypoint"]]
-        argo.setdefault(act, []).append((name, cron["spec"]["schedule"]))
+        for schedule in cron["spec"]["schedules"]:
+            argo.setdefault(act, []).append((name, schedule))
 
     for deployment in yaml.safe_load(PREFECT_YAML.read_text())["deployments"]:
         func = deployment["entrypoint"].partition(":")[2]
