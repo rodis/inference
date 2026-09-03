@@ -157,15 +157,26 @@ def advance_flow(process: str, cycle_key: str | None = None, dry_run: bool = Fal
 
 
 @flow(name="open-then-advance")
-def open_and_advance_flow(process: str, **kwargs) -> dict:
+def open_and_advance_flow(process: str, seq: int | None = None, period: dict | None = None,
+                          year: int | None = None, user: str | None = None,
+                          use_previous_month: bool = True, dry_run: bool = False) -> dict:
     """Convenience for a manual run: open a cycle and immediately walk it.
 
     Not scheduled. It exists because opening a cycle and then waiting an hour to see whether
     the approval mail rendered correctly is a poor feedback loop for the *first* cycle of a new
     process — which is exactly when you most want to look.
+
+    **Every parameter is spelled out, and `**kwargs` is banned here.** Prefect derives a
+    deployment's parameter schema from the signature, and it renders `**kwargs` as a property
+    named `kwargs` that is *required* — so the first attempt to run this returned
+    `Validation failed. Failure reason: 'kwargs' is a required property` and no run was created
+    at all. The deployment was unusable from the moment it was created (found 2026-09-03, by
+    trying to open August's cycle with it). `tests/test_reconciler_app.py` now fails on any
+    deployed entrypoint that takes `**kwargs`.
     """
-    key = open_cycle_flow(process, **kwargs)
-    return advance_flow(process, cycle_key=key, dry_run=kwargs.get("dry_run", False))
+    key = open_cycle_flow(process, seq=seq, period=period, year=year, user=user,
+                          use_previous_month=use_previous_month, dry_run=dry_run)
+    return advance_flow(process, cycle_key=key, dry_run=dry_run)
 
 
 if __name__ == "__main__":

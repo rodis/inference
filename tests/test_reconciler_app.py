@@ -113,6 +113,30 @@ def test_the_deployments_point_at_flows_that_exist():
         assert func in names, f"{deployment['name']} points at missing {path}:{func}"
 
 
+def test_no_deployed_entrypoint_takes_kwargs():
+    """Prefect builds a deployment's parameter schema from the flow signature, and renders
+    `**kwargs` as a property named `kwargs` that is REQUIRED. The deployment is then
+    unrunnable: every attempt returns `'kwargs' is a required property` and no run is created.
+
+    `open_and_advance_flow` shipped that way and was broken from creation until someone tried
+    to use it — which is the worst possible discovery time for the deployment whose whole job
+    is ad-hoc invoices. Parsed rather than imported, since CI has no prefect.
+    """
+    import ast
+
+    deployments = yaml.safe_load(PREFECT_YAML.read_text())["deployments"]
+    root = PREFECT_YAML.parent
+
+    for deployment in deployments:
+        path, _, func = deployment["entrypoint"].partition(":")
+        tree = ast.parse((root / path).read_text())
+        fn = next(n for n in ast.walk(tree)
+                  if isinstance(n, ast.FunctionDef) and n.name == func)
+        assert fn.args.kwarg is None, (
+            f"{deployment['name']} -> {func} takes **{fn.args.kwarg.arg}; Prefect would make "
+            f"it a required parameter and the deployment could never run")
+
+
 def test_the_wiring_imports_with_no_third_party_packages_installed():
     """CI installs with `pip --no-deps`, so every module a test reaches must import against a
     bare interpreter. `app.py` pulls in every adapter, and `adapters/neon.py` had a
