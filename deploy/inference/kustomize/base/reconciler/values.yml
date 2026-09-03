@@ -125,7 +125,16 @@ extraObjects:
       # person applying a label, a bank sending a notification), and a pure function of
       # recorded events loses nothing by being asked less often. Free compute changed the
       # ceiling, not the need.
-      schedule: "17 * * * *"
+      #
+      # `schedules`, PLURAL AND A LIST. Argo Workflows v4 removed the singular `schedule:`, and
+      # shipping it costs a full deploy cycle to discover: the minified CRDs
+      # (`crds.full: false`) use x-kubernetes-preserve-unknown-fields, so the API server accepts
+      # the dead field without a murmur and only the controller objects, at run time, with
+      # "cron workflow must have at least one schedule" — while `kubectl get cronworkflow` looks
+      # perfectly healthy and simply never fires. Deployed that way 2026-09-03; neither cron
+      # fired once.
+      schedules:
+        - "17 * * * *"
       timezone: Europe/Zurich
       # A second run while one is in flight could only re-derive the same frontier, but it
       # could also send the same mail twice from two different processes' idea of "not sent
@@ -161,7 +170,10 @@ extraObjects:
       # It matters for the board specifically: the dashboard tick emits its own close
       # immediately, so this is the REPAIR path — a label removed in Gmail, or a dropped Gmail
       # Trigger. An hour of a finished task still sitting on the board was the visible symptom.
-      schedule: "*/15 * * * *"
+      #
+      # Plural and a list — see `advance-cycles` above for what the singular form costs.
+      schedules:
+        - "*/15 * * * *"
       timezone: Europe/Zurich
       concurrencyPolicy: Forbid
       startingDeadlineSeconds: 300

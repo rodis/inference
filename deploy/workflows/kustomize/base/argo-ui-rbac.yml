@@ -6,12 +6,29 @@
 # mode, where anyone reaching the ingress would get full workflow control — which in this
 # namespace means arbitrary pod creation next to the reconciler's credentials.
 #
-# TO LOG IN, get the token and paste it into the UI's login box (it persists in the browser,
-# so this is once per browser, not a login flow):
+# TO LOG IN — run this one line and paste the clipboard verbatim into the UI's login box. It is
+# kept in a cookie, so it is once per browser rather than a login flow:
 #
-#     kubectl -n inference get secret argo-ui-token -o jsonpath='{.data.token}' | base64 -d
+#     printf 'Bearer %s' "$(kubectl -n inference get secret argo-ui-token \
+#         -o jsonpath='{.data.token}' | base64 -d)" | pbcopy
 #
-# then enter it as `Bearer <token>`.
+# Deliberately one command, because BOTH halves are required and each fails in a way that is
+# indistinguishable from a bad credential — the UI simply bounces back to /login:
+#
+#   - **`Bearer ` prefix.** The login page stores what you type VERBATIM
+#     (`document.cookie = "authorization=" + input`), so it never adds one for you.
+#   - **`base64 -d`.** Everything in a Secret's `.data` is base64 by definition, and the
+#     blob is NOT accepted — `Bearer <base64>` is 401, `Bearer <decoded JWT>` is 200.
+#   - Do NOT url-encode the space. `Bearer%20<jwt>` is 401; a literal space is correct.
+#
+# THE TRAP THAT MAKES THIS HARD TO DEBUG, and the reason it is written down: the two endpoints
+# you would naturally reach for to test a token BOTH RETURN 200 WHEN UNAUTHENTICATED.
+# `/api/v1/userinfo` answers `{}` and `/api/v1/info` answers normally, so every broken variant
+# looks like it works if you check the status code. Verify against an endpoint that actually
+# authorises, and read the body:
+#
+#     curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: $(pbpaste)" \
+#         https://argo.prod.rods.me/api/v1/workflows/inference        # 200 = the token is good
 ---
 apiVersion: v1
 kind: ServiceAccount
