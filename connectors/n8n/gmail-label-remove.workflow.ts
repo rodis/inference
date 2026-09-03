@@ -39,6 +39,20 @@
  * Auth: the same `Aware mail relay token` Header Auth credential as the mail relay and the
  * query relay — one secret for every direction.
  *
+ * Workflow ID: WT077ZcgeAHRiEB5  (pass to update_workflow when editing this file)
+ * Deployed: created and PUBLISHED 2026-09-03, then tested end to end without changing a single
+ * label — by asking it to remove `aware/parking` from a message verifiably lacking it. Every
+ * node ran (auth, label listing, the name->id filter, the modify call); the message's labels
+ * were identical afterwards. Auth rejects a missing and a wrong token with 403.
+ *
+ * ⚠️ CREDENTIAL TRAP, hit again here. `newCredential('Aware mail relay token')` resolves by
+ * credential **TYPE**, not by name: on creation n8n bound `Header Auth account` instead, and
+ * the relay would have accepted the wrong shared secret. Rebind by ID after any create or
+ * update — `cBeDjEhQ1Nx2G1oX` is `Aware mail relay token`, the same one the query relay uses:
+ *
+ *     PUT /api/v1/workflows/WT077ZcgeAHRiEB5   with nodes[Receive Request].credentials
+ *         .httpHeaderAuth = {id: 'cBeDjEhQ1Nx2G1oX', name: 'Aware mail relay token'}
+ *
  * Deploy:  validate_workflow -> create_workflow_from_code -> publish_workflow
  *          (this repo copy is the source of truth; edit here, then update_workflow)
  */
@@ -86,22 +100,27 @@ const listLabels = node({
 // Name -> id. A Filter, not a Code node (see the header).
 const findTheLabel = node({
   type: 'n8n-nodes-base.filter',
-  version: 2.2,
+  version: 2.3,
   config: {
     name: 'Find The Label',
     position: [440, 0],
-    // If the label does not exist the filter passes nothing, the Respond node returns an empty
-    // array, and the caller sees a 200 with no modification. That is the right answer to
-    // "remove a label that isn't there" — the desired state already holds.
+    // Without this, a label name that matches nothing passes zero items, every downstream node
+    // is skipped, Respond never fires and the CALLER HANGS until its timeout. With it, the
+    // chain reaches the Gmail node and fails fast and loudly instead — which is the right
+    // treatment for what can only be a setup error (the label does not exist at all). Note the
+    // ordinary case is different and needs no handling: removing a label from a message that
+    // does not carry it is a Gmail no-op, verified against a real message on deploy day.
     alwaysOutputData: true,
     parameters: {
       conditions: {
-        options: { caseSensitive: true, version: 2 },
+        // The v2.3 shape exactly, from get_node_types: caseSensitive + typeValidation, and
+        // no `version` key (that one belongs to the If node's older schema).
+        options: { caseSensitive: true, typeValidation: 'strict' },
         combinator: 'and',
         conditions: [
           {
-            operator: { type: 'string', operation: 'equals' },
             leftValue: expr('{{ $json.name }}'),
+            operator: { type: 'string', operation: 'equals' },
             rightValue: expr("{{ $('Receive Request').item.json.body.label }}"),
           },
         ],
@@ -124,8 +143,11 @@ const removeLabel = node({
       // Reached back through the trigger, because by this point the item in hand is a LABEL,
       // not the request — the message id only exists on the webhook's own item.
       messageId: expr("{{ $('Receive Request').item.json.body.message_id }}"),
-      // The id resolved by the filter above, as the array the API expects.
-      labelIds: expr('{{ [$json.id] }}'),
+      // The id resolved by the filter above. An ARRAY containing an expression, not an
+      // expression that evaluates to an array: `labelIds` is declared `string[]`, and
+      // validate_workflow rejects the latter with "expected array, got string". n8n resolves
+      // expressions inside array elements, so this is both type-correct and right at runtime.
+      labelIds: [expr('{{ $json.id }}')],
     },
     credentials: { gmailOAuth2: newCredential('Gmail account') },
   },

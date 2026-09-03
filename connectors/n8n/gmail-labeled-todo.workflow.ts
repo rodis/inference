@@ -22,6 +22,10 @@
  * Closing is NOT here and cannot be: Gmail reports a label being *added* and never one being
  * removed, so no trigger can see a task finish. That is the sweep's job.
  *
+ * Workflow ID: zpxESD7h2Aovl19i  (pass to update_workflow when editing this file)
+ * Deployed: created and PUBLISHED 2026-09-03. Polls every minute; with no `aware/todo` label in
+ * Gmail the search simply matches nothing, so it sat harmlessly until the label existed.
+ *
  * Deploy:  validate_workflow -> create_workflow_from_code -> publish_workflow
  *          (this repo copy is the source of truth; edit here, then update_workflow)
  */
@@ -48,7 +52,6 @@ const watchLabelledMail = trigger({
       // readStatus MUST be 'both'. The default 'unread' silently drops anything read before the
       // next poll — and a mail you are labelling as a task is one you have just read.
       simple: false,
-      maxResults: 10,
       filters: {
         q: 'label:' + LABEL,
         readStatus: 'both',

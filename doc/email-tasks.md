@@ -98,6 +98,33 @@ so `src/reconciler` is not importable there — the same build boundary that mad
 duplication drifting; it reads `dashboard/app.py` and the connector as text and AST (neither can
 be imported in CI) and compares them against `reconciler.tasks`.
 
+## What is live, and what is left
+
+Deployed to n8n 2026-09-03 and **published**:
+
+| workflow | id | tested |
+|---|---|---|
+| `Connector: gmail — labelled todo mail` | `zpxESD7h2Aovl19i` | polls every minute; matches nothing until the label exists |
+| `Relay: gmail label remove` | `WT077ZcgeAHRiEB5` | end to end, without changing a label (see below) |
+
+The relay was tested by asking it to remove `aware/parking` from a message that verifiably did
+not carry it: every node ran — header auth, label listing, the name→id filter, the Gmail modify
+call — and the message's labels were byte-identical afterwards. A missing and a wrong token both
+returned 403.
+
+⚠️ **The credential trap bit again.** `newCredential('Aware mail relay token')` resolves by
+credential *type*, so n8n bound `Header Auth account` to the relay's webhook instead, and it
+would have accepted the wrong shared secret. Rebind by ID (`cBeDjEhQ1Nx2G1oX`) after any create
+or update — the connector files record the exact call.
+
+Still needed before a task can appear:
+
+1. **Create the `aware/todo` label in Gmail** and apply it to something. Only you can.
+2. **Three Doppler keys** on `neon-credentials-for-dashboard`, or the tick 503s (reading works
+   regardless): `GMAIL_LABEL_URL` (the relay webhook), `MAIL_RELAY_TOKEN`, `VECTOR_BASE_URL`.
+3. **`GMAIL_LABEL_URL` in the reconciler's Doppler config** is *not* needed — the sweep only
+   reads Gmail and emits events; it never removes a label.
+
 ## Files
 
 ```
