@@ -1,6 +1,7 @@
-import { Car, Route, LogIn, LogOut, DoorOpen, KeyRound, Smartphone, CreditCard, MapPin, Circle, Fuel, Coffee, Croissant, PawPrint, House, Store, Utensils } from "lucide-react";
+import { Car, Route, LogIn, LogOut, DoorOpen, KeyRound, Smartphone, CreditCard, MapPin, Circle, Fuel, Coffee, Croissant, PawPrint, House, Store, Utensils, Workflow } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { AwareEvent } from "./types";
+import processGraph from "../../processes.json";
 
 export const VERBS: Record<string, string> = {
   car_trip: "Car trip", got_into_the_car: "Got into the car", got_out_the_car: "Got out of the car",
@@ -103,6 +104,28 @@ export const LANE_BLURB: Record<string, string> = {
   Signals: "raw wire readings",
 };
 
+/** --- process milestones (ADR 0012's process tier) -----------------------------------------
+ *  A milestone is an ordinary raw row on the timeline — the reconciler POSTs it to
+ *  `/sensors/<app>` like any other producer — so it needs a title and a glyph here rather
+ *  than special handling anywhere else.
+ *
+ *  **Driven by the generated contract, not by a hand-kept list.** `processes.json` is emitted
+ *  from `processes/*.yml` (scripts/emit_process_graph.py), so the process names arrive as data
+ *  and the next process is labelled and coloured without this file being touched. Writing
+ *  `dreamhost_invoice` in here would be the same mistake as naming an engine in framework
+ *  code — and it would silently leave process #2 as anonymous grey dots. */
+const PROCESS_NAMES: string[] = (processGraph.processes ?? []).map((p) => p.name);
+
+/** The process a milestone belongs to, or null for everything else. Longest match first, so
+ *  one process name that prefixes another cannot shadow it. */
+export const processOf = (name: string): string | null =>
+  [...PROCESS_NAMES].sort((a, b) => b.length - a.length)
+    .find((p) => name.startsWith(p + "_")) ?? null;
+
+/** Muted slate on purpose. A milestone is bookkeeping that happens to be legible — it should
+ *  be findable on the day without competing with the events the day was actually made of. */
+const PROCESS_CAT = { c: "#6b7ba8", Icon: Workflow };
+
 /** Category colour + icon for an event type. The `entered_<slug>` / `left_<slug>` prefixes are
  *  kept for HISTORY. Nothing produces them any more — the OwnTracks lane that minted them and the
  *  geofence engine that would have were both removed 2026-08-01 — but the raw events are retained
@@ -113,6 +136,7 @@ export const catOf = (name: string): { c: string; Icon: LucideIcon } => {
   if (CAT[name]) return CAT[name];
   if (name.startsWith("entered_")) return { c: "#2f9e8f", Icon: MapPin };
   if (name.startsWith("left_")) return { c: "#59b0a4", Icon: MapPin };
+  if (processOf(name)) return PROCESS_CAT;
   return { c: "#9298a6", Icon: Circle };
 };
 
@@ -209,11 +233,17 @@ export const routeOf = (e: AwareEvent): string | null => {
   return null;
 };
 
-export const labelOf = (e: AwareEvent) =>
-  tripLabel(e) ??
-  (e.message.place?.label
-    ? e.message.place.label
-    : e.event_class === "derived" ? VERBS[e.name] || titleize(e.name) : RAW_LABEL[e.name] || titleize(e.name));
+export const labelOf = (e: AwareEvent) => {
+  // A milestone titles itself by its STAGE — the process is context the day already supplies
+  // (and the Processes board states outright), so "Dreamhost invoice total computed" would
+  // spend the whole title slot restating it.
+  const proc = processOf(e.name);
+  if (proc) return titleize(e.name.slice(proc.length + 1));
+  return tripLabel(e) ??
+    (e.message.place?.label
+      ? e.message.place.label
+      : e.event_class === "derived" ? VERBS[e.name] || titleize(e.name) : RAW_LABEL[e.name] || titleize(e.name));
+};
 
 /** A journey the user's own car corroborated: the `vehicle` capability holds at least one car
  *  boundary that landed inside the span (ADR 0010). Drawn as a small car glyph beside the title.
@@ -227,7 +257,14 @@ export const labelOf = (e: AwareEvent) =>
  *  reads "Drive", it just doesn't claim the car. Keyed on the capability rather than on
  *  `name === "trip"` so the next vehicle-carrying event inherits the glyph for free. */
 export const carCorroborated = (e: AwareEvent) => (e.message.vehicle?.evidence?.length ?? 0) > 0;
-export const typeLabel = (n: string) => VERBS[n] || RAW_LABEL[n] || titleize(n);
+export const typeLabel = (n: string) => {
+  // Unlike labelOf, this one KEEPS the process name: the Levels board lists bare types with no
+  // day around them, and eleven rows called "Total computed" / "Manual lines" would be
+  // ambiguous the moment a second process exists.
+  const proc = processOf(n);
+  if (proc) return `${titleize(proc)}: ${titleize(n.slice(proc.length + 1)).toLowerCase()}`;
+  return VERBS[n] || RAW_LABEL[n] || titleize(n);
+};
 
 /** An event that knows *where* it happened but not *what* that place is: the `place` capability
  *  is there (centroid + spread — geometry, always known) but nothing in the place registry

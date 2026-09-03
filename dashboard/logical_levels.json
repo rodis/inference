@@ -1,7 +1,13 @@
 {
-  "_comment": "First-run level config for a user who has never saved one (dashboard/app.py::_seed). NOT an overlay — once a dashboard_prefs row exists it is the whole truth, so an override the user clears stays cleared. `level` is SPARSE: it lists only the event types whose lane differs from the one their derivation depth implies; every other type gets its lane from depth at render time (web/src/view.ts::defaultLevelOf). `hidden` lists types kept off the timeline at every altitude. credit_card_payment is the canonical override — D1, zero inference, and still one of the most interesting things in a day.",
+  "_comment": "First-run level config for a user who has never saved one (dashboard/app.py::_seed). NOT an overlay: once a dashboard_prefs row exists it is the whole truth, so an override the user clears stays cleared -- and so these entries do NOT reach a user who has already saved a config; they set theirs on the Levels board. `level` is SPARSE: it lists only the event types whose lane differs from the one their derivation depth implies; every other type gets its lane from depth at render time (web/src/view.ts::defaultLevelOf). `hidden` lists types kept off the timeline at every altitude. credit_card_payment is the canonical override -- D1, zero inference, and still one of the most interesting things in a day. The process milestones (ADR 0012) are the same argument: they are raw rows with no lineage, so depth alone buries all eleven in Signals, and six of them are things that actually happened to you -- you were asked to approve, you approved, a PDF is waiting to be submitted, the money moved. The other five are bookkeeping (line arithmetic, the totals, the second approval echoing an action you just took) and are left where depth puts them, which is the whole point of having a ladder rather than a hidden list. The four invoice entries at L1 here are NOT guesses: they are what the one real user had already chosen on the Levels board by 2026-09-03, read back out of dashboard_prefs. The two payment ones are added because they had simply not happened yet when that choice was made.",
   "level": {
-    "credit_card_payment": 1
+    "credit_card_payment": 1,
+    "dreamhost_invoice_approval_requested": 1,
+    "dreamhost_invoice_data_approved": 1,
+    "dreamhost_invoice_invoice_generated": 1,
+    "dreamhost_invoice_invoice_emailed": 1,
+    "dreamhost_invoice_payment_submitted": 1,
+    "dreamhost_invoice_payment_processed": 1
   },
   "hidden": []
 }

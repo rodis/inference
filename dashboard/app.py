@@ -6,6 +6,8 @@ Serves the built single-page app (``web/dist``) and a handful of JSON endpoints:
   GET  /api/events?user_id=…&days=N — one user's events over a trailing N-day window
   GET  /api/preferences?user_id=… — that user's level config (their row, else the seed)
   PUT  /api/preferences?user_id=… — persist that user's config (the one write path)
+  GET  /api/processes           — process definitions as graphs (ADR 0012's process tier)
+  GET  /api/processes/{name}/cycles?user_id=… — that process's recent cycles + milestones
   GET  /api/stream?user_id=…    — SSE seam for the (deferred) live view; stubbed for now
   GET  /healthz                 — liveness
 
@@ -36,6 +38,7 @@ log = logging.getLogger("aware-dashboard")
 HERE = Path(__file__).parent
 DIST = HERE / "web" / "dist"          # Vite build output (absent in local dev — Vite serves it)
 SEED_PATH = HERE / "logical_levels.json"
+PROCESSES_PATH = HERE / "processes.json"   # generated; see scripts/emit_process_graph.py
 
 # one row per event, same shape the page expects (id, name, event_class, source_app,
 # occurred_epoch, message) — aggregated server-side into a single JSON array, scoped
@@ -179,6 +182,64 @@ SELECT json_build_object(
               FROM (SELECT * FROM merchants ORDER BY total DESC LIMIT 8) m), '[]'::json)
 )
 """
+
+
+# --- the process tier (ADR 0012) -----------------------------------------------
+# A process is `processes/*.yml` + a reconciler that advances it; its *state* is the set of
+# milestones recorded so far, and nothing else. So this route needs no reconciler and no
+# scheduler view — it reads the same `events` table everything else does, and the frontier
+# ("which stage is it parked at?") is derived in the browser by intersecting these rows with
+# the stage list from `processes.json`. That derivation living on the client is not laziness:
+# it is the same pure function the reconciler itself applies, so the page cannot disagree
+# with the runner about where a cycle stands.
+#
+# `source_app = 'process'` is the discriminator rather than a `name LIKE 'dreamhost_%'`
+# prefix match — the reconciler stamps it on every milestone, so it stays correct for
+# process #2 without this file changing. The per-cycle grouping key is `cycle_key`, which
+# every milestone carries (verified across all 11 invoice stages).
+#
+# No trailing-window bound here, unlike EVENTS_SQL: a monthly process has ~11 rows a cycle,
+# and the whole point of the view is the long tail — "how did the last nine invoices go?".
+# `limit` bounds it by CYCLE instead, which is the unit a reader actually asks for.
+PROCESS_CYCLES_SQL = """
+WITH ms AS (
+  SELECT e.message->>'cycle_key' AS cycle_key,
+         e.name,
+         extract(epoch from e.occurred_at) AS at,
+         e.message
+  FROM events e
+  WHERE e.source_app = 'process'
+    AND e.user_id = %(user_id)s
+    AND e.message->>'process' = %(process)s
+    AND e.message->>'cycle_key' IS NOT NULL
+),
+cycles AS (
+  SELECT cycle_key,
+         min(at) AS opened_epoch,
+         max(at) AS last_epoch,
+         count(*)::int AS milestone_count,
+         json_agg(json_build_object('name', name, 'epoch', at, 'message', message)
+                  ORDER BY at) AS milestones
+  FROM ms
+  GROUP BY cycle_key
+  ORDER BY min(at) DESC
+  LIMIT %(limit)s
+)
+SELECT coalesce(json_agg(c ORDER BY c.opened_epoch DESC), '[]'::json) FROM cycles c
+"""
+
+
+def _processes() -> dict:
+    """The process graph, generated from `processes/*.yml` by scripts/emit_process_graph.py.
+
+    Read fresh rather than cached at import: the file is baked into the image, so re-reading
+    costs one small stat per request and removes any chance of a stale in-process copy after
+    a redeploy. Missing file is not fatal — the tier is optional, and a dashboard that 404s
+    one board is better than one that will not start.
+    """
+    if not PROCESSES_PATH.exists():
+        return {"processes": []}
+    return json.loads(PROCESSES_PATH.read_text())
 
 
 def _db_url() -> str:
@@ -330,6 +391,32 @@ def money_spend(user_id: str = Query(...), days: int = Query(7, ge=1, le=90)):
     payment×stay containment join assigns (falling back to the raw merchant string)."""
     with app.state.pool.connection() as conn, conn.cursor() as cur:
         cur.execute(SPEND_SQL, {"user_id": user_id, "days": days})
+        return JSONResponse(cur.fetchone()[0])
+
+
+@app.get("/api/processes")
+def processes():
+    """The process definitions as a graph — stages, kinds, dependencies, how cycles open.
+
+    Static data (the definition *is* the graph, ADR 0012), so no user scoping and no DB.
+    """
+    return JSONResponse(_processes())
+
+
+@app.get("/api/processes/{name}/cycles")
+def process_cycles(name: str, user_id: str = Query(...), limit: int = Query(12, ge=1, le=60)):
+    """One process's recent cycles, each with its recorded milestones oldest-first.
+
+    404s on a process this dashboard has no definition for, rather than returning an empty
+    list — "no such process" and "a process with no cycles yet" are different answers, and
+    conflating them would make a stale `processes.json` look like a quiet month.
+    """
+    known = {p["name"] for p in _processes()["processes"]}
+    if name not in known:
+        raise HTTPException(404, f"no process definition named {name!r}")
+    with app.state.pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(PROCESS_CYCLES_SQL,
+                    {"user_id": user_id, "process": name, "limit": limit})
         return JSONResponse(cur.fetchone()[0])
 
 

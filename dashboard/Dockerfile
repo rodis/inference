@@ -9,6 +9,11 @@ COPY web/package.json web/package-lock.json* ./
 # npm ci when a lockfile is present (reproducible); fall back to install otherwise.
 RUN npm ci || npm install
 COPY web/ .
+# The generated process graph (scripts/emit_process_graph.py). Copied ABOVE /web on purpose:
+# src/view.ts imports `../../processes.json` to label process milestones, which resolves to
+# /processes.json from /web/src. Without this the bundle build fails outright — and it fails
+# only in Docker, since a local checkout has the whole repo on disk.
+COPY processes.json /processes.json
 RUN npm run build          # → /web/dist
 
 # --- stage 2: serve with FastAPI -----------------------------------------------
@@ -16,7 +21,8 @@ FROM python:3.12-slim
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY app.py logical_levels.json ./
+# processes.json is read by /api/processes (generated; see scripts/emit_process_graph.py).
+COPY app.py logical_levels.json processes.json ./
 COPY --from=web /web/dist ./web/dist
 
 # Run as a non-root user — the deploy chart enforces runAsNonRoot + a read-only root

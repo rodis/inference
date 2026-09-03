@@ -42,6 +42,17 @@ jobs:
           git diff --exit-code contracts/ \
             || { echo "::error::contracts/ is stale — run 'python scripts/emit_event_schema.py' and commit"; exit 1; }
 
+      - name: Process graph is up to date
+        # dashboard/processes.json carries `processes/*.yml` across a build boundary: the
+        # dashboard image is built with `dashboard/` as its Docker context, so it cannot import
+        # src/reconciler. Same staleness risk as the contract above, same guard — a stage
+        # renamed in the YAML and not regenerated here would leave the board rendering a step
+        # no milestone can ever satisfy, which looks exactly like a stalled process.
+        run: |
+          python scripts/emit_process_graph.py
+          git diff --exit-code dashboard/processes.json \
+            || { echo "::error::dashboard/processes.json is stale — run 'python scripts/emit_process_graph.py' and commit"; exit 1; }
+
   web:
     runs-on: ubuntu-latest
     permissions:

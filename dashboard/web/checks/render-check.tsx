@@ -29,8 +29,12 @@ import DayTimeline from "../src/components/DayTimeline";
 import EventBody from "../src/components/EventBody";
 import EventModal from "../src/components/EventModal";
 import LevelsDashboard from "../src/dashboards/levels/LevelsDashboard";
+import ProcessesDashboard from "../src/dashboards/processes/ProcessesDashboard";
+import { chipsOf, cronText, statusOf } from "../src/dashboards/processes/process";
+import type { Cycle, ProcessDef } from "../src/dashboards/processes/process";
+import processGraph from "../../processes.json";
 import TimelineDashboard from "../src/dashboards/timeline/TimelineDashboard";
-import { carCorroborated, catOf, dayLayout, defaultLevelOf, hostOf, inkOn, isEverydayPlace, isSpan, labelOf, laneCount, laneNames, laneOf, placeUnknown, prepare, routeOf, supersededIds } from "../src/view";
+import { carCorroborated, catOf, dayLayout, processOf, defaultLevelOf, hostOf, inkOn, isEverydayPlace, isSpan, labelOf, laneCount, laneNames, laneOf, placeUnknown, prepare, routeOf, supersededIds, typeLabel } from "../src/view";
 import type { AwareEvent } from "../src/types";
 
 // Both dashboards use useLayoutEffect (scroll anchoring, focus-after-move) — correct on the
@@ -554,6 +558,125 @@ check("no lane labels events as inferred/signal", !dt.includes("ev-kind") && !dt
   dt.includes("ev-kind") ? "ev-kind still rendered" : ">inferred< still rendered");
 // A truncated title must still be readable without opening the modal.
 check("titles carry a hover tooltip", dt.includes('title="Konditorei von Rotz Baar"'));
+
+console.log("\n— the process tier (ADR 0012) —");
+{
+  // The REAL generated graph, not a fixture: `processes.json` is the contract the board reads,
+  // so a renamed stage or a changed `after` breaks these checks rather than the deployed page.
+  const invoice = (processGraph.processes as ProcessDef[])
+    .find((p) => p.name === "dreamhost_invoice")!;
+  check("the generated graph carries the invoice process", !!invoice);
+  check("the genesis milestone is prepended as a stage", invoice.stages[0].name === "cycle_opened");
+
+  const ms = (stage: string, epoch: number, message: Record<string, unknown> = {}) =>
+    ({ name: `dreamhost_invoice_${stage}`, epoch, message });
+  const cycle = (key: string, milestones: ReturnType<typeof ms>[]): Cycle => ({
+    cycle_key: key, opened_epoch: milestones[0]?.epoch ?? 0,
+    last_epoch: milestones[milestones.length - 1]?.epoch ?? 0,
+    milestone_count: milestones.length, milestones,
+  });
+
+  // Cycle 009 as it actually stands: eight milestones, parked at gate ②.
+  const live = statusOf(invoice, cycle("dh_invoice_2026_009", [
+    ms("cycle_opened", 1788443748), ms("computed_lines", 1788443846),
+    ms("data_approved", 1788443848), ms("approval_requested", 1788443870),
+    ms("manual_lines", 1788445302), ms("total_computed", 1788445302, { total: "16128.00", currency: "USD" }),
+    ms("invoice_generated", 1788445304), ms("invoice_emailed", 1788445326),
+  ]));
+  check("a part-way cycle counts its recorded steps", live.done === 8, `done=${live.done}`);
+  check("the frontier is the first unreached stage", live.frontier?.name === "invoice_approved",
+    live.frontier?.name ?? "none");
+  check("the frontier reads `waiting`, not `pending`",
+    live.stages.find((s) => s.stage.name === "invoice_approved")?.state === "waiting");
+  // The distinction the prior art could not express: one gate is being actively polled, the
+  // stages behind it are merely unreachable. Collapsing both to "not done" is what made a
+  // stalled process indistinguishable from a waiting one.
+  check("stages behind the frontier read `pending`",
+    live.stages.find((s) => s.stage.name === "payment_processed")?.state === "pending");
+  check("a cycle still in flight is not voided", !live.voided);
+
+  // THE ORDERING TRAP, and the reason this check exists. A satisfied `await` is stamped with
+  // its EVIDENCE's time rather than the run clock, so `data_approved` (the approval mail's own
+  // Date header) legitimately predates the `approval_requested` that asked for it — observed on
+  // BOTH real invoice cycles. Anything that sorted these rows by `epoch` would render the
+  // approval above the request and read as though the process ran backwards.
+  const shuffled = statusOf(invoice, cycle("dh_invoice_2026_009", [
+    ms("data_approved", 1788443848), ms("approval_requested", 1788443870),
+    ms("cycle_opened", 1788443748), ms("computed_lines", 1788443846),
+  ]));
+  check("order comes from the definition, not the timestamps",
+    shuffled.stages.map((s) => s.stage.name).slice(0, 4).join(",")
+      === "cycle_opened,computed_lines,approval_requested,data_approved");
+  check("an out-of-order await is still done",
+    shuffled.stages.find((s) => s.stage.name === "data_approved")?.state === "done");
+
+  // Cycle 008: every stage recorded.
+  const complete = statusOf(invoice, cycle("dh_invoice_2026_008",
+    invoice.stages.map((st, i) => ms(st.name, 1786884650 + i))));
+  check("a complete cycle has no frontier", complete.frontier === undefined);
+  check("a complete cycle is all done", complete.done === complete.total,
+    `${complete.done}/${complete.total}`);
+
+  // Voided: terminal, so nothing is waiting on anything. Correction is a re-run under a new
+  // cycle_key, never an amendment — a `waiting` gate here would imply the reconciler is still
+  // watching a cycle it has abandoned.
+  const voided = statusOf(invoice, cycle("dh_invoice_2026_010", [
+    ms("cycle_opened", 1788000000), ms("computed_lines", 1788000010),
+    { name: invoice.void_event, epoch: 1788000020, message: {} },
+  ]));
+  check("a voided cycle is flagged", voided.voided);
+  check("a voided cycle has no frontier", voided.frontier === undefined);
+  check("unreached stages of a voided cycle read `skipped`",
+    voided.stages.find((s) => s.stage.name === "total_computed")?.state === "skipped");
+
+  // chipsOf is shape-driven so process #2 renders without a code change.
+  const chips = chipsOf({
+    id: "x", name: "n", process: "p", user_id: "u", cycle_key: "k", timestamp: 1,
+    total: "16128.00", currency: "USD", line_count: 1, lines: [1, 2, 3],
+  }, 8);
+  check("envelope keys are not rendered as facts",
+    !chips.some((c) => ["id", "name", "process", "user_id", "cycle_key", "timestamp"].includes(c.key)),
+    chips.map((c) => c.key).join(","));
+  check("a collection collapses to a count",
+    chips.find((c) => c.key === "lines")?.value === "3");
+  const linked = chipsOf({ pdf_url: "https://example.com/output.pdf" });
+  check("a URL becomes a link", linked[0]?.href === "https://example.com/output.pdf");
+
+  check("a monthly cron reads as English", cronText("0 9 1 * *") === "monthly on the 1st, 09:00",
+    cronText("0 9 1 * *"));
+  check("an unrecognised cron falls back to the expression",
+    cronText("*/5 3 * 7 2") === "*/5 3 * 7 2");
+
+  // --- and on the TIMELINE, where a milestone is just another raw row ---
+  check("a milestone is recognised as a process event",
+    processOf("dreamhost_invoice_total_computed") === "dreamhost_invoice");
+  check("an ordinary event is not", processOf("credit_card_payment") === null);
+  // The prefix must be matched with its separator, or a process named `dreamhost` would claim
+  // every event whose name merely starts with those letters.
+  check("a bare prefix without the separator does not match",
+    processOf("dreamhost_invoicexyz") === null);
+  // Through prepare(), like every other fixture here — it decorates the row with `epoch` and
+  // `date`, which labelOf's AwareEvent contract requires.
+  const milestone = prepare(
+    [ev("dreamhost_invoice_total_computed", "raw", "14:21")] as unknown as AwareEvent[]).all[0];
+  check("a milestone titles itself by its stage", labelOf(milestone) === "Total computed",
+    labelOf(milestone));
+  check("a milestone is not an anonymous grey dot",
+    catOf("dreamhost_invoice_total_computed").c !== "#9298a6");
+  // The Levels board has no day around it, so there the process name stays.
+  check("the levels board keeps the process name",
+    typeLabel("dreamhost_invoice_total_computed") === "Dreamhost invoice: total computed",
+    typeLabel("dreamhost_invoice_total_computed"));
+
+  // And it renders. The board fetches through ctx.client, so on the server it draws its
+  // loading line — enough to catch an import cycle or a crash in the module's top level.
+  const html = renderToString(
+    <AwareContext.Provider value={ctx}>
+      <MemoryRouter><ProcessesDashboard /></MemoryRouter>
+    </AwareContext.Provider>,
+  );
+  check("the processes board renders", html.length > 0);
+}
 
 if (fails.length) throw new Error(`${fails.length} check(s) failed: ${fails.join("; ")}`);
 console.log("\nall checks passed\n");

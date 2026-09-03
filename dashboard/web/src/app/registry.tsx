@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 import {
   Activity, BrainCircuit, Calendar, CreditCard, Layers, MapPin, Route, ScrollText, Store,
+  Workflow,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import TimelineDashboard from "../dashboards/timeline/TimelineDashboard";
@@ -8,6 +9,7 @@ import LevelsDashboard from "../dashboards/levels/LevelsDashboard";
 import LastJourneyCard from "../dashboards/home/LastJourneyCard";
 import SpendDashboard from "../dashboards/money/SpendDashboard";
 import SpendHomeCard from "../dashboards/money/SpendHomeCard";
+import ProcessesDashboard from "../dashboards/processes/ProcessesDashboard";
 
 /** The portal's whole structure is registry data: sections give the sidebar its groups,
  *  modules give it entries, and the frame (Shell / HomeView / the palette) only ever derives
@@ -20,7 +22,7 @@ import SpendHomeCard from "../dashboards/money/SpendHomeCard";
  *  The registry seam works in that direction too. */
 
 export type SectionId =
-  | "life" | "places" | "journeys" | "money" | "health" | "brain" | "config";
+  | "life" | "places" | "journeys" | "money" | "processes" | "health" | "brain" | "config";
 
 /** A planned module: named in the sidebar as a dashed "soon" entry so the portal shows where
  *  it is going. Purely declarative — promoting one to real is moving its title onto a module. */
@@ -41,6 +43,7 @@ export const SECTIONS: Section[] = [
   { id: "places", title: "Places", planned: [{ title: "Stays", Icon: MapPin }] },
   { id: "journeys", title: "Journeys", planned: [{ title: "Journeys", Icon: Route }] },
   { id: "money", title: "Money", planned: [{ title: "Merchants", Icon: Store }] },
+  { id: "processes", title: "Processes" },
   { id: "health", title: "Health", planned: [{ title: "Activity", Icon: Activity }] },
   {
     id: "brain", title: "Brain",
@@ -90,6 +93,10 @@ export const MODULES: ModuleDef[] = [
   {
     slug: "spend", title: "Weekly spend", section: "money", Icon: CreditCard,
     component: SpendDashboard, HomeCard: SpendHomeCard, scopes: ["week", "month"],
+  },
+  {
+    slug: "processes", title: "Invoicing", section: "processes", Icon: Workflow,
+    component: ProcessesDashboard,
   },
   { slug: "levels", title: "Levels", section: "config", Icon: Layers, component: LevelsDashboard },
 ];

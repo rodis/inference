@@ -607,4 +607,73 @@ footer b { color: var(--ink-2); font-weight: 600; }
 .palrow .prd { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-left: auto; white-space: nowrap; flex: none; }
 .palfoot { display: flex; gap: 14px; padding: 9px 16px 11px; border-top: 1px solid var(--hair); font-family: var(--mono); font-size: 9.5px; color: var(--muted-2); flex-wrap: wrap; }
 
+/* --- Processes board (ADR 0012's process tier) ------------------------------------------
+   A vertical stepper: the rail is drawn with a ::before on each row rather than a wrapping
+   element, so a stage row stays a single <li> and the connector cannot drift out of sync
+   with it. State lives in ONE place (.is-done / .is-waiting / .is-pending / .is-skipped on
+   the row) and both the glyph and the rail segment inherit from it. */
+.pagehead .psub { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 9px; }
+
+.pst-cols { display: grid; grid-template-columns: minmax(0, 3fr) minmax(250px, 2fr); gap: 14px; align-items: start; }
+@media (max-width: 900px) { .pst-cols { grid-template-columns: 1fr; } }
+.pst-rail { display: grid; gap: 14px; }
+
+.pst-tabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+.pst-tab { font: 600 12px var(--sans); padding: 6px 12px; border-radius: 999px; border: 1px solid var(--hair-2);
+  background: var(--card); color: var(--ink-2); cursor: pointer; }
+.pst-tab.on { background: var(--ink); border-color: var(--ink); color: var(--card); }
+
+.pst-list { list-style: none; margin: 14px 0 0; padding: 0; }
+.pst-row { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; position: relative; padding-bottom: 15px; }
+.pst-row:last-child { padding-bottom: 0; }
+/* the connector to the NEXT step, tinted by THIS step's state */
+.pst-row:not(:last-child)::before { content: ""; position: absolute; left: 10px; top: 21px; bottom: 3px;
+  width: 2px; border-radius: 2px; background: var(--hair-2); }
+.pst-row.is-done::before { background: var(--good); opacity: 0.35; }
+
+.pst-glyph { width: 22px; height: 22px; border-radius: 999px; display: grid; place-items: center;
+  background: var(--chip); color: var(--muted); flex: none; z-index: 1; }
+.pst-row.is-done .pst-glyph { background: var(--good-soft); color: var(--good); }
+.pst-row.is-waiting .pst-glyph { background: var(--accent-soft); color: var(--accent); }
+.pst-row.is-skipped .pst-glyph { opacity: 0.6; }
+
+.pst-body { min-width: 0; padding-top: 2px; }
+.pst-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.pst-label { font: 700 13.5px var(--rounded); letter-spacing: -0.01em; }
+.pst-row.is-pending .pst-label, .pst-row.is-skipped .pst-label { color: var(--muted); font-weight: 600; }
+.pst-kind { display: inline-flex; align-items: center; gap: 3px; font: 600 9.5px var(--mono);
+  text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); background: var(--chip);
+  padding: 1px 6px; border-radius: 999px; }
+.pst-at { font: 400 10.5px var(--mono); color: var(--muted); margin-left: auto; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pst-now { color: var(--accent); font-weight: 600; }
+.pst-detail { font: 400 11px var(--mono); color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
+
+.pst-chips { display: flex; gap: 5px; margin-top: 6px; flex-wrap: wrap; }
+.pst-chip { font: 400 10.5px var(--mono); color: var(--ink-2); background: var(--card-2);
+  border: 1px solid var(--hair); padding: 2px 7px; border-radius: 6px; max-width: 100%; overflow-wrap: anywhere; }
+.pst-chip b { color: var(--muted); font-weight: 400; margin-right: 5px; }
+.pst-chip a { color: var(--accent); text-decoration: none; font-weight: 600; }
+
+/* the all-cycles grid — Airflow's grid view, shrunk to a rail */
+.pst-grid { display: grid; gap: 3px; margin-top: 12px; }
+.pst-gridrow { display: flex; align-items: center; gap: 9px; width: 100%; padding: 6px 8px;
+  border: 1px solid transparent; border-radius: 9px; background: none; cursor: pointer; text-align: left; }
+.pst-gridrow:hover { background: var(--hover); }
+.pst-gridrow.on { background: var(--card-2); border-color: var(--hair-2); }
+.pst-gridkey { font: 600 11px var(--mono); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.pst-dots { display: flex; gap: 2px; margin-left: auto; }
+.pst-dot { width: 6px; height: 12px; border-radius: 2px; background: var(--hair-2); }
+.pst-dot.is-done { background: var(--good); }
+.pst-dot.is-waiting { background: var(--accent); }
+.pst-dot.is-skipped { background: var(--hair-2); opacity: 0.5; }
+.pst-gridn { font: 400 10px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; min-width: 30px; text-align: right; }
+
+.pst-legend { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 7px; }
+/* two items only — icon, then ONE span holding the whole sentence. A bare text node in a
+   flex container is its own flex item, which laid the prose out as separate boxes. */
+.pst-legend li { display: flex; align-items: baseline; gap: 6px; font-size: 11.5px; color: var(--ink-2); line-height: 1.45; }
+.pst-legend li > span { min-width: 0; }
+.pst-legend svg { flex: none; color: var(--muted); position: relative; top: 1px; }
+.pst-legend b { color: var(--ink); font-weight: 600; }
+
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }

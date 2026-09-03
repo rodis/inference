@@ -1,9 +1,11 @@
 # ADR 0012 — Processes are reconciled, not orchestrated
 
 Status: **Accepted — implemented.** Core + schema 2026-08-15; actions, the classifier and the
-Prefect entry point 2026-08-16. The first cycle (`dh_invoice_2026_008`) has run through approval,
-PDF and submission by hand; the scheduled deployments are written but not yet applied to a
-Prefect Cloud workspace.
+Prefect entry point 2026-08-16. Deployed to Prefect Cloud and the Aware UI wired 2026-09-03:
+`dh_invoice_2026_008` completed all eleven milestones (payment confirmed 2026-08-24), and
+`dh_invoice_2026_009` then advanced **six stages unattended** on the hourly deployment — one
+Gmail label in, a rendered PDF out. Two holes remain, both named below: `manual_lines` has no
+extras source (open question 8) and nothing can void a cycle (open question 11).
 Date: 2026-08-15
 
 > This ADR introduces a **process tier**: a sibling of the connector tier (ADR 0008), one
@@ -706,6 +708,38 @@ Because the definition is data, the dashboard module is generic too — it rende
 so the second process needs no UI work at all. That is the same payoff `events/*.yml` gives, one
 tier up.
 
+**Built 2026-09-03, and it did come free — but not for free.** Three things were learned putting
+it on screen, none of them visible from here:
+
+- **The definition has to cross a build boundary.** The dashboard image is built with
+  `dashboard/` as its Docker context (`publish-images.yml` declares it explicitly), so
+  `src/reconciler` is not merely un-installed there — it is *outside the context* and cannot be
+  `COPY`ed. Widening the context to the repo root would have coupled the tiers; instead
+  `scripts/emit_process_graph.py` projects the definitions into `dashboard/processes.json`, which
+  the dashboard reads like it already reads `logical_levels.json`. The dashboard consumes a
+  *contract*, not a package: no pydantic, no pyyaml, no idea what a `signal` block means. It is
+  the same move this repo already makes at its other language boundary (`emit_event_schema.py` →
+  `contracts/inferred_event.schema.json` → `npm run gen:types`), and it carries the same cost — a
+  file that can go stale — handled the same way, by re-running the generator in CI and failing on
+  a diff.
+- **A stepper, not a node graph.** A process is a DAG in the definition language and this one is
+  a chain; the pattern literature is consistent that a stepper is right for a long flow with
+  strong dependencies (payment flows are the canonical example) and that a node-graph earns its
+  layout cost only once branches exist. So the board renders topological order and shows `after`
+  explicitly whenever a stage's dependency is *not* the row above — which is the honest signal
+  that a real branch has appeared and the rendering has stopped being sufficient.
+- **`waiting` must be its own state.** The frontier — the first unreached stage whose
+  dependencies are all met — is drawn differently from the stages behind it, because the
+  reconciler is *actively asking Gmail* about that one every hour while the rest are merely
+  unreachable. A two-state done/not-done view collapses those, and that collapse is precisely
+  what made the prior art impossible to reason about: "stalled" and "waiting" looked identical.
+
+And one trap that only real data exposed: **the board must order stages by the definition, never
+by timestamp.** A satisfied `await` is stamped with its *evidence's* time rather than the run
+clock (`core.EVIDENCE_TIME_KEY`), so on both real cycles `data_approved` carries an earlier stamp
+than the `approval_requested` that asked for it — the approval mail's own `Date` header predates
+our request. Sorting by `epoch` renders the process running backwards. There is a check for it.
+
 ## Consequences
 
 - **Positive:** the saga problem is not solved, it is *avoided*. No resume tokens, no correlation
@@ -750,6 +784,20 @@ tier up.
    ADR 0008's trip-wire 5, and it is the one that matters most.
 6. **Milestone events pollute the Aware timeline.** If process events need suppressing everywhere
    they are displayed, they may not belong on `raw_sensors` at all.
+
+   **Not tripped, and resolved the other way round (2026-09-03).** The expectation here was
+   exclusion — a name filter on `/api/events`. What the timeline actually needed was *altitude*:
+   milestones are ordinary raw rows with no lineage, so depth alone buries all eleven in
+   `Signals`, and the six that are things which genuinely happened to you (you were asked to
+   approve; the money landed; a PDF is waiting for you to submit it) are lifted by
+   `logical_levels.json` exactly the way `credit_card_payment` already is. The seed's invoice
+   entries are not guesses — four of them were read back out of the real `dashboard_prefs` row,
+   where the user had already lifted exactly those by hand before this was built, which is the
+   ladder working as designed. The ladder is the mechanism this repo already has for
+   "interesting is relative to altitude", and reaching for a filter would have been building a
+   second one. Presentation is driven from the generated contract too (`view.ts::processOf`
+   strips the `<process>_` prefix to title a milestone), so process #2 is labelled and coloured
+   with no code change — and *no* suppression was needed anywhere.
 7. **A signal source starts pushing again.** Any n8n workflow with a trigger that deposits
    evidence for a process to find later re-creates the split loop above, and with it the
    inability to tell "nothing is watching" from "not yet".
