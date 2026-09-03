@@ -13,7 +13,6 @@
 # The alternative was `:latest` with `pullPolicy: Always`, which needs none of this and pins
 # nothing: no way to say which commit is running, and no rollback that is not a code revert.
 applicationName: reconciler
-
 deployment:
   # There is no long-running process here. A reconciler run is a pure function of recorded
   # milestones that finishes in seconds; keeping a pod alive to do nothing between firings is
@@ -21,14 +20,12 @@ deployment:
   enabled: false
   image:
     repository: ghcr.io/rodis/inference-reconciler
-    tag: "sha-bootstrap"   # placeholder; CI bumps this to sha-<short> on deploy-state
+    tag: "sha-9110ddf" # placeholder; CI bumps this to sha-<short> on deploy-state
     pullPolicy: IfNotPresent
-
 service:
   # Nothing listens. Also required: the chart names its Service after `applicationName`, and
   # leaving it on would put a second endpoint-less Service in this namespace for no reason.
   enabled: false
-
 # ---------------------------------------------------------------------------------------------
 # TRAP FOR WHOEVER EXTENDS THIS: everything below is rendered through Helm's `tpl`, so `{{ }}`
 # is HELM's, not Argo's. Argo Workflows' own expressions — `{{inputs.parameters.x}}`,
@@ -53,7 +50,6 @@ extraObjects:
       # Advancing is the default because it is the act with a consumer waiting on it; a
       # CronWorkflow overrides this per schedule.
       entrypoint: advance-cycles
-
       templates:
         - name: advance-cycles
           # Walks every open cycle to its frontier. Creates nothing, ever — `open` is a
@@ -105,7 +101,6 @@ extraObjects:
             backoff:
               duration: "30s"
               factor: 2
-
         - name: sweep-tasks
           # Reconciles the `aware/todo` Gmail label against recorded task events. The only way
           # a task can close from outside the dashboard: Gmail reports a label being ADDED and
@@ -114,7 +109,6 @@ extraObjects:
             <<: *reconciler
             args: ["sweep-tasks"]
           retryStrategy: *retries
-
   - apiVersion: argoproj.io/v1alpha1
     kind: CronWorkflow
     metadata:
@@ -155,7 +149,6 @@ extraObjects:
         # Bounded so a hung HTTP call cannot hold the `Forbid` slot indefinitely and silently
         # stop the schedule — the exact silent stall this tier exists to avoid.
         activeDeadlineSeconds: 900
-
   - apiVersion: argoproj.io/v1alpha1
     kind: CronWorkflow
     metadata:
