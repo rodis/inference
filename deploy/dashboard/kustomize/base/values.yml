@@ -25,6 +25,34 @@ deployment:
         secretKeyRef:
           name: neon-credentials-for-dashboard
           key: DASHBOARD_PASSWORD
+    # --- the email todo board's one outbound action ---
+    # Ticking a task off removes the `aware/todo` label in Gmail and records an
+    # `email_task_closed` event. This is the only thing the dashboard writes outside its own
+    # dashboard_prefs table, and it holds no Google credential to do it: the OAuth token stays
+    # in n8n, and this calls a relay that may transmit but never decides.
+    #
+    # All three are OPTIONAL. Missing any of them disables the tick with a 503 that names what
+    # is unset — reading the board still works, so a half-configured deploy degrades to the
+    # read-only view rather than to a broken page. Closing a task in Gmail directly still works
+    # regardless, because the hourly sweep is what notices that.
+    GMAIL_LABEL_URL:
+      valueFrom:
+        secretKeyRef:
+          name: neon-credentials-for-dashboard
+          key: GMAIL_LABEL_URL
+          optional: true
+    MAIL_RELAY_TOKEN:
+      valueFrom:
+        secretKeyRef:
+          name: neon-credentials-for-dashboard
+          key: MAIL_RELAY_TOKEN
+          optional: true
+    VECTOR_BASE_URL:
+      valueFrom:
+        secretKeyRef:
+          name: neon-credentials-for-dashboard
+          key: VECTOR_BASE_URL
+          optional: true
   ports:
     - name: http
       containerPort: 8000
