@@ -15,6 +15,9 @@ Prefect, and neither knows the other exists.
     python -m reconciler.run open --process dreamhost_invoice --seq 7 \\
         --period 2026-07-01:2026-07-31
     python -m reconciler.run reconcile --process dreamhost_invoice
+
+    # See which tasks the Gmail label and the event log disagree about — writes nothing
+    python -m reconciler.run sweep-tasks --dry-run
 """
 
 import argparse
@@ -30,8 +33,10 @@ from reconciler.app import (
     RunOptions,
     advance,
     open_cycle,
+    sweep_tasks,
     walk_fresh,
 )
+from reconciler.tasks import DEFAULT_LABEL, DEFAULT_LOOKBACK_DAYS
 
 logger = logging.getLogger("reconciler.run")
 
@@ -72,6 +77,24 @@ def cmd_reconcile(args) -> int:
         print(f"no cycles open for {args.process}")
         return 0
     _report(results)
+    return 0
+
+
+def cmd_sweep_tasks(args) -> int:
+    """Reconcile the Gmail todo label against the recorded task events."""
+    plan = sweep_tasks(label=args.label, user=args.user, lookback_days=args.lookback,
+                       options=_options(args))
+    verb = "would open" if args.dry_run else "opened"
+    for candidate in plan.to_open:
+        print(f"  {verb}: {candidate.get('from_name') or candidate.get('from', '?')} "
+              f"— {candidate.get('subject', '')[:70]}")
+    verb = "would close" if args.dry_run else "closed"
+    for task in plan.to_close:
+        print(f"  {verb}: {task.from_name or '?'} — {task.subject[:70]}")
+    if plan.empty:
+        print("nothing to do — the label and the event log agree")
+    elif args.dry_run:
+        print("\ndry run — nothing written.")
     return 0
 
 
@@ -118,6 +141,17 @@ def main(argv=None) -> int:
     runner.add_argument("--process", required=True)
     runner.add_argument("--cycle", help="restrict to one cycle key")
     runner.set_defaults(func=cmd_reconcile)
+
+    sweeper = sub.add_parser("sweep-tasks", parents=[common],
+                             help="reconcile the Gmail todo label against recorded events")
+    sweeper.add_argument("--label", default=DEFAULT_LABEL)
+    sweeper.add_argument("--lookback", type=int, default=DEFAULT_LOOKBACK_DAYS,
+                         metavar="DAYS",
+                         help="how far back to search; a task opened before this is never "
+                              "closed by the sweep, since Gmail's silence about it is not "
+                              "evidence (see tasks.diff)")
+    sweeper.add_argument("--user", default=os.environ.get("AWARE_USER_ID", "rods"))
+    sweeper.set_defaults(func=cmd_sweep_tasks)
 
     args = parser.parse_args(argv)
 

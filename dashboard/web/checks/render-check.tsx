@@ -30,6 +30,9 @@ import EventBody from "../src/components/EventBody";
 import EventModal from "../src/components/EventModal";
 import LevelsDashboard from "../src/dashboards/levels/LevelsDashboard";
 import ProcessesDashboard from "../src/dashboards/processes/ProcessesDashboard";
+import TasksDashboard from "../src/dashboards/tasks/TasksDashboard";
+import { ageLabel, gmailLink, groupTasks, subjectOf } from "../src/dashboards/tasks/task";
+import type { Task } from "../src/dashboards/tasks/task";
 import { chipsOf, cronText, statusOf } from "../src/dashboards/processes/process";
 import type { Cycle, ProcessDef } from "../src/dashboards/processes/process";
 import processGraph from "../../processes.json";
@@ -676,6 +679,62 @@ console.log("\n— the process tier (ADR 0012) —");
     </AwareContext.Provider>,
   );
   check("the processes board renders", html.length > 0);
+}
+
+console.log("\n— email todo tasks —");
+{
+  const NOW = 1788000000;
+  const D = 86400;
+  const task = (id: string, agedays: number, over: Partial<Task> = {}): Task => ({
+    upstream_id: id, subject: "Renew car insurance", from_name: "AXA",
+    from: "service@axa.ch", thread_id: "t" + id,
+    opened_epoch: NOW - agedays * D, closed_epoch: null, closed_via: null, closed: false,
+    ...over,
+  });
+
+  const g = groupTasks([
+    task("a", 12), task("b", 9), task("c", 3), task("d", 1),
+    task("e", 20, { closed: true, closed_epoch: NOW - 2 * D, closed_via: "sweep" }),
+  ], NOW);
+
+  check("tasks over a week old are grouped as stale", g.stale.length === 2, `${g.stale.length}`);
+  check("tasks inside a week are grouped as recent", g.recent.length === 2, `${g.recent.length}`);
+  check("a closed task leaves the open groups", g.open === 4, `open=${g.open}`);
+  // Oldest FIRST inside a group: the thing most likely to be a problem is the thing furthest
+  // from the top in a conventional newest-first list, which is exactly backwards for this board.
+  check("the oldest task is at the top of its group",
+    g.stale[0].upstream_id === "a", g.stale[0].upstream_id);
+  check("the age headline ignores closed tasks", g.oldestDays === 12, `${g.oldestDays}`);
+  check("closed-this-week counts only recent closes", g.closedThisWeek === 1);
+
+  // A reopened task (label re-applied after a close) arrives from the API already marked open,
+  // because the SQL compares the LATEST open against the LATEST close. If that ever regressed to
+  // an IS NULL anti-join it would vanish from the board while sitting labelled in Gmail — and
+  // the hourly sweep would emit a fresh open every hour, forever.
+  const reopened = groupTasks([task("r", 2, { closed: false, closed_epoch: NOW - 30 * D })], NOW);
+  check("a reopened task is open again", reopened.open === 1 && reopened.recent.length === 1);
+
+  check("an empty list does not report an age", groupTasks([], NOW).oldestDays === 0);
+
+  check("ages read as ages", ageLabel(NOW - 12 * D, NOW) === "12d", ageLabel(NOW - 12 * D, NOW));
+  check("a fresh task reads in hours", ageLabel(NOW - 3600 * 5, NOW) === "5h");
+  check("a just-arrived task says so", ageLabel(NOW - 30, NOW) === "just now");
+
+  check("a task links to its Gmail thread",
+    gmailLink(task("a", 1)).includes("/#all/ta"), gmailLink(task("a", 1)));
+  // Falls back to a search rather than producing a dead link, for rows recorded before the
+  // thread id was captured.
+  check("a task with no thread still links somewhere",
+    gmailLink(task("a", 1, { thread_id: null })).includes("rfc822msgid"));
+  check("a subjectless mail still has a line to read",
+    subjectOf(task("a", 1, { subject: null })) === "(no subject)");
+
+  const html = renderToString(
+    <AwareContext.Provider value={ctx}>
+      <MemoryRouter><TasksDashboard /></MemoryRouter>
+    </AwareContext.Provider>,
+  );
+  check("the tasks board renders", html.length > 0);
 }
 
 if (fails.length) throw new Error(`${fails.length} check(s) failed: ${fails.join("; ")}`);

@@ -6,6 +6,8 @@ Serves the built single-page app (``web/dist``) and a handful of JSON endpoints:
   GET  /api/events?user_id=…&days=N — one user's events over a trailing N-day window
   GET  /api/preferences?user_id=… — that user's level config (their row, else the seed)
   PUT  /api/preferences?user_id=… — persist that user's config (the one write path)
+  GET  /api/tasks?user_id=…     — email todo tasks (open, plus recently closed)
+  POST /api/tasks/close         — tick one off: drop the Gmail label, record the close
   GET  /api/processes           — process definitions as graphs (ADR 0012's process tier)
   GET  /api/processes/{name}/cycles?user_id=… — that process's recent cycles + milestones
   GET  /api/stream?user_id=…    — SSE seam for the (deferred) live view; stubbed for now
@@ -24,6 +26,9 @@ import json
 import logging
 import os
 import secrets
+import time
+import urllib.error
+import urllib.request
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -242,6 +247,138 @@ def _processes() -> dict:
     return json.loads(PROCESSES_PATH.read_text())
 
 
+# --- email todo tasks ----------------------------------------------------------------------
+# A task is a mail you labelled `aware/todo`. It is TWO events and never a mutable row:
+# `email_labeled_todo` opens it, `email_task_closed` closes it, both carrying the Gmail message
+# id as `upstream_id`. The list is therefore an anti-join, the same move the process board makes
+# over `cycle_key` — no engine, no session pairing, and any number of concurrent tasks.
+#
+# LATEST-vs-LATEST, not "has ever been closed". Re-applying the label to a mail you finished
+# last month is a legitimate reopen, and an `IS NULL` anti-join would refuse it forever: the old
+# close would suppress the new open, the task would be invisible here while visibly labelled in
+# Gmail, and the hourly sweep — seeing a label with no open — would emit another open every hour
+# for as long as the label stayed on. Comparing timestamps makes reopening work by construction.
+#
+# Closed rows are returned too, bounded to `closed_days`, because "what did I finish this week?"
+# is most of what makes a todo list feel worth keeping.
+TASKS_SQL = """
+WITH opened AS (
+  SELECT DISTINCT ON (message->>'upstream_id')
+         message->>'upstream_id' AS uid,
+         extract(epoch from occurred_at) AS opened_epoch,
+         message
+    FROM events
+   WHERE name = 'email_labeled_todo'
+     AND user_id = %(user_id)s
+     AND message->>'label' = %(label)s
+     AND message->>'upstream_id' IS NOT NULL
+   ORDER BY message->>'upstream_id', occurred_at DESC
+),
+closed AS (
+  SELECT DISTINCT ON (message->>'upstream_id')
+         message->>'upstream_id' AS uid,
+         extract(epoch from occurred_at) AS closed_epoch,
+         message->>'closed_via' AS closed_via
+    FROM events
+   WHERE name = 'email_task_closed'
+     AND user_id = %(user_id)s
+     AND message->>'label' = %(label)s
+   ORDER BY message->>'upstream_id', occurred_at DESC
+),
+joined AS (
+  SELECT o.uid,
+         o.opened_epoch,
+         o.message,
+         c.closed_epoch,
+         c.closed_via,
+         (c.uid IS NOT NULL AND c.closed_epoch > o.opened_epoch) AS is_closed
+    FROM opened o
+    LEFT JOIN closed c ON c.uid = o.uid
+)
+SELECT coalesce(json_agg(json_build_object(
+    'upstream_id', uid,
+    'subject', message->>'subject',
+    'from_name', message->>'from_name',
+    'from', message->>'from',
+    'thread_id', message->>'gmail_thread_id',
+    'opened_epoch', opened_epoch,
+    'closed_epoch', closed_epoch,
+    'closed_via', closed_via,
+    'closed', is_closed
+  ) ORDER BY opened_epoch), '[]'::json)
+FROM joined
+WHERE NOT is_closed
+   OR closed_epoch >= extract(epoch from now()) - %(closed_days)s * 86400
+"""
+
+# The wire shape of a close the dashboard emits.
+#
+# **Duplicated from `reconciler.tasks.closed_body`, and it has to be**: this image is built with
+# `dashboard/` as its Docker context, so `src/reconciler` is not importable here — the same
+# boundary that made `processes.json` a generated file. Two producers emitting one event name
+# must agree on its shape, so `tests/test_task_contract.py` parses this tuple and compares it
+# against the reconciler's own body. Change one, the test names the other.
+TASK_CLOSED_FIELDS = ("event_name", "user_id", "timestamp", "label", "upstream_id",
+                      "closed_via", "subject", "from_name", "open_seconds")
+
+
+# --- outbound: the only place the dashboard acts ---------------------------------------------
+# One credential (the shared relay token) and one plain POST each, on stdlib urllib — the image
+# already carries no HTTP client and this is not worth adding one for.
+
+TASK_LABEL = os.environ.get("TASK_LABEL", "aware/todo")
+
+
+def _task_actor() -> tuple[str | None, str, str | None]:
+    """(label-relay url, token, ingest base). Any missing piece disables the tick."""
+    return (os.environ.get("GMAIL_LABEL_URL"),
+            os.environ.get("MAIL_RELAY_TOKEN", ""),
+            os.environ.get("VECTOR_BASE_URL"))
+
+
+def _relay_remove_label(url: str, token: str, *, message_id: str, label: str) -> None:
+    """Ask n8n to take the label off the message.
+
+    No retry. A repeat is harmless to Gmail (removing a label twice is idempotent) but a caller
+    that retries through a timeout cannot tell "it did not happen" from "it happened and the
+    reply was lost" — and the second, retried, races the event emitted on success. A failure
+    here means the task stays on the board, which is the truthful outcome.
+    """
+    request = urllib.request.Request(
+        url,
+        data=json.dumps({"message_id": message_id, "label": label,
+                         "action": "remove"}).encode(),
+        headers={"Content-Type": "application/json",
+                 os.environ.get("MAIL_RELAY_HEADER", "X-Relay-Token"): token},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            log.info("removed %s from %s (HTTP %s)", label, message_id, response.status)
+    except urllib.error.HTTPError as e:
+        raise HTTPException(502, f"Gmail relay rejected the change: HTTP {e.code}") from e
+    except urllib.error.URLError as e:
+        raise HTTPException(502, f"Gmail relay unreachable: {e.reason}") from e
+
+
+def _emit_event(base_url: str, payload: dict) -> None:
+    """POST one raw event at the ingest gateway, exactly as any other producer does."""
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}/sensors/tasks",
+        data=json.dumps({"payload": payload}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            log.info("emitted %s (HTTP %s)", payload["event_name"], response.status)
+    except urllib.error.URLError as e:
+        # The label is already off at this point, so this is a real inconsistency — but a
+        # recoverable one: the hourly sweep sees a task open in the log and gone from Gmail, and
+        # closes it. Reported as 502 so the UI can say the tick half-took.
+        raise HTTPException(502, f"label removed, but recording it failed ({e.reason}); "
+                                 "the hourly sweep will reconcile this") from e
+
 def _db_url() -> str:
     url = os.environ.get("DATABASE_URL")
     if not url:
@@ -418,6 +555,66 @@ def process_cycles(name: str, user_id: str = Query(...), limit: int = Query(12, 
         cur.execute(PROCESS_CYCLES_SQL,
                     {"user_id": user_id, "process": name, "limit": limit})
         return JSONResponse(cur.fetchone()[0])
+
+
+@app.get("/api/tasks")
+def tasks(user_id: str = Query(...), label: str = Query(TASK_LABEL),
+          closed_days: int = Query(7, ge=0, le=90)):
+    """Open tasks, plus the ones closed in the last `closed_days`."""
+    with app.state.pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(TASKS_SQL, {"user_id": user_id, "label": label,
+                                "closed_days": closed_days})
+        return JSONResponse(cur.fetchone()[0])
+
+
+@app.post("/api/tasks/close")
+def close_task(user_id: str = Query(...), body: dict = Body(...)):
+    """Tick a task off: remove the Gmail label, then record that it closed.
+
+    **This is the dashboard's first outbound action**, and the one place it stops being a
+    read-only view. That is a smaller departure than it looks: the decision is the user's click,
+    and the dashboard is the input device — exactly the role the iOS Shortcuts play for
+    `car_lock_state_change`. It authenticates nothing itself; the Gmail credential stays in n8n
+    and this calls a relay that may transmit but never decides.
+
+    **Order is load-bearing.** The label goes first, and the event is emitted only if that
+    succeeded. Reversed, a failed relay call would leave a recorded close against a mail still
+    sitting in the label — the board would hide a task that is not done, which is the one
+    failure a todo list must not have. This way a relay failure surfaces as an error and the row
+    honestly stays.
+
+    If the event POST then fails, Gmail and the log disagree for up to an hour: the label is
+    gone but no close is recorded. The sweep repairs exactly that, which is why it exists.
+    """
+    upstream_id = (body or {}).get("upstream_id")
+    if not upstream_id:
+        raise HTTPException(422, "body must be {upstream_id: ..., ...}")
+
+    label = (body or {}).get("label") or TASK_LABEL
+    relay, token, ingest = _task_actor()
+    if not relay or not ingest:
+        # Loud, and it names the variable. A silent no-op here would look to the user like a
+        # tick that did not take.
+        raise HTTPException(503, "task actions are not configured (needs GMAIL_LABEL_URL and "
+                                 "VECTOR_BASE_URL)")
+
+    _relay_remove_label(relay, token, message_id=upstream_id, label=label)
+
+    now = int(time.time())
+    opened = (body or {}).get("opened_epoch")
+    values = {
+        "event_name": "email_task_closed",
+        "user_id": user_id,
+        "timestamp": now,
+        "label": label,
+        "upstream_id": upstream_id,
+        "closed_via": "dashboard",
+        "subject": (body or {}).get("subject") or "",
+        "from_name": (body or {}).get("from_name") or "",
+        "open_seconds": max(0, now - int(opened)) if opened else None,
+    }
+    _emit_event(ingest, {k: values[k] for k in TASK_CLOSED_FIELDS})
+    return JSONResponse({"ok": True, "closed_epoch": now})
 
 
 @app.get("/api/stream")

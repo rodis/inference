@@ -676,4 +676,71 @@ footer b { color: var(--ink-2); font-weight: 600; }
 .pst-legend svg { flex: none; color: var(--muted); position: relative; top: 1px; }
 .pst-legend b { color: var(--ink); font-weight: 600; }
 
+/* --- Tasks board (email todo) -------------------------------------------------------------
+   Rows, not cards: a task list is a list. Border/fill/radius are spent by ROLE — the only
+   coloured thing is staleness, because that is the one property worth interrupting for. The
+   mail glyph reuses the slate the process milestones already wear on the timeline, so a task
+   reads as kin to the tier it sits under rather than as a new kind of object. */
+.tsk-strip { display: flex; gap: 26px; flex-wrap: wrap; padding: 13px 16px; margin-bottom: 16px;
+  background: var(--card); border-radius: 14px; box-shadow: var(--shadow-sm); }
+.tsk-stat .k { font-family: var(--mono); font-size: 9.5px; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--muted); }
+.tsk-stat .v { font-family: var(--rounded); font-size: 21px; font-weight: 700;
+  letter-spacing: -0.02em; font-variant-numeric: tabular-nums; margin-top: 1px; }
+.tsk-stat .v small { font-size: 12px; font-weight: 600; color: var(--ink-2); margin-left: 3px; }
+.tsk-stat .v.warn { color: var(--accent); }
+
+.tsk-panel { padding: 5px 6px 7px; }
+.tsk-grouphead { display: flex; align-items: baseline; gap: 9px; padding: 14px 12px 7px; }
+.tsk-grouphead h3 { font-family: var(--rounded); font-size: 13px; font-weight: 700;
+  letter-spacing: -0.01em; margin: 0; }
+.tsk-grouphead .n, .tsk-grouphead .why { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+.tsk-grouphead .why { margin-left: auto; }
+
+.tsk-list { list-style: none; margin: 0; padding: 0; }
+.tsk-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 12px;
+  align-items: start; padding: 10px 12px; border-radius: 11px; position: relative; }
+.tsk-row + .tsk-row { box-shadow: inset 0 1px 0 var(--hair); }
+.tsk-row:hover { background: var(--hover); }
+.tsk-row:hover + .tsk-row { box-shadow: none; }
+/* severity stripe, spent only where it means something */
+.tsk-row.is-stale::before { content: ""; position: absolute; left: 3px; top: 12px; bottom: 12px;
+  width: 2.5px; border-radius: 2px; background: var(--accent); }
+
+.tsk-tick { width: 20px; height: 20px; border-radius: 999px; border: 1.5px solid var(--hair-2);
+  background: none; cursor: pointer; margin-top: 2px; display: grid; place-items: center;
+  color: transparent; padding: 0; flex: none; }
+.tsk-tick:hover:not(:disabled) { border-color: var(--good); color: var(--good); background: var(--good-soft); }
+.tsk-tick:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tsk-tick:disabled { cursor: default; }
+.tsk-row.is-done .tsk-tick { border-color: var(--good); background: var(--good-soft); color: var(--good); }
+
+.tsk-body { min-width: 0; }
+.tsk-subject { font-family: var(--rounded); font-size: 14px; font-weight: 650;
+  letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.tsk-from { display: flex; align-items: center; gap: 6px; margin-top: 3px; flex-wrap: wrap;
+  font-size: 12px; color: var(--ink-2); }
+.tsk-glyph { width: 15px; height: 15px; border-radius: 4px; background: var(--l1-bg);
+  color: var(--demote); display: grid; place-items: center; flex: none; }
+.tsk-addr { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+.tsk-link { display: inline-flex; align-items: center; gap: 3px; font-family: var(--mono);
+  font-size: 10.5px; color: var(--demote); text-decoration: none;
+  border-bottom: 1px solid transparent; }
+.tsk-link:hover { border-bottom-color: var(--demote); }
+.tsk-failed { margin-top: 5px; font-family: var(--mono); font-size: 10.5px; color: var(--accent); }
+
+.tsk-age { font-family: var(--mono); font-size: 11px; color: var(--muted); white-space: nowrap;
+  text-align: right; font-variant-numeric: tabular-nums; padding-top: 3px; }
+.tsk-age .d { font-size: 13px; color: var(--ink-2); font-weight: 600; display: block; }
+.tsk-row.is-stale .tsk-age .d { color: var(--accent); }
+
+.tsk-row.is-done .tsk-subject { color: var(--muted); font-weight: 600; text-decoration: line-through;
+  text-decoration-color: var(--muted-2); }
+.tsk-row.is-done .tsk-from { color: var(--muted); }
+
+.tsk-empty { padding: 26px 20px 30px; max-width: 52ch; }
+.tsk-empty h3 { font-family: var(--rounded); font-size: 15px; font-weight: 700; margin: 0 0 6px; }
+.tsk-empty p { font-size: 13px; color: var(--ink-2); margin: 0; line-height: 1.55; }
+.tsk-empty b { color: var(--ink); font-weight: 650; }
+
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }

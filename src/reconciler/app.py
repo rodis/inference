@@ -26,9 +26,12 @@ from reconciler.adapters.mail import (
     N8nRelayMailer,
     SmtpMailer,
 )
-from reconciler.adapters.neon import NeonMilestones
+from reconciler.adapters.ingest import DryRunEvents, GatewayEvents
+from reconciler.adapters.neon import NeonMilestones, NeonTasks
 from reconciler.core import Cycle, Milestone, Outcome, reconcile
 from reconciler.definition import GENESIS_STAGE, ProcessDefinition, load_definitions
+from reconciler import tasks
+from reconciler.tasks import TASK_INGEST_APP
 from reconciler.finder import SignalFinder
 from reconciler.world import NotYetImplemented, RealWorld
 
@@ -159,6 +162,55 @@ def finders() -> dict:
                        "advance (see connectors/n8n/llm-relay.workflow.ts)")
     return built
 
+
+# --- email todo tasks -----------------------------------------------------------------------
+#
+# A second job in this tier, and deliberately NOT a process: a task has two states, not stages,
+# so `processes/*.yml` would mint a cycle per email. What the two share is the tier's actual
+# idea — run on a schedule, be a pure function of what is recorded, and therefore be safe to
+# re-run. See `reconciler.tasks`.
+
+def task_query() -> "N8nGmailQuery":
+    """The Gmail client, asked for a whole label rather than for one gate's candidates.
+
+    Same object the invoice's gates use. Reusing it rather than writing a second client is what
+    keeps mailparser's `from` object flattened in exactly one tested place.
+    """
+    url = os.environ.get("GMAIL_QUERY_URL")
+    if not url:
+        raise ConfigurationError("GMAIL_QUERY_URL is not set")
+    return N8nGmailQuery(
+        url=url,
+        token=os.environ["MAIL_RELAY_TOKEN"],
+        header=os.environ.get("MAIL_RELAY_HEADER", "X-Relay-Token"),
+    )
+
+
+def task_sink(options: RunOptions):
+    if options.dry_run:
+        return DryRunEvents()
+    base = os.environ.get("VECTOR_BASE_URL")
+    if not base:
+        raise ConfigurationError("VECTOR_BASE_URL is not set (use dry_run to preview)")
+    return GatewayEvents(base, app=TASK_INGEST_APP)
+
+
+def sweep_tasks(*, label: str = tasks.DEFAULT_LABEL, user: str | None = None,
+                lookback_days: int = tasks.DEFAULT_LOOKBACK_DAYS,
+                options: RunOptions | None = None) -> tasks.SweepPlan:
+    """One sweep: reconcile the Gmail label against the recorded task events."""
+    options = options or RunOptions()
+    dsn = os.environ.get("NEON_DATABASE_URL")
+    if not dsn:
+        raise ConfigurationError("NEON_DATABASE_URL is not set")
+    return tasks.sweep(
+        source=task_query(),
+        store=NeonTasks(dsn),
+        sink=task_sink(options),
+        user_id=user or os.environ.get("AWARE_USER_ID", "rods"),
+        label=label,
+        lookback_days=lookback_days,
+    )
 
 # --- sequence -------------------------------------------------------------------------------
 

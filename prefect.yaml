@@ -118,3 +118,24 @@ deployments:
     parameters:
       process: dreamhost_invoice
     work_pool: *managed
+
+  # Not a process — the email todo sweep (reconciler.tasks). Same tier, same credential, same
+  # "pure function of what is recorded" idea; a task simply has two states rather than stages.
+  - name: email-tasks-sweep
+    entrypoint: src/reconciler/flow.py:sweep_tasks_flow
+    description: >-
+      Reconciles the `aware/todo` Gmail label against the recorded task events: opens anything
+      labelled that we have no open for (repairing a dropped Gmail Trigger), and closes anything
+      open that is no longer labelled. This is the only way a task can close from outside the
+      dashboard — Gmail reports a label being ADDED and never one being removed, so a trigger
+      cannot see it at all.
+    parameters:
+      label: aware/todo
+    work_pool: *managed
+    schedules:
+      # :37 rather than :17, so it does not queue behind the invoice advance for the same n8n
+      # relay and the same Managed-pool slot. Hourly is plenty: a task that closes at 14:05 is
+      # already gone from the board (the dashboard tick emits its own close immediately) — the
+      # sweep is the repair path, and an hour is a fine repair latency for one.
+      - cron: "37 * * * *"
+        timezone: Europe/Zurich

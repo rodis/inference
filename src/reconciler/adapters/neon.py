@@ -8,6 +8,10 @@ owning a table. That is the whole reason the reconciler needs no store of its ow
 Reads only. Nothing here writes: milestones reach Neon the same way every other event does,
 through the gateway (`adapters.gateway`), so the tier never becomes a second writer competing
 with the persister.
+
+Two readers live here now — `NeonMilestones` for process cycles and `NeonTasks` for the email
+todo sweep. They answer different questions but share the reason for being in one module: every
+SQL statement the tier runs is in one file, so a schema change has one place to look.
 """
 
 import json
@@ -15,6 +19,7 @@ import logging
 
 from reconciler.core import Cycle, Milestone
 from reconciler.definition import GENESIS_STAGE, ProcessDefinition
+from reconciler.tasks import CLOSED_EVENT, OPENED_EVENT, OpenTask
 
 logger = logging.getLogger("reconciler.adapters.neon")
 
@@ -123,3 +128,75 @@ class NeonMilestones:
         rows = self._query(_SIGNAL_SQL, {"name": name, "since": since})
         return [(int(ts), message if isinstance(message, dict) else json.loads(message))
                 for ts, message in rows]
+
+
+# --- email todo tasks (see reconciler.tasks) ---------------------------------------------------
+#
+# A task is open when its latest `email_labeled_todo` is newer than its latest
+# `email_task_closed` — or when there is no close at all.
+#
+# **Latest-vs-latest, not "has ever been closed".** Re-applying the label to a mail you closed
+# last month is a legitimate way to reopen a task, and an `IS NULL` anti-join would silently
+# refuse to let you: the old close would suppress the new open forever, and the task would be
+# invisible in the UI while being visibly labelled in Gmail. The sweep would then see it
+# labelled with no open event, emit another open, and do so again every hour — a permanent
+# event-per-hour loop with no symptom other than a growing table. Comparing timestamps costs one
+# extra DISTINCT ON and makes reopening work by construction.
+_OPEN_TASKS_SQL = """
+    WITH opened AS (
+      SELECT DISTINCT ON (message->>'upstream_id')
+             message->>'upstream_id' AS uid,
+             EXTRACT(EPOCH FROM occurred_at)::bigint AS ts,
+             message
+        FROM events
+       WHERE name = %(opened)s
+         AND user_id = %(user_id)s
+         AND message->>'label' = %(label)s
+         AND message->>'upstream_id' IS NOT NULL
+       ORDER BY message->>'upstream_id', occurred_at DESC
+    ),
+    closed AS (
+      SELECT DISTINCT ON (message->>'upstream_id')
+             message->>'upstream_id' AS uid,
+             EXTRACT(EPOCH FROM occurred_at)::bigint AS ts
+        FROM events
+       WHERE name = %(closed)s
+         AND user_id = %(user_id)s
+         AND message->>'label' = %(label)s
+       ORDER BY message->>'upstream_id', occurred_at DESC
+    )
+    SELECT o.uid, o.ts, o.message
+      FROM opened o
+      LEFT JOIN closed c ON c.uid = o.uid
+     WHERE c.uid IS NULL OR c.ts < o.ts
+"""
+
+
+class NeonTasks:
+    """The open half of the email todo list, read back out of the event log."""
+
+    def __init__(self, dsn: str):
+        self._dsn = dsn
+
+    def open_tasks(self, user_id: str, label: str) -> dict[str, OpenTask]:
+        import psycopg   # lazy, for the same CI reason as NeonMilestones._query
+
+        with psycopg.connect(self._dsn) as conn, conn.cursor() as cur:
+            cur.execute(_OPEN_TASKS_SQL, {
+                "user_id": user_id, "label": label,
+                "opened": OPENED_EVENT, "closed": CLOSED_EVENT,
+            })
+            rows = cur.fetchall()
+
+        tasks = {}
+        for uid, ts, message in rows:
+            body = message if isinstance(message, dict) else json.loads(message)
+            tasks[uid] = OpenTask(
+                upstream_id=uid,
+                subject=body.get("subject") or "",
+                from_name=body.get("from_name") or "",
+                from_address=body.get("from") or "",
+                opened_at=int(ts or 0),
+            )
+        logger.info("%d open task(s) for %s", len(tasks), user_id)
+        return tasks

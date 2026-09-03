@@ -69,6 +69,12 @@ them.**
 | **Semantic extraction** (merchant, amount, carrier, status) | **`src/inference/` — after Kafka** | in git, pytest-able, and **replayable** |
 | Inference (thresholds, correlation, sessions) | [`events/*.yml`](../events/) | already the rule |
 
+**Relays are the other direction, and the boundary is the same.** `mail-relay`, `gmail-query`,
+`llm-relay` and `gmail-label-remove` have no trigger and never start by themselves: something in
+git asks a question or states an intent, and the workflow authenticates and transmits. A relay
+may resolve a label *name* to an id (plumbing, like authenticating); it may not decide that a
+task is done. See [`email-tasks.md`](email-tasks.md) for the one that writes.
+
 **Why extraction goes after Kafka**, rather than into n8n or a pre-Vector shaper worker —
 this is [invariant 19](invariants.md) (*raw signals are the truth; derived is a cache*). A
 parser that runs **before** Kafka destroys whatever it misparses, irrecoverably. A parser

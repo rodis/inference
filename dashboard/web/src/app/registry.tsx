@@ -1,7 +1,7 @@
 import type { ComponentType } from "react";
 import {
   Activity, BrainCircuit, Calendar, CreditCard, Layers, MapPin, Route, ScrollText, Store,
-  Workflow,
+  Workflow, ListChecks,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import TimelineDashboard from "../dashboards/timeline/TimelineDashboard";
@@ -10,6 +10,7 @@ import LastJourneyCard from "../dashboards/home/LastJourneyCard";
 import SpendDashboard from "../dashboards/money/SpendDashboard";
 import SpendHomeCard from "../dashboards/money/SpendHomeCard";
 import ProcessesDashboard from "../dashboards/processes/ProcessesDashboard";
+import TasksDashboard from "../dashboards/tasks/TasksDashboard";
 
 /** The portal's whole structure is registry data: sections give the sidebar its groups,
  *  modules give it entries, and the frame (Shell / HomeView / the palette) only ever derives
@@ -97,6 +98,10 @@ export const MODULES: ModuleDef[] = [
   {
     slug: "processes", title: "Invoicing", section: "processes", Icon: Workflow,
     component: ProcessesDashboard,
+  },
+  {
+    slug: "tasks", title: "Tasks", section: "processes", Icon: ListChecks,
+    component: TasksDashboard,
   },
   { slug: "levels", title: "Levels", section: "config", Icon: Layers, component: LevelsDashboard },
 ];

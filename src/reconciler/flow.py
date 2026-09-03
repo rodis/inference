@@ -198,6 +198,34 @@ def open_and_advance_flow(process: str, seq: int | None = None, period: dict | N
     }}
 
 
+@flow(name="sweep-email-tasks")
+def sweep_tasks_flow(label: str = "aware/todo", user: str | None = None,
+                     lookback_days: int = 365, dry_run: bool = False) -> dict:
+    """Reconcile the Gmail todo label against the recorded task events.
+
+    The third deployment, and the first that is not a *process*. It belongs here anyway: it is
+    the same idea the tier is built on — a scheduled job that is a pure function of what has
+    been recorded, and therefore safe to re-run — applied to something with two states instead
+    of eleven stages. Modelling a todo as a process would mint a cycle per email.
+
+    Returns counts rather than nothing so the Prefect UI answers "did anything move?" without
+    opening the logs, exactly as `advance_flow` does.
+
+    **Never fails on a quiet sweep.** Most hours the label and the event log agree, and that is
+    the normal resting state, not an error. A genuine fault — an unreachable relay, a bad
+    token — still raises out of `app` and fails the run.
+    """
+    _wire_logging()
+    _load_config()
+    plan = app.sweep_tasks(label=label, user=user, lookback_days=lookback_days,
+                           options=app.RunOptions(dry_run=dry_run))
+    summary = {
+        "opened": [c.get("subject", "")[:80] for c in plan.to_open],
+        "closed": [t.subject[:80] for t in plan.to_close],
+    }
+    logger.info("sweep: opened %d, closed %d", len(plan.to_open), len(plan.to_close))
+    return summary
+
 if __name__ == "__main__":
     # Local smoke run against the ephemeral server Prefect starts on its own — proves the
     # deployment's entrypoint resolves and the flow executes, without touching Prefect Cloud.
