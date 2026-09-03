@@ -191,6 +191,31 @@ done
 - **Separable** → push the last code-only commit first, then the rest. Code first: a `deploy/**`
   mirror carries the existing image tag forward, so it must not run before the image exists.
 
+  **EXCEPT when the branch adds a new `workers/<name>/` — then push `deploy/**` FIRST.** The
+  code-first rule assumes a component's manifest already exists, which is true for every change
+  to an existing worker and false for the landing that introduces one. Both halves arrive
+  together, and code-first puts them on `main` in the order that breaks:
+
+  - `publish-images.yml` auto-discovers the new `workers/<name>/Dockerfile` but its manifest,
+    `deploy/inference/kustomize/base/<slug>/values.yml`, is a `deploy/**` path still sitting in
+    the second commit — so `test_every_worker_image_has_a_manifest_to_bump` fails, `checks`
+    gates `bump-manifests`, and nothing builds.
+  - Deploy-first is safe because **a deploy-only push runs no tests at all**:
+    `mirror-deploy-state.yml` has no checks job and `publish-images.yml` is skipped by its
+    `paths-ignore`. The manifest lands on `main`, and the code push then finds it there.
+
+  The one thing deploy-first costs: the mirror has no `deploy-state` copy of a brand-new
+  `values.yml` to preserve a tag from, so it ships main's `sha-bootstrap` placeholder and the
+  component points at an image that does not exist until the following code push bumps it. That
+  window is visible (`ImagePullBackOff`) and self-correcting — far cheaper than a red `main`.
+
+  Observed 2026-09-03 landing `argo_workflows`, which added `workers/reconciler/`: code-first
+  failed CI on three of its own new tests, and recovering took a deploy push plus a
+  `workflow_dispatch` of `publish-images.yml` to build the image the failed run never reached.
+  Note that **neither standing check catches this** — step 6 runs the tests on merged `main`
+  (both commits, green) and the worktree's own runs see the full tree (also green). The
+  intermediate state a split push creates is tested by nothing except CI.
+
   ```bash
   git -C "$MAIN_REPO" push origin <last-code-only-sha>:main
   # wait for the monitor's verdict — the deploy lock enforces this anyway
