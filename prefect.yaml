@@ -92,11 +92,16 @@ deployments:
     parameters:
       process: dreamhost_invoice
     work_pool: *managed
-    # PAUSED in Prefect Cloud until the runtime secrets are set on the deployment — without
-    # NEON_DATABASE_URL this raises ConfigurationError on every firing, and an hourly schedule
-    # would turn that into 24 failed runs a day. Unpause from the UI (or
-    # `prefect deployment resume-schedule`) once the secrets are in; a re-deploy does NOT
-    # unpause it, so this comment is the only reminder.
+    # LIVE since 2026-09-03. It was paused until the Doppler token existed, because without
+    # NEON_DATABASE_URL every firing raises ConfigurationError and an hourly cron turns that
+    # into 24 failed runs a day.
+    #
+    # Two gotchas if you ever pause it again. A re-deploy does NOT unpause it — pause state is
+    # held in Prefect Cloud, not here. And `POST /deployments/{id}/resume_deployment` returned
+    # 200 while leaving `paused: true` AND the schedule's own `active: false`: those are two
+    # separate flags, so unpausing means PATCHing the deployment (`paused: false`) *and* the
+    # schedule (`active: true`). Confirm by checking that scheduled runs actually appear in
+    # `flow_runs/filter` — a 200 is not evidence.
     schedules:
       # :17 rather than :00 — nothing else here is on the hour, and an off-peak minute avoids
       # queueing behind everyone else's midnight cron on a shared free tier.
