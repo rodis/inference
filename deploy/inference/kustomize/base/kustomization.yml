@@ -3,5 +3,9 @@ resources:
   - inference-worker-config.yml
   - kafka-ssl-credentials.yml
   - bmw-cardata-credentials.yml
+  - reconciler-credentials.yml
   - runtime
   - bmw-cardata
+  # The process tier's schedule. Needs the Argo Workflows CRDs, which the separate
+  # inference-workflows app installs — sync that one first on a fresh cluster.
+  - reconciler

@@ -1,0 +1,176 @@
+# The process tier's SCHEDULE (ADR 0012, amended 2026-09-03). The engine that runs it is a
+# separate app — deploy/workflows/, tracking `main`; this is the workload, and it lives in the
+# inference app precisely so CI's image pinning applies to it.
+#
+# WHY THE STAKATER APPLICATION CHART FOR A THING WITH NO APPLICATION. This looks odd and is
+# deliberate. `publish-images.yml` auto-discovers `workers/<name>/Dockerfile` and bumps
+# `deploy/inference/kustomize/base/<slug>/values.yml`'s `.deployment.image.tag` to
+# `sha-<short>` on deploy-state — that is the ONE image-pinning mechanism in this repo, and
+# reproducing it for a hand-written manifest would mean a second one. So the CronWorkflows ride
+# in `extraObjects`, which the chart renders through `tpl`, and read the tag CI wrote. The
+# Deployment and Service the chart exists to produce are switched off below.
+#
+# The alternative was `:latest` with `pullPolicy: Always`, which needs none of this and pins
+# nothing: no way to say which commit is running, and no rollback that is not a code revert.
+applicationName: reconciler
+
+deployment:
+  # There is no long-running process here. A reconciler run is a pure function of recorded
+  # milestones that finishes in seconds; keeping a pod alive to do nothing between firings is
+  # the shape this tier was designed to avoid.
+  enabled: false
+  image:
+    repository: ghcr.io/rodis/inference-reconciler
+    tag: "sha-bootstrap"   # placeholder; CI bumps this to sha-<short> on deploy-state
+    pullPolicy: IfNotPresent
+
+service:
+  # Nothing listens. Also required: the chart names its Service after `applicationName`, and
+  # leaving it on would put a second endpoint-less Service in this namespace for no reason.
+  enabled: false
+
+# ---------------------------------------------------------------------------------------------
+# TRAP FOR WHOEVER EXTENDS THIS: everything below is rendered through Helm's `tpl`, so `{{ }}`
+# is HELM's, not Argo's. Argo Workflows' own expressions — `{{inputs.parameters.x}}`,
+# `{{workflow.name}}`, `{{steps.a.outputs.result}}` — will be evaluated by Helm first and fail
+# the BUILD, which under Argo CD means the whole inference app wedges in ComparisonError.
+#
+# That is why the templates below take no parameters and carry fixed `args`. If you ever need
+# an Argo expression here, `{{"{{"}}` it or move the manifest out of `extraObjects` into a
+# plain resource (and give up the tag pinning above).
+# ---------------------------------------------------------------------------------------------
+extraObjects:
+  - apiVersion: argoproj.io/v1alpha1
+    kind: WorkflowTemplate
+    metadata:
+      name: reconciler
+      namespace: inference
+    spec:
+      # Created by the argo-workflows chart (workflow.serviceAccount), which gives it exactly
+      # what the executor needs and nothing more. The reconciler itself never talks to the
+      # Kubernetes API — only to Neon and HTTPS relays.
+      serviceAccountName: argo-workflow
+      # Advancing is the default because it is the act with a consumer waiting on it; a
+      # CronWorkflow overrides this per schedule.
+      entrypoint: advance-cycles
+
+      templates:
+        - name: advance-cycles
+          # Walks every open cycle to its frontier. Creates nothing, ever — `open` is a
+          # separate act with a separate owner (Prefect's monthly deployment), because
+          # merging them would make the loop a scheduler.
+          container: &reconciler
+            image: "{{ .Values.deployment.image.repository }}:{{ .Values.deployment.image.tag }}"
+            imagePullPolicy: "{{ .Values.deployment.image.pullPolicy }}"
+            # EXPLICIT `command`, even though the image sets the same ENTRYPOINT.
+            #
+            # The emissary executor needs to know the entrypoint, and with only `args` given it
+            # resolves it by reading the image's config from the registry. That works for a
+            # public ghcr image and is a dependency worth not having: it turns a registry
+            # hiccup into a workflow that cannot start, for no benefit over saying it here.
+            command: ["python", "-m", "reconciler.run"]
+            args: ["reconcile", "--process", "dreamhost_invoice"]
+            # The Kubernetes way in: the Doppler operator syncs the tier's own `reconciler`
+            # config into this Secret and `envFrom` injects all of it, so the pod needs no
+            # bootstrap credential and makes no run-time call to Doppler to start working.
+            #
+            # This is NOT a second source of truth — the distinction that matters, and the one
+            # the 2026-09-03 CA incident turned on. That was two *authored* copies of a value,
+            # one of which went stale. This is a derived copy the operator refreshes from the
+            # single authored source every 60 seconds, exactly as Vector and the dashboard get
+            # theirs.
+            #
+            # `envFrom` rather than an enumerated `env:` so this manifest never lists the
+            # secrets: adding a ninth is a Doppler edit with no deploy at all. See
+            # ../reconciler-credentials.yml for why there is no allow-list either.
+            envFrom:
+              - secretRef:
+                  name: reconciler-credentials
+            resources:
+              requests:
+                cpu: 50m
+                memory: 128Mi
+              limits:
+                cpu: 500m
+                memory: 512Mi
+          retryStrategy: &retries
+            # Two retries, because the one transient fault this tier reliably meets is Neon's
+            # scale-to-zero: an idle compute suspends, and the first connection after that gets
+            # a dead socket ("SSL connection closed unexpectedly"). Retrying is free —
+            # advancing is idempotent by construction — and 30s is long enough for Neon to
+            # wake. `OnFailure` rather than `OnError`, so a genuine ConfigurationError (a
+            # missing secret) fails once and stays visible instead of being retried into noise.
+            limit: 2
+            retryPolicy: OnFailure
+            backoff:
+              duration: "30s"
+              factor: 2
+
+        - name: sweep-tasks
+          # Reconciles the `aware/todo` Gmail label against recorded task events. The only way
+          # a task can close from outside the dashboard: Gmail reports a label being ADDED and
+          # never one being removed, so no trigger can see a task finish.
+          container:
+            <<: *reconciler
+            args: ["sweep-tasks"]
+          retryStrategy: *retries
+
+  - apiVersion: argoproj.io/v1alpha1
+    kind: CronWorkflow
+    metadata:
+      name: advance-cycles
+      namespace: inference
+    spec:
+      # Hourly, as it was on Prefect — every stage this waits on moves on human timescales (a
+      # person applying a label, a bank sending a notification), and a pure function of
+      # recorded events loses nothing by being asked less often. Free compute changed the
+      # ceiling, not the need.
+      schedule: "17 * * * *"
+      timezone: Europe/Zurich
+      # A second run while one is in flight could only re-derive the same frontier, but it
+      # could also send the same mail twice from two different processes' idea of "not sent
+      # yet". Cheaper to forbid than to reason about.
+      concurrencyPolicy: Forbid
+      # A firing missed by more than five minutes is not worth catching up: the next one is an
+      # hour away and re-derives everything anyway.
+      startingDeadlineSeconds: 300
+      # With the archive off, these limits plus the controller's 3-day TTL are the whole
+      # retention story. Failures are kept longer than successes because they are the only
+      # ones anyone reads.
+      successfulJobsHistoryLimit: 3
+      failedJobsHistoryLimit: 5
+      workflowSpec:
+        workflowTemplateRef:
+          name: reconciler
+        entrypoint: advance-cycles
+        # Bounded so a hung HTTP call cannot hold the `Forbid` slot indefinitely and silently
+        # stop the schedule — the exact silent stall this tier exists to avoid.
+        activeDeadlineSeconds: 900
+
+  - apiVersion: argoproj.io/v1alpha1
+    kind: CronWorkflow
+    metadata:
+      name: sweep-tasks
+      namespace: inference
+    spec:
+      # EVERY 15 MINUTES, and this is the change that motivated the move. On Prefect Managed
+      # each run cost a 60-second minimum against a 30,000s/month workspace limit, so 15-minute
+      # scheduling was 2,976 runs = 595% of quota and simply unavailable at any price on the
+      # free tier. Here it costs a few seconds of a node that is already paid for.
+      #
+      # It matters for the board specifically: the dashboard tick emits its own close
+      # immediately, so this is the REPAIR path — a label removed in Gmail, or a dropped Gmail
+      # Trigger. An hour of a finished task still sitting on the board was the visible symptom.
+      schedule: "*/15 * * * *"
+      timezone: Europe/Zurich
+      concurrencyPolicy: Forbid
+      startingDeadlineSeconds: 300
+      successfulJobsHistoryLimit: 3
+      failedJobsHistoryLimit: 5
+      workflowSpec:
+        workflowTemplateRef:
+          name: reconciler
+        entrypoint: sweep-tasks
+        # Tighter than the invoice advance and deliberately under the 15-minute interval, so a
+        # hung run frees the `Forbid` slot before the next firing rather than skipping it.
+        activeDeadlineSeconds: 600

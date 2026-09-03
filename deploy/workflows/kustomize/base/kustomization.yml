@@ -1,0 +1,7 @@
+generators:
+  - helmChart.yml
+
+resources:
+  # The inference namespace is owned by the inference-runtime app (its namespace.yml) +
+  # CreateNamespace=true; the workflow engine just installs into it.
+  - argo-ui-rbac.yml

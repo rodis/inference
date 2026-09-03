@@ -1,0 +1,14 @@
+apiVersion: builtin
+kind: HelmChartInflationGenerator
+metadata:
+  name: argo-workflows
+name: argo-workflows
+releaseName: argo-workflows
+repo: https://argoproj.github.io/argo-helm
+# PINNED, and this is the one line in the file that has already cost four days elsewhere: an
+# unpinned generator pulled "latest" for Vector and silently bumped 0.56->0.57, whose
+# disabled-by-default env-var interpolation wedged rollouts. Chart 2.0.3 = Argo Workflows
+# v4.1.2. Version bumps are deliberate here.
+version: 2.0.3
+valuesFile: values.yml
+namespace: inference

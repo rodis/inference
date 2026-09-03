@@ -1,0 +1,57 @@
+# How a human logs in to the Argo Workflows UI at argo.prod.rods.me.
+#
+# The server runs in `client` auth mode (values.yml), which means it holds no identity of its
+# own: it takes a Kubernetes bearer token from the browser and acts AS that token, so every
+# action is authorised by ordinary RBAC. That is the whole reason to prefer it over `server`
+# mode, where anyone reaching the ingress would get full workflow control — which in this
+# namespace means arbitrary pod creation next to the reconciler's credentials.
+#
+# TO LOG IN, get the token and paste it into the UI's login box (it persists in the browser,
+# so this is once per browser, not a login flow):
+#
+#     kubectl -n inference get secret argo-ui-token -o jsonpath='{.data.token}' | base64 -d
+#
+# then enter it as `Bearer <token>`.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argo-ui
+  namespace: inference
+---
+# A long-lived token, deliberately. Since Kubernetes 1.24 a ServiceAccount no longer mints one
+# automatically, and the modern alternative (`kubectl create token`, or a projected volume) is
+# short-lived by design — correct for a workload, wrong for a browser session a human keeps.
+# The trade is explicit: this token does not expire, so it is the one thing here worth rotating
+# by hand (delete the Secret; the controller mints a new one) if it ever leaks.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: argo-ui-token
+  namespace: inference
+  annotations:
+    kubernetes.io/service-account.name: argo-ui
+type: kubernetes.io/service-account-token
+---
+# Bound to the SERVER'S OWN Role rather than a hand-written verb list.
+#
+# That is the point: in `client` mode the permissions a UI user needs are by definition the
+# permissions the server would have needed, and the chart already computes that set (and will
+# keep it correct across chart upgrades). Duplicating it here would be a second copy destined
+# to drift — the same reasoning that keeps the reconciler's eight secrets in one place.
+#
+# It is a namespace-scoped Role because `singleNamespace: true`, so this grants nothing outside
+# `inference`.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-ui
+  namespace: inference
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: argo-workflows-server
+subjects:
+  - kind: ServiceAccount
+    name: argo-ui
+    namespace: inference

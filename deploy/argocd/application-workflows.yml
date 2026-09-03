@@ -1,0 +1,41 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: inference-workflows
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/rodis/inference.git
+    # Tracks `main` directly, like inference-vector and for the same reason: this app is pure
+    # config on stock upstream images, so it never needs CI's image-bump rewrite. The
+    # reconciler's OWN image is a different matter and lives in inference-runtime
+    # (deploy/inference/kustomize/base/reconciler), which tracks deploy-state.
+    targetRevision: main
+    path: deploy/workflows/kustomize/base
+
+  destination:
+    server: https://kubernetes.default.svc
+    # Same namespace as everything else. `singleNamespace: true` in values.yml means the
+    # controller watches only this one and holds namespace-scoped RBAC for it.
+    namespace: inference
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      # Required here, not merely conventional: the minified Argo Workflows CRDs are large, and
+      # a client-side apply would stuff the whole manifest into the
+      # `kubectl.kubernetes.io/last-applied-configuration` annotation and hit the 262,144-byte
+      # limit.
+      - ServerSideApply=true
+
+  # ORDERING NOTE. This app owns the CRDs that inference-runtime's CronWorkflows are instances
+  # of, so on a fresh cluster it must sync FIRST — otherwise the runtime app reports a failed
+  # sync ("no matches for kind CronWorkflow") until it retries. Argo CD converges on its own;
+  # this is only about not being alarmed by a few minutes of red.

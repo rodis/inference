@@ -1,0 +1,145 @@
+# Argo Workflows — the process tier's scheduler (ADR 0012, amended 2026-09-03).
+#
+# WHY THIS AND NOT A DATABASE-BACKED ENGINE: the controller + server need **no external
+# database and no Redis**. Active workflow state lives in etcd as CRDs. Postgres/MySQL is
+# required only to ARCHIVE completed workflows, which is why the archive is off below and why
+# the deciding constraint of this project — no in-cluster persistence, and Redis deliberately
+# removed — is satisfied without an exception.
+#
+# WHY NOT TEMPORAL: durable execution solves resuming a workflow that cannot be re-run. A
+# reconciler run is a pure function of recorded milestones, so re-running it re-derives the same
+# frontier — the problem Temporal exists to solve does not occur here, and its machinery would
+# be pure cost. WHY NOT PREFECT OSS: a server plus Postgres plus Redis.
+
+images:
+  # Every image here is addressed by an immutable tag — the controller and server by the
+  # chart's appVersion, the reconciler by `sha-<short>` — so re-pulling on every pod start
+  # buys nothing. This also reaches the WORKFLOW pod via `mainContainer`, which is the one
+  # that actually matters: a 15-minute cron would otherwise pull the reconciler image ~2,900
+  # times a month to get the same bytes.
+  pullPolicy: IfNotPresent
+
+# CRD-level `x-kubernetes-preserve-unknown-fields` instead of full OpenAPI schemas.
+#
+# `full: true` (the chart default) does NOT render CRDs as manifests at all — it installs them
+# from a pre-install/pre-upgrade **hook Job** doing server-side apply, which is the wrong shape
+# under Argo CD: the Job becomes a PreSync hook whose success is invisible to the app's health,
+# and the CRDs themselves end up unmanaged by the thing that is supposed to own them. Minified
+# CRDs are plain manifests Argo CD can diff, prune and report on.
+#
+# The cost is real and worth naming: no server-side validation of a workflow spec, so a typo in
+# a CronWorkflow is accepted by the API and discovered by the controller instead. Acceptable
+# because our workflows are generated from one WorkflowTemplate, not hand-written per run.
+crds:
+  install: true
+  keep: true
+  full: false
+
+# The controller watches THIS NAMESPACE ONLY, and gets a Role rather than a ClusterRole for it.
+# Every workload in this project already lives in `inference`, so cluster-wide reach would be
+# blast radius bought for nothing — and the reconciler's credentials are namespace-scoped
+# Secrets it has to sit beside anyway.
+singleNamespace: true
+
+workflow:
+  serviceAccount:
+    # Workflow pods run as this SA, and it must exist before a CronWorkflow fires. The chart's
+    # `rbac.create` gives it exactly what the executor needs: patch its own pod and create
+    # workflowtaskresults. Nothing else — the reconciler talks to Neon and HTTP relays, never
+    # to the Kubernetes API.
+    create: true
+    name: argo-workflow
+  rbac:
+    create: true
+
+controller:
+  # No ClusterWorkflowTemplates — we are single-namespace, so the cluster-scoped variant has no
+  # use. Not merely unused: left at its default `true`, the chart renders ClusterRoleBindings
+  # for it while `singleNamespace` SUPPRESSES the matching ClusterRoles, so the install ships
+  # two bindings pointing at roles that do not exist. Harmless to the API server, silently
+  # wrong to anyone auditing RBAC, and it drops a CRD from the install too.
+  clusterWorkflowTemplates:
+    enabled: false
+
+  # NO ARCHIVE, explicitly empty rather than absent. Archiving is the only feature that would
+  # require Postgres, and turning it on is the decision this comment exists to make deliberate.
+  persistence: {}
+
+  # THE COUNTERPART TO ARCHIVE-OFF, and the single most load-bearing block in this file.
+  #
+  # With no archive, the completed `Workflow` object IS the only record of a run — so nothing
+  # reaps it. `sweep-tasks` fires every 15 minutes: unbounded, that is ~2,900 Workflow objects
+  # and their pods accumulating in etcd every month, and etcd is the one store in this
+  # architecture that must not be treated as a data sink.
+  #
+  # So: keep three days of history (long enough to debug a weekend's worth of failures, short
+  # enough to stay bounded at ~300 objects), and delete pods once their workflow succeeded —
+  # a FAILED run keeps its pods, because their logs are the whole reason to look.
+  workflowDefaults:
+    spec:
+      ttlStrategy:
+        secondsAfterCompletion: 259200   # 3 days
+      podGC:
+        strategy: OnWorkflowSuccess
+  resources:
+    requests:
+      cpu: 25m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+mainContainer:
+  # Workflow pods are short-lived Python processes doing HTTP and one Postgres query. Requests
+  # are what actually schedules them; the limit is headroom for psycopg + a rendered PDF body.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+server:
+  enabled: true
+
+  # Same reasoning as the controller's — see above.
+  clusterWorkflowTemplates:
+    enabled: false
+
+  # `client` auth: the UI asks for a Kubernetes bearer token and then acts AS that token, so
+  # every action is checked by normal RBAC and there is no shared password. Chosen over
+  # `server` (which would give anyone who reaches the ingress full workflow control — i.e. pod
+  # creation in this namespace) and over `sso` (an OIDC provider for a single operator).
+  #
+  # The token to paste is minted in argo-ui-rbac.yml. It persists in the browser, so this is a
+  # one-time step per browser rather than a login flow.
+  authModes:
+    - client
+
+  ingress:
+    enabled: true
+    # `nginx` is correct despite Traefik being the actual controller — this cluster runs
+    # Traefik behind the nginx IngressClass name. The Argo CD side of that quirk (an Ingress
+    # never getting LB status, so apps hang in Progressing) is already handled globally by a
+    # health override in argocd-cm, so nothing is needed here.
+    ingressClassName: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+    hosts:
+      - argo.prod.rods.me
+    paths:
+      - /
+    pathType: Prefix
+    tls:
+      - secretName: argo-workflows-tls
+        hosts:
+          - argo.prod.rods.me
+
+  resources:
+    requests:
+      cpu: 25m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
