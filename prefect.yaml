@@ -49,9 +49,16 @@ definitions:
         # named 'reconciler'`. `src/reconciler/flow.py` bootstraps its own `sys.path` instead.
         # Treat everything in this block as best-effort for the same reason.
         #
-        # Set these as Prefect Cloud secrets on the deployment, not here:
-        #   NEON_DATABASE_URL, VECTOR_BASE_URL, MAIL_RELAY_URL, MAIL_RELAY_TOKEN, MAIL_TO,
-        #   GMAIL_QUERY_URL, LLM_RELAY_URL, CRAFTMYPDF_API_KEY
+        # NO application secrets here, and none as Prefect secrets either. Prefect holds ONE
+        # credential — a read-only Doppler service token in the `doppler-token` Secret block —
+        # and `flow.py` reads the other eight from Doppler at run time. Copying them into
+        # Prefect would make it a second source of truth, which is exactly what cost 37 hours
+        # of dropped ingest on 2026-09-03 when one of two copies of a CA went stale.
+        #
+        # The token is scoped to a config that is the ROOT of its own `reconciler` environment,
+        # so it inherits nothing: it can resolve those eight and cannot see `avnadmin`'s Kafka
+        # private key, the BMW refresh token or the dashboard password. A branch config would
+        # NOT do — branch configs inherit their root.
         PREFECT_LOGGING_LEVEL: INFO
         # Delivers the tier's own `reconciler.*` records into the run log. `flow.py` raises
         # their level; this is what attaches Prefect's handler to them. Without it the run

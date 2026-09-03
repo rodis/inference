@@ -20,6 +20,7 @@ Deployed from `prefect.yaml` at the repo root.
 """
 
 import logging
+import os
 import pathlib
 import sys
 from datetime import UTC, datetime
@@ -43,9 +44,46 @@ _SRC = str(pathlib.Path(__file__).resolve().parents[1])
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
-from reconciler import app  # noqa: E402  — must follow the sys.path bootstrap above
+from reconciler import app  # noqa: E402
+from reconciler.adapters import doppler  # noqa: E402  — must follow the sys.path bootstrap above
 
 logger = logging.getLogger("reconciler.flow")
+
+
+# The Prefect Secret block holding the read-only Doppler service token. Named, not derived,
+# because it is the one piece of configuration that cannot itself come from Doppler.
+DOPPLER_TOKEN_BLOCK = "doppler-token"
+
+
+def _load_config() -> None:
+    """Populate `os.environ` from Doppler, for anything not already set.
+
+    `setdefault` semantics, and the order matters: a local run keeps using `workers/.env`
+    untouched, while a scheduled run starts with an almost-empty environment and takes
+    everything from Doppler. Same code path either way, so there is no "works locally" gap.
+
+    Getting the *token* is the only Prefect-specific step — it comes from a Secret block, since
+    it is the one credential that cannot be stored in the thing it unlocks. Everything after
+    that is `adapters.doppler`, which knows nothing about any runner.
+
+    A missing token warns rather than raises: `app.py` already raises a `ConfigurationError`
+    naming the exact variable a stage needed, which is a better message than a generic
+    block-not-found. A token that exists but *fails* does raise — an unreadable secret store is
+    a real fault, and pretending otherwise would let a run proceed half-configured.
+    """
+    token = os.environ.get("DOPPLER_TOKEN")
+    if not token:
+        try:
+            from prefect.blocks.system import Secret
+
+            token = Secret.load(DOPPLER_TOKEN_BLOCK).get()
+        except Exception as e:      # noqa: BLE001 — no block, or no Prefect context
+            logger.warning("no DOPPLER_TOKEN and no %r Secret block (%s); relying on whatever "
+                           "is already in the environment", DOPPLER_TOKEN_BLOCK, e)
+            return
+
+    for name, value in doppler.fetch(token).items():
+        os.environ.setdefault(name, value)
 
 
 def _wire_logging() -> None:
@@ -80,6 +118,7 @@ def open_cycle_flow(process: str, seq: int | None = None, period: dict | None = 
     manually with it off.
     """
     _wire_logging()
+    _load_config()
     if period is None and use_previous_month:
         period = app.previous_month(datetime.now(UTC).date())
 
@@ -102,6 +141,7 @@ def advance_flow(process: str, cycle_key: str | None = None, dry_run: bool = Fal
     the run, which is the distinction worth alerting on.
     """
     _wire_logging()
+    _load_config()
     results = app.advance(process, cycle_key=cycle_key,
                           options=app.RunOptions(dry_run=dry_run))
 
