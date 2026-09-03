@@ -173,10 +173,29 @@ def open_and_advance_flow(process: str, seq: int | None = None, period: dict | N
     at all. The deployment was unusable from the moment it was created (found 2026-09-03, by
     trying to open August's cycle with it). `tests/test_reconciler_app.py` now fails on any
     deployed entrypoint that takes `**kwargs`.
+
+    **It walks the cycle it just made, rather than looking it back up.** Composing the two
+    flows instead — open, then `advance_flow` — was the second bug in this function, and the
+    more insidious one: `advance` reads cycles from Neon, but a milestone reaches Neon
+    asynchronously (gateway -> Kafka -> Vector -> persister). So the lookup raced the write and
+    failed with `no cycle 'dh_invoice_2026_010'`, and under `dry_run` it could never succeed at
+    all, because a dry open writes nothing to look up. `app.walk_fresh` takes the Cycle object
+    and an empty milestone set, which is exactly right for something opened one line ago.
     """
-    key = open_cycle_flow(process, seq=seq, period=period, year=year, user=user,
-                          use_previous_month=use_previous_month, dry_run=dry_run)
-    return advance_flow(process, cycle_key=key, dry_run=dry_run)
+    _wire_logging()
+    _load_config()
+    if period is None and use_previous_month:
+        period = app.previous_month(datetime.now(UTC).date())
+
+    options = app.RunOptions(dry_run=dry_run)
+    cycle = app.open_cycle(process, seq=seq, period=period, year=year, user=user,
+                           options=options)
+    outcome = app.walk_fresh(process, cycle, options=options)
+    return {cycle.key: {
+        "status": outcome.status.value if outcome else "stopped",
+        "advanced": list(outcome.advanced) if outcome else [],
+        "waiting_on": list(outcome.waiting_on) if outcome else [],
+    }}
 
 
 if __name__ == "__main__":

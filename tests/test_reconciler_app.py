@@ -113,6 +113,35 @@ def test_the_deployments_point_at_flows_that_exist():
         assert func in names, f"{deployment['name']} points at missing {path}:{func}"
 
 
+def test_walking_a_fresh_cycle_needs_no_database(monkeypatch):
+    """The preview path, and the reason `open_and_advance_flow` uses it.
+
+    A cycle opened one line ago has nothing recorded to read — and a milestone reaches Neon
+    ASYNCHRONOUSLY (gateway -> Kafka -> Vector -> persister), so looking it back up races the
+    write. `advance` did exactly that and failed with `no cycle 'dh_invoice_2026_010'`; under
+    dry-run it could never work, since a dry open writes nothing to find.
+
+    So this asserts the property that makes the race impossible: walking a just-made cycle
+    touches no database at all. `NEON_DATABASE_URL` is removed here, and a DB read would raise
+    `ConfigurationError`.
+    """
+    for var in ("NEON_DATABASE_URL", "GMAIL_QUERY_URL", "LLM_RELAY_URL",
+                "MAIL_RELAY_URL", "VECTOR_BASE_URL", "CRAFTMYPDF_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+
+    cycle = Cycle(key="dh_invoice_2026_099", process="dreamhost_invoice", user_id="rods",
+                  opened_at=1788000000,
+                  context={"invoice_number": 99,
+                           "worked_period": {"start": "2026-08-01", "end": "2026-08-31"}})
+
+    outcome = app.walk_fresh("dreamhost_invoice", cycle,
+                             options=app.RunOptions(dry_run=True, processes_dir=PROCESSES))
+
+    # It gets through the pure + notify stages and then stops at the first gate, because no
+    # finder is wired without GMAIL_QUERY_URL. `None` is that loud stop, not a silent skip.
+    assert outcome is None
+
+
 def test_no_deployed_entrypoint_takes_kwargs():
     """Prefect builds a deployment's parameter schema from the flow signature, and renders
     `**kwargs` as a property named `kwargs` that is REQUIRED. The deployment is then
