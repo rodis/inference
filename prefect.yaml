@@ -1,11 +1,24 @@
 # Prefect deployments for the process tier (ADR 0012).
 #
-# RUNNER CHOICE: Prefect Cloud on a **Managed** work pool. The deciding test for any managed
-# offering was whether the free tier includes *execution* or only scheduling — a scheduler that
-# still needs a self-hosted worker buys no infra reduction, which is the whole point. Managed
-# pools execute the code on Prefect's infrastructure, so nothing lands on the k8s cluster and
-# there is no `workers/reconciler/` image to build (there must not be one: that path
-# auto-builds against a manifest that does not exist).
+# TIER 2, SINCE 2026-09-03. Scheduling moved to Argo Workflows on the cluster; what is left
+# here runs each flow ONCE A DAY as an independent backstop. See the ADR amendment
+# "Scheduling moves to Argo Workflows" for the full evidence — the short version is that
+# Managed Execution bills a **60-second minimum per run** (measured: 3 runs = 180s, 1 = 60s,
+# 10 = 600s, exactly 60s each regardless of a run's real ~45s duration) against a workspace
+# limit of **30,000 compute-seconds/month**. That is 500 runs a month, and the hourly
+# `dreamhost-invoice-advance` alone was 744 — 149% of quota, exhausted around the 17th.
+#
+# The consequence worth carrying: making a flow FASTER saved nothing. Only fewer runs did.
+#
+# Prefect is kept rather than removed, and not out of sentiment — it is an INDEPENDENT
+# EXECUTION PATH. Different infrastructure, different network, different credentials, so it
+# catches the one failure the cluster cannot report on its own: the cluster being down. A
+# backstop sharing the primary's infrastructure would be decoration. At ~61 runs/month it
+# costs about 12% of the quota.
+#
+# WHAT STAYED HERE: the monthly opener, unchanged. Twelve runs a year is quota-irrelevant, it
+# is the only thing that CREATES a cycle (so exactly one owner is a feature, not a gap), and
+# tests/test_reconciler_app.py pins its cron to the definition's own `opens:` block.
 #
 # HOW THE CODE GETS THERE: cloned from the public GitHub repo at run time. Public is doing real
 # work here — a private repo would need a credential block, and the tier's whole credential
@@ -17,7 +30,7 @@
 #     uv run --with prefect prefect work-pool create aware-managed --type prefect:managed
 #     uv run --with prefect prefect deploy --all
 #
-# The two schedules mirror the process definition's own `opens:` block, and
+# The opener's schedule mirrors the process definition's own `opens:` block, and
 # tests/test_reconciler_app.py asserts they still agree — a cron edited in one place and not
 # the other is otherwise invisible until an invoice does not happen.
 
@@ -103,9 +116,19 @@ deployments:
     # schedule (`active: true`). Confirm by checking that scheduled runs actually appear in
     # `flow_runs/filter` — a 200 is not evidence.
     schedules:
-      # :17 rather than :00 — nothing else here is on the hour, and an off-peak minute avoids
-      # queueing behind everyone else's midnight cron on a shared free tier.
-      - cron: "17 * * * *"
+      # DAILY since 2026-09-03 — tier 2. Argo's `advance-cycles` CronWorkflow carries the
+      # hourly cadence now; this firing exists to advance a stalled cycle when the cluster
+      # cannot. Early morning rather than midnight: off-peak on a shared free tier, and early
+      # enough that a cycle unblocked overnight has moved before anyone looks at the board.
+      #
+      # :47 IS NOT COSMETIC — it must not collide with the Argo CronWorkflow's :17. Two
+      # advances running at the same instant both read the same recorded milestones and both
+      # act on them, because a milestone reaches Neon ASYNCHRONOUSLY (gateway -> Kafka ->
+      # Vector -> persister; the same race that `walk_fresh` exists to avoid). The visible
+      # cost would be two identical approval mails. `concurrencyPolicy: Forbid` guards this
+      # inside Argo and knows nothing about Prefect, so the separation has to be here — and a
+      # test now asserts no Prefect cron shares a minute with an Argo schedule.
+      - cron: "47 6 * * *"
         timezone: Europe/Zurich
 
   # Unscheduled: the manual opener. `opens: {via: manual}` in the definition is what this is.
@@ -133,9 +156,9 @@ deployments:
       label: aware/todo
     work_pool: *managed
     schedules:
-      # :37 rather than :17, so it does not queue behind the invoice advance for the same n8n
-      # relay and the same Managed-pool slot. Hourly is plenty: a task that closes at 14:05 is
-      # already gone from the board (the dashboard tick emits its own close immediately) — the
-      # sweep is the repair path, and an hour is a fine repair latency for one.
-      - cron: "37 * * * *"
+      # DAILY since 2026-09-03 — tier 2. Argo's `sweep-tasks` CronWorkflow runs every 15
+      # minutes now, which is what the board actually wanted; this is the repair-of-the-repair.
+      # :37 rather than :17 so it does not queue behind the invoice advance for the same n8n
+      # relay and the same Managed-pool slot.
+      - cron: "37 6 * * *"
         timezone: Europe/Zurich

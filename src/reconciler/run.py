@@ -110,6 +110,47 @@ def _report(results) -> None:
             print(f"  waiting on: {', '.join(outcome.waiting_on)}")
 
 
+def _load_config_from_doppler() -> None:
+    """Populate `os.environ` from Doppler when a token is present, for anything not already set.
+
+    A CONVENIENCE FOR AD-HOC RUNS, and worth being precise that it is not load-bearing for
+    either deployed runner. Prefect fetches its own config in `flow.py` (which never calls
+    through here), and the Argo Workflows pods get theirs from the Doppler *operator*, which
+    syncs the tier's `reconciler` config into a Secret the workflow container takes via
+    `envFrom` — the Kubernetes-native path, and one that needs no bootstrap credential and no
+    run-time call to Doppler at all.
+
+    What it buys is that `export DOPPLER_TOKEN=... && python -m reconciler.run ...` works on any
+    box without maintaining a `workers/.env`, and that a future runner which simply shells the
+    CLI needs no code. Fifteen lines for that seems fair; delete it if it is still unused when
+    someone next reads this.
+
+    `setdefault`, and after `load_dotenv`, so precedence reads local-first: a developer's
+    `workers/.env` still wins and a local run never silently talks to production credentials it
+    did not ask for. With no token this is a no-op, which is what keeps `--dry-run` on a laptop
+    working exactly as before.
+
+    A token that FAILS raises, unlike `flow.py`'s equivalent — there the token is optional
+    because a local Prefect run may legitimately have no block, whereas here the token's mere
+    presence is the caller saying "this is where config comes from". An unreadable secret store
+    is a real fault, and proceeding half-configured would surface it far downstream as a stage
+    mysteriously deciding nothing had happened.
+    """
+    token = os.environ.get("DOPPLER_TOKEN")
+    if not token:
+        return
+
+    # Imported here for the same reason as dotenv below: module scope must stay importable
+    # with nothing third-party installed. (`adapters.doppler` is pure stdlib urllib, so this
+    # is about consistency rather than necessity.)
+    from reconciler.adapters import doppler
+
+    secrets = doppler.fetch(token)
+    for name, value in secrets.items():
+        os.environ.setdefault(name, value)
+    logger.info("loaded %d values from Doppler", len(secrets))
+
+
 def main(argv=None) -> int:
     # On the SUBcommands, not the top level: `run open --dry-run` is the order everyone
     # actually types, and argparse only accepts a top-level flag *before* the subcommand — so
@@ -167,6 +208,10 @@ def main(argv=None) -> int:
     load_dotenv(find_dotenv(usecwd=True))
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(levelname)s %(name)s: %(message)s")
+    # After logging is configured, so the "loaded N values" line is actually visible — that
+    # count is the difference between "misconfigured" and "configured but the process
+    # legitimately decided nothing had happened".
+    _load_config_from_doppler()
     try:
         return args.func(args)
     except ConfigurationError as e:

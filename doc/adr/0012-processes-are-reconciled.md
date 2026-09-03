@@ -4,8 +4,11 @@ Status: **Accepted — implemented.** Core + schema 2026-08-15; actions, the cla
 Prefect entry point 2026-08-16. Deployed to Prefect Cloud and the Aware UI wired 2026-09-03:
 `dh_invoice_2026_008` completed all eleven milestones (payment confirmed 2026-08-24), and
 `dh_invoice_2026_009` then advanced **six stages unattended** on the hourly deployment — one
-Gmail label in, a rendered PDF out. Two holes remain, both named below: `manual_lines` has no
-extras source (open question 8) and nothing can void a cycle (open question 11).
+Gmail label in, a rendered PDF out. **Amended 2026-09-03: scheduling moved to Argo Workflows on
+the cluster**, with Prefect demoted to a daily backstop — see *Amendment: scheduling moves to
+Argo Workflows* below, which also revises the `workers/reconciler/` prohibition and open
+question 1. Two holes remain, both named below: `manual_lines` has no extras source (open
+question 8) and nothing can void a cycle (open question 11).
 Date: 2026-08-15
 
 > This ADR introduces a **process tier**: a sibling of the connector tier (ADR 0008), one
@@ -330,6 +333,12 @@ re-run**, so voiding does not burn a number and leave a gap in the sequence.
 
 ### The runner: Prefect Cloud on a Managed work pool
 
+> **Superseded for tier-1 scheduling 2026-09-03.** The reasoning below is sound and its
+> conclusion held for two and a half weeks; what it got wrong was a *number* it had no way to
+> check at decision time. Read it, then read the amendment that follows — the interesting part
+> is not that a quota was smaller than advertised, but that the correction is invisible to every
+> optimisation instinct the mistake invites.
+
 **Decided 2026-08-15.** The free tier includes **Managed Execution** — Prefect runs the code on its
 own infrastructure, with no worker, no cloud account and nothing on our cluster. Limits are 10
 compute-hours per workspace per month, 2 GB RAM and a 24-hour maximum run; a daily reconciler at
@@ -408,6 +417,169 @@ moment an email lands rather than on the next tick. That is a real pivot — dur
 execution is the paradigm this ADR deliberately declines — and should be taken only with evidence
 that daily is too slow.
 
+### Amendment: scheduling moves to Argo Workflows
+
+**Decided and implemented 2026-09-03.** Tier-1 scheduling runs on **Argo Workflows** on the prod
+cluster. Prefect Cloud stays, demoted to a **daily backstop**.
+
+**What the original decision could not see.** "10 compute-hours per workspace per month" is what
+the marketing page says, and at ~1 minute a run it reads like an order of magnitude of headroom.
+The workspace's own usage endpoint says something different:
+
+```
+GET <PREFECT_API_URL>/../accounts/{a}/workspaces/{w}/managed_execution/usage
+  -> limit_seconds: 30000            # 8h20m, not 10h; resets monthly on the 27th
+```
+
+and its daily buckets say something much worse:
+
+| runs that day | seconds billed |
+|---|---|
+| 1 | 60 |
+| 3 | 180 |
+| 10 | 600 |
+
+Exactly 60 seconds each, regardless of duration. Managed Execution bills a **60-second minimum
+per run**, and a real run is ~40s of container provisioning and pip install around 2–6s of actual
+work. So the budget is not 8 hours of compute — it is **500 runs a month**, and the hourly
+`dreamhost-invoice-advance` alone is 744, or **149% of quota**, exhausting the workspace around the
+17th of every cycle.
+
+**The part worth carrying past this ADR.** Every instinct a quota problem provokes is to make the
+thing cheaper: trim the pip install, cache the image, shave the container start. All of it is
+worthless here. A 60-second floor means a 2-second run and a 45-second run cost the same, so
+**only reducing the run count reduces consumption**. This is the same shape as ADR 0009's
+conclusion about weights — when the binding constraint is structural, tuning the continuous knob
+next to it does nothing, and the fact that the knob *moves* is what makes it a trap.
+
+It also settles a question this ADR left implicit. The tier was designed around a *daily*
+reconciler; the invoice ran hourly and the task sweep wanted 15 minutes (`doc/email-tasks.md` — a
+task ticked at 14:05 sitting on the board until 15:37 was the visible symptom). A 15-minute sweep
+is 2,976 runs a month: **595% of quota, unavailable at any price on the free tier**. So the
+constraint was never going to be negotiated down. It had to be left.
+
+**Why Argo Workflows.** In order of what actually decided it:
+
+- **No external database and no Redis.** The controller keeps active state in etcd as CRDs.
+  Postgres/MySQL is needed *only* to archive completed workflows — so archive off means the
+  dependency list is "a controller and a server", and this project's standing rule (elastic
+  disposable compute in-cluster, all persistence external and managed) is satisfied without an
+  exception. This is the whole reason it beats Prefect OSS self-hosted, which wants a server plus
+  Postgres plus Redis — and Redis was deliberately removed from this architecture in ADR 0004.
+- **`CronWorkflow` is a first-class CRD**, so the schedule is a manifest, which means it is
+  GitOps state like everything else rather than a setting in someone's console. The Prefect-side
+  gotcha this replaces is instructive: pausing a deployment set flags *in Prefect Cloud*, so a
+  re-deploy did not unpause it, and `resume_deployment` returned 200 while leaving both
+  `paused: true` and the schedule's `active: false`. A manifest cannot drift from itself.
+- **It shares the loop and the idiom already in use.** Argo CD is already here; the vocabulary,
+  the RBAC model and the sync semantics transfer. That is worth more than it sounds when the
+  alternative is a second control plane with its own auth, its own CLI and its own outage modes.
+- **It scales into much more scheduling**, which is the stated direction. The next twenty
+  schedules cost twenty manifests and no quota arithmetic at all.
+
+**Why not Temporal**, which is the obvious suggestion for "durable scheduled work": durable
+execution exists to resume a workflow that **cannot be re-run** — non-idempotent side effects,
+partially-applied state, a saga needing compensation. The defining property of this tier is that a
+reconciler run is a **pure function of recorded milestones**, so re-running re-derives the same
+frontier. The problem Temporal solves does not occur here, and its machinery — event histories,
+workers, a cluster with its own datastore — would all be cost against a benefit already obtained
+by the design. Choosing it would be the durable-execution version of the mistake this ADR opens by
+declining.
+
+**Prefect is kept, and not out of sentiment.** It is an **independent execution path**: different
+infrastructure, different network, different credentials. That makes it the only component able to
+report the one failure the cluster cannot report about itself — the cluster being down. A backstop
+sharing the primary's infrastructure would be decoration. Each flow now runs **once a day**
+(~61 runs/month, about 12% of quota), which is exactly the cadence the tier was originally
+designed for and therefore loses nothing.
+
+The monthly opener **stays on Prefect and only on Prefect**. Twelve runs a year is
+quota-irrelevant; it is the only act that *creates* a cycle, so a single owner is a property worth
+keeping rather than a gap; and a missed open is visible as a month with no cycle, repaired by the
+manual deployment whose `--seq` derives itself. Duplicating it on both runners would be actively
+wrong — two opens in one day mint two cycles with two invoice numbers.
+
+**What this changes in the repo.**
+
+- `deploy/workflows/kustomize/base/` — the engine: the `argo-workflows` chart (pinned 2.0.3 =
+  v4.1.2) inflated by `HelmChartInflationGenerator`, `singleNamespace: true`, archive off. A
+  fourth Argo CD `Application`, `inference-workflows`, tracking `main` — it is pure config on
+  stock images, so it never needs CI's image-bump rewrite (the same reasoning as
+  `inference-vector`).
+- `deploy/inference/kustomize/base/reconciler/` — the schedule: one `WorkflowTemplate` and two
+  `CronWorkflow`s (`sweep-tasks` every 15 minutes, `advance-cycles` hourly), in the *runtime* app
+  because that is the one that tracks `deploy-state` and therefore gets the image tag.
+- `workers/reconciler/Dockerfile` — see the revised gotcha below.
+- **Credentials reach the pod the Kubernetes way, not through a bootstrap token.** The Doppler
+  operator syncs the tier's own `reconciler` config into a Secret and the workflow container
+  takes it via `envFrom`, so the pod holds no credential that unlocks other credentials and
+  makes no run-time call to Doppler at all.
+
+  This was worth a second pass, because the tier's credential rule — *the secrets are authored
+  in exactly one place* — was written about Prefect and reads at first like an argument against
+  syncing them into the cluster. It is not. The 2026-09-03 CA incident turned on two
+  **authored** copies of a value, one of which went stale; a DopplerSecret is a **derived** copy
+  the operator refreshes from the single authored source every 60 seconds, which is how Vector
+  and the dashboard have always got theirs. Distinguishing "second source of truth" from
+  "cache with a 60-second TTL" is the whole of it.
+
+  Two details make it strictly better than the token here. There is **no `secrets:`
+  allow-list** — that field is optional, and since the `reconciler` config holds this tier's
+  secrets and nothing else, "all of them" is exactly the right set; naming them would only add
+  the field's silent failure mode, where a key present in Doppler but unlisted is never synced
+  and the app just sees an unset variable. And the container uses **`envFrom`** rather than an
+  enumerated `env:`, so the manifest never lists them either. Together those mean adding a ninth
+  secret to the tier is a Doppler edit and nothing else: no manifest change, no deploy, no
+  allow-list to remember.
+
+  The scoping designed for Prefect is what makes this safe rather than a widening: `reconciler`
+  is the root config of its own environment, so it inherits nothing and cannot see `avnadmin`'s
+  Kafka private key, the BMW refresh token or the dashboard password. Both runners resolve the
+  same eight values from the same config — Prefect with a token because that is the only way in
+  from outside the cluster, Argo through the operator because inside it there is a better one.
+
+- `src/reconciler/run.py` grew a Doppler bootstrap anyway, and it is **not** load-bearing for
+  either deployed runner — `flow.py` fetches Prefect's own config and never calls through here,
+  and the Argo pods arrive pre-configured. It is kept as an ad-hoc convenience: `DOPPLER_TOKEN`
+  in the environment makes the CLI usable on any box without a `workers/.env`, and a future
+  runner that merely shells the CLI needs no code. Recorded as a deliberate zero-consumer
+  fifteen lines rather than left to look like a load-bearing path, since this repo has been
+  bitten before by machinery registered with nothing using it (ADR 0009 on `decaying_window`).
+
+**Two properties of archive-off that are not optional.** With no archive, the completed `Workflow`
+object **is** the only record of a run, so nothing reaps it: a 15-minute cron accumulates ~2,900
+objects a month in etcd, which is the one store here that must not become a data sink. A
+`ttlStrategy` (3 days) plus `podGC` in `controller.workflowDefaults` is therefore part of the
+decision, not a tuning detail. And the CRDs are installed **minified** rather than full, because
+`crds.full: true` does not render them as manifests at all — it installs them from a
+pre-install hook Job doing server-side apply, leaving the CRDs unmanaged by the app that is
+supposed to own them. The price is no server-side validation of a workflow spec, acceptable
+because ours are generated from one template rather than hand-written per run.
+
+### Revised: `workers/reconciler/` now exists, and the rule it broke was a symptom
+
+**Amended 2026-09-03.** The original prohibition — *"do not add `workers/reconciler/`"* — gave
+its own reason: that path is auto-discovered by `publish-images.yml`, which "would build and
+publish an image nobody runs, against a manifest that does not exist." Both halves are now false.
+The image is run by two `CronWorkflow`s, and the manifest exists at
+`deploy/inference/kustomize/base/reconciler/values.yml`. Adding it **satisfies** the rationale
+rather than overriding it.
+
+Worth keeping the distinction, because it recurs: the rule named a *symptom* (a directory) where
+the invariant was *a Dockerfile must have a manifest to bump*. The test now asserts that
+invariant over every `workers/*/Dockerfile`, which both permits this change and guards the next
+worker — a Dockerfile with no values file does not fail CI, it emits a `::warning::` in a green
+run, publishes the image and bumps nothing.
+
+One structural oddity follows from the pinning mechanism and is worth explaining once. The
+`CronWorkflow`s ride inside the Stakater `application` chart's `extraObjects`, with
+`deployment.enabled: false` — a chart whose entire purpose is to render a Deployment, rendering
+none. The reason is that CI's `.deployment.image.tag` bump is the repo's *one* image-pinning
+mechanism, and a hand-written manifest would need a second. The trap that comes with it: those
+objects are rendered through Helm's `tpl`, so Argo's own `{{workflow.name}}`-style expressions
+would be evaluated by Helm and fail the build — which under Argo CD wedges the whole app in
+`ComparisonError`. Hence templates with fixed args and no parameters.
+
 ### Where it lives: a second package in this monorepo
 
 **Decided 2026-08-15.** The tier lives in this repo, as a package beside `inference` rather than
@@ -454,11 +626,14 @@ Runner and integration dependencies therefore go in an **optional extra**
 (`[project.optional-dependencies] processes = [...]`), never in the base `dependencies` — the
 runtime image must not grow a Prefect tree for a component it does not run.
 
-> **Gotcha: do not add `workers/reconciler/`.** `publish-images.yml` auto-discovers every
-> `workers/<name>/Dockerfile`, builds `inference-<slug>` and expects to bump
-> `deploy/inference/kustomize/base/<slug>/values.yml`. The reconciler has no image and no
-> deployment — Prefect Managed runs it from source — so a `workers/` entry would build and publish
-> an image nobody runs, against a manifest that does not exist.
+> **Gotcha: a `workers/<name>/Dockerfile` must come with a manifest.** `publish-images.yml`
+> auto-discovers every one of them, builds `inference-<slug>` and expects to bump
+> `deploy/inference/kustomize/base/<slug>/values.yml`. Without that file CI does not fail — it
+> emits a `::warning::` in a green run, publishes an image and bumps nothing.
+>
+> **Amended 2026-09-03:** this originally read *"do not add `workers/reconciler/`"*, because the
+> reconciler then had no image and no deployment. It now has both, and the manifest exists — see
+> *Revised: `workers/reconciler/` now exists* above.
 
 ### Cycle identity is a body field; `user_id` stays the entity key
 
@@ -834,9 +1009,12 @@ our request. Sorting by `epoch` renders the process running backwards. There is 
 
 ## Open questions
 
-1. ~~**Execution environment.**~~ **Resolved 2026-08-15: Prefect Cloud on a Managed work pool** —
-   the free tier runs the code on Prefect's infrastructure, so nothing lands on our cluster. See
-   *The runner* above.
+1. ~~**Execution environment.**~~ **Resolved 2026-08-15: Prefect Cloud on a Managed work pool.
+   Re-resolved 2026-09-03: Argo Workflows on the cluster, with Prefect as a daily backstop.**
+   Managed Execution bills a 60-second minimum per run against a 30,000s/month workspace limit —
+   500 runs — and the hourly advance alone was 744. The correction is worth remembering for its
+   shape rather than its subject: with a per-run floor, making the run *faster* saves nothing, so
+   only fewer runs help. See *Amendment: scheduling moves to Argo Workflows* above.
 2. ~~**Is Prefect earning its place?**~~ **Resolved 2026-08-15: yes, for a narrower reason than
    first given.** Not flow count — a process is a YAML file, so the flow count stays at one. It
    earns its place as a managed cron with observability, secrets and a parameterised manual

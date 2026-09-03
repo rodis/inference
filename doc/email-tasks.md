@@ -44,8 +44,8 @@ Two paths, and they cannot disagree, because both derive from the label rather t
 other:
 
 1. **The tick** (`POST /api/tasks/close`) removes the label, then records the close. Instant.
-2. **The sweep** (`reconciler.tasks`, hourly) asks Gmail *what is labelled right now?* and emits
-   the difference in both directions:
+2. **The sweep** (`reconciler.tasks`, **every 15 minutes**) asks Gmail *what is labelled right
+   now?* and emits the difference in both directions:
 
    ```
    labelled in Gmail, no open event   ->  email_labeled_todo   (repairs a dropped trigger)
@@ -54,7 +54,14 @@ other:
 
 The sweep is what makes unlabelling on your phone work, and it is the repair path for the one
 inconsistency the tick can leave: if the label comes off but recording it fails, Gmail and the log
-disagree for up to an hour and then the sweep settles it. The tick's ordering is load-bearing —
+disagree until the next sweep settles it.
+
+That interval was **hourly until 2026-09-03**, and not by choice. Prefect Managed bills a
+60-second minimum per run against a 30,000s/month workspace limit, so 15-minute scheduling was
+2,976 runs = 595% of quota — unavailable at any price on the free tier. Unlabelling a mail on your
+phone and watching it sit on the board for another 50 minutes was the visible cost. Scheduling now
+runs on Argo Workflows on the cluster, where the interval costs a few seconds of a node already
+paid for (ADR 0012's amendment, *scheduling moves to Argo Workflows*). The tick's ordering is load-bearing —
 label first, event only on success — because the reverse would record a close against a mail still
 sitting in the label, hiding a task that is not done.
 
@@ -135,7 +142,8 @@ src/reconciler/adapters/ingest.py               generic raw-event POST
 src/reconciler/adapters/labels.py               the label relay client
 dashboard/app.py                                GET /api/tasks, POST /api/tasks/close
 dashboard/web/src/dashboards/tasks/             the board
-prefect.yaml                                    email-tasks-sweep, hourly at :37
+deploy/inference/kustomize/base/reconciler/      the CronWorkflow: sweep-tasks, every 15 min
+prefect.yaml                                    email-tasks-sweep, the daily backstop at 06:37
 ```
 
 ## Running it

@@ -2,9 +2,14 @@
 
 `app` is where a run gets wired; `flow.py` and `run.py` are two thin skins over it. What is
 worth pinning here is the small amount of *logic* that lives at that seam — which sequence
-number a new cycle takes, and which period a scheduled open covers — plus the one piece of
-duplication the design could not avoid: the cron appears in the process definition AND in
-`prefect.yaml`, and nothing but a test keeps them honest.
+number a new cycle takes, and which period a scheduled open covers — plus the duplication the
+design could not avoid: a cron appears in the process definition AND in the runner's manifest,
+and nothing but a test keeps them honest.
+
+Since 2026-09-03 there are TWO runners (ADR 0012's amendment): Argo Workflows on the cluster
+carries the frequent schedules, Prefect Cloud runs each flow once a day as an independent
+backstop. So the scheduling assertions below come in pairs — what each runner owns, and the
+quota ceiling that decided the split.
 """
 
 import pathlib
@@ -17,8 +22,12 @@ from reconciler import app
 from reconciler.core import Cycle
 from reconciler.definition import load_definitions
 
-PROCESSES = pathlib.Path(__file__).resolve().parents[1] / "processes"
-PREFECT_YAML = pathlib.Path(__file__).resolve().parents[1] / "prefect.yaml"
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+PROCESSES = ROOT / "processes"
+PREFECT_YAML = ROOT / "prefect.yaml"
+# The CronWorkflows ride in the Stakater chart's `extraObjects`, so this values file IS the
+# schedule — see the file's own header for why the image tag has to come from there.
+RECONCILER_VALUES = ROOT / "deploy" / "inference" / "kustomize" / "base" / "reconciler" / "values.yml"
 
 
 def _definition(name="dreamhost_invoice"):
@@ -196,8 +205,177 @@ def test_the_wiring_imports_with_no_third_party_packages_installed():
         sys.modules.update(saved)
 
 
-def test_no_worker_image_directory_was_added_for_the_reconciler():
-    """ADR 0012, explicitly: there must be NO `workers/reconciler/`. That path is
-    auto-discovered by publish-images.yml, which would start building an image and bumping a
-    manifest that does not exist. The tier runs on Prefect's infrastructure, not the cluster."""
-    assert not (PREFECT_YAML.parent / "workers" / "reconciler").exists()
+def test_every_worker_image_has_a_manifest_to_bump():
+    """The invariant ADR 0012's "there must be no `workers/reconciler/`" was really protecting.
+
+    That rule was written when Prefect Managed ran the tier from source, and it named a
+    *symptom*: `publish-images.yml` auto-discovers every `workers/<name>/Dockerfile`, builds
+    `inference-<slug>` and bumps `deploy/inference/kustomize/base/<slug>/values.yml` to
+    `sha-<short>` on deploy-state. A Dockerfile with no values file means CI publishes an image
+    and then warns rather than failing — so the image exists, nothing references it, and the
+    only evidence is a `::warning::` in a green run.
+
+    Scheduling moved to Argo Workflows on 2026-09-03 and the reconciler now HAS an image, so
+    the old assertion would forbid the thing that ships. The generalised rule is the useful
+    one, and it guards every future worker rather than one named directory.
+    """
+    dockerfiles = sorted((ROOT / "workers").glob("*/Dockerfile"))
+    assert dockerfiles, "no worker Dockerfiles found — has the layout moved?"
+
+    for dockerfile in dockerfiles:
+        slug = dockerfile.parent.name.replace("_", "-")   # the slug CI derives
+        values = ROOT / "deploy" / "inference" / "kustomize" / "base" / slug / "values.yml"
+        assert values.exists(), (
+            f"{dockerfile.parent.name} builds an image but has no manifest at "
+            f"{values.relative_to(ROOT)} — CI would publish it and bump nothing")
+
+
+def _cron_workflows():
+    """The CronWorkflows, read out of the chart values that carry them.
+
+    Parsed as plain YAML rather than rendered with kustomize+helm: the point is the schedule,
+    and a test that shells out to `kustomize build --enable-helm` would need network, a vendored
+    chart and ~17k lines of render to assert two cron strings.
+    """
+    values = yaml.safe_load(RECONCILER_VALUES.read_text())
+    return {o["metadata"]["name"]: o for o in values["extraObjects"]
+            if o["kind"] == "CronWorkflow"}
+
+
+def test_the_cron_workflows_invoke_real_reconciler_subcommands():
+    """A CronWorkflow's args are a string list nothing type-checks, and a typo there is only
+    discovered at the next firing — which for the invoice advance is an hour of silence that
+    looks exactly like "no cycle needed anything".
+
+    So: every template's first arg must be a subcommand `reconciler.run` actually registers.
+    Read from the argparse tree rather than a hardcoded list, so renaming a subcommand breaks
+    here instead of in the cluster.
+    """
+    from reconciler import run as run_module
+
+    # `main` builds its parser inline, so the subcommands are not introspectable without
+    # running it. The `cmd_*` functions are the same surface by construction — every
+    # subcommand is registered with `set_defaults(func=cmd_...)` — and reading them needs no
+    # parser and produces no help output.
+    subcommands = {name.removeprefix("cmd_").replace("_", "-")
+                   for name in dir(run_module) if name.startswith("cmd_")}
+    assert subcommands, "no cmd_* functions found in reconciler.run"
+
+    values = yaml.safe_load(RECONCILER_VALUES.read_text())
+    templates = next(o for o in values["extraObjects"]
+                     if o["kind"] == "WorkflowTemplate")["spec"]["templates"]
+    assert templates, "the WorkflowTemplate declares no templates"
+
+    for template in templates:
+        args = template["container"]["args"]
+        assert args[0] in subcommands, (
+            f"WorkflowTemplate template {template['name']!r} runs {args[0]!r}, which is not a "
+            f"reconciler.run subcommand ({sorted(subcommands)})")
+
+    # And every CronWorkflow must point at a template that exists — `entrypoint` is a free
+    # string, and a stale one makes the workflow fail at creation with nothing scheduled.
+    names = {t["name"] for t in templates}
+    for name, cron in _cron_workflows().items():
+        entrypoint = cron["spec"]["workflowSpec"]["entrypoint"]
+        assert entrypoint in names, (
+            f"CronWorkflow {name!r} entrypoint {entrypoint!r} is not one of {sorted(names)}")
+
+
+# Which reconciler subcommand each deployed Prefect flow ultimately performs. This is the
+# correspondence between the two runners, and it is declared rather than inferred so that
+# renaming a flow or adding one FAILS here instead of quietly escaping the collision check
+# below.
+FLOW_ACTS = {
+    "open_cycle_flow": {"open"},
+    "advance_flow": {"reconcile"},
+    "open_and_advance_flow": {"open", "reconcile"},
+    "sweep_tasks_flow": {"sweep-tasks"},
+}
+
+
+def _minutes(field: str) -> set[int]:
+    """Which minutes-of-hour a cron's minute field can fire on: `*`, `*/n` and lists."""
+    if field == "*":
+        return set(range(60))
+    fired: set[int] = set()
+    for part in field.split(","):
+        if part.startswith("*/"):
+            fired |= set(range(0, 60, int(part[2:])))
+        else:
+            fired.add(int(part))
+    return fired
+
+
+def test_the_two_runners_never_do_the_same_job_in_the_same_minute():
+    """Two runners performing the same act at the same instant is a duplicate-action bug.
+
+    Both are pure functions of recorded milestones, which is what makes re-running safe
+    *sequentially* — but a milestone reaches Neon ASYNCHRONOUSLY (gateway -> Kafka -> Vector ->
+    persister), the very race `walk_fresh` exists to avoid. So two simultaneous advances both
+    read "approval mail not sent" and both send it. The visible cost is two identical mails to
+    a client, and neither runner would report a problem.
+
+    `concurrencyPolicy: Forbid` guards this inside Argo and knows nothing about Prefect, so the
+    separation has to live in the crons. It is asserted because the collision is invisible on
+    inspection: Argo's hourly `17 * * * *` and a Prefect daily `17 6 * * *` look nothing alike
+    and fire together every morning — which is exactly what they did when the schedules were
+    first written.
+
+    Compared PER JOB, not globally: the monthly `open` and the task sweep both touching minute
+    0 is harmless, because they act on unrelated state. Only the same subcommand matters.
+    """
+    values = yaml.safe_load(RECONCILER_VALUES.read_text())
+    templates = {tpl["name"]: tpl["container"]["args"][0]
+                 for tpl in next(o for o in values["extraObjects"]
+                                 if o["kind"] == "WorkflowTemplate")["spec"]["templates"]}
+
+    argo: dict[str, list[tuple[str, str]]] = {}
+    for name, cron in _cron_workflows().items():
+        act = templates[cron["spec"]["workflowSpec"]["entrypoint"]]
+        argo.setdefault(act, []).append((name, cron["spec"]["schedule"]))
+
+    for deployment in yaml.safe_load(PREFECT_YAML.read_text())["deployments"]:
+        func = deployment["entrypoint"].partition(":")[2]
+        assert func in FLOW_ACTS, (
+            f"{deployment['name']} runs {func}, which FLOW_ACTS does not describe — say which "
+            f"reconciler subcommand it performs so the collision check can cover it")
+
+        for cron in deployment.get("schedules") or []:
+            fires = _minutes(cron["cron"].split()[0])
+            for act in FLOW_ACTS[func]:
+                for argo_name, argo_cron in argo.get(act, []):
+                    clash = fires & _minutes(argo_cron.split()[0])
+                    assert not clash, (
+                        f"prefect {deployment['name']!r} ({cron['cron']!r}) and argo "
+                        f"{argo_name!r} ({argo_cron!r}) both run {act!r} at minute(s) "
+                        f"{sorted(clash)} — two runners acting on the same cycle at once can "
+                        f"duplicate an outbound action")
+
+
+def test_prefect_is_a_daily_backstop_not_an_hourly_runner():
+    """The quota regression this whole move exists to prevent.
+
+    Prefect Managed bills a **60-second minimum per run** against a workspace limit of 30,000
+    compute-seconds/month — 500 runs. An hourly deployment is 744 of them, 149% of quota,
+    exhausting the workspace around the 17th and taking the backstop down with it. The failure
+    is invisible from here: runs simply stop being created, and a tier whose whole job is to
+    notice things quietly stops noticing.
+
+    So no schedule in `prefect.yaml` may fire more than once a day. Asserted structurally
+    rather than by listing crons, because the next deployment added would otherwise inherit
+    the hourly habit.
+    """
+    deployments = yaml.safe_load(PREFECT_YAML.read_text())["deployments"]
+    crons = [(d["name"], c["cron"]) for d in deployments
+             for c in (d.get("schedules") or [])]
+    assert crons, "prefect.yaml schedules nothing at all — is the backstop gone?"
+
+    for name, cron in crons:
+        minute, hour, *_ = cron.split()
+        assert "*" not in minute and "/" not in minute, (
+            f"{name} fires every minute-of-hour ({cron!r}) — that is >= 1440 runs/month "
+            f"against a 500-run quota")
+        assert "*" not in hour and "/" not in hour, (
+            f"{name} fires hourly ({cron!r}) = 744 runs/month, 149% of the 500-run Prefect "
+            f"quota. Frequent scheduling belongs on Argo Workflows; Prefect is the daily "
+            f"backstop (ADR 0012 amendment)")
