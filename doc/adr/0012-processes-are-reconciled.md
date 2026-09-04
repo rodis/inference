@@ -486,12 +486,62 @@ workers, a cluster with its own datastore — would all be cost against a benefi
 by the design. Choosing it would be the durable-execution version of the mistake this ADR opens by
 declining.
 
-**Prefect is kept, and not out of sentiment.** It is an **independent execution path**: different
-infrastructure, different network, different credentials. That makes it the only component able to
-report the one failure the cluster cannot report about itself — the cluster being down. A backstop
-sharing the primary's infrastructure would be decoration. Each flow now runs **once a day**
-(~61 runs/month, about 12% of quota), which is exactly the cadence the tier was originally
-designed for and therefore loses nothing.
+**Prefect is kept, and not out of sentiment** — but for a narrower reason than first written, and
+the correction is worth more than the original claim.
+
+Each flow now runs **once a day** (~61 runs/month, about 12% of quota), which is exactly the cadence
+the tier was originally designed for and therefore loses nothing.
+
+> **Correction, 2026-09-04.** This section first claimed Prefect was an *independent execution path*
+> — different infrastructure, network and credentials — and therefore "the only component able to
+> report the one failure the cluster cannot report about itself: the cluster being down." **That is
+> substantially wrong, and it was asserted without being checked.** Prefect's *compute* is
+> independent; its **I/O is not**. Four of the reconciler's six dependencies are in-cluster:
+>
+> | Dependency | Endpoint | Survives a cluster outage? |
+> |---|---|---|
+> | `GMAIL_QUERY_URL` | `n8n.prod.rods.me` | ❌ namespace `n8n` |
+> | `MAIL_RELAY_URL` | `n8n.prod.rods.me` | ❌ namespace `n8n` |
+> | `LLM_RELAY_URL` | `n8n.prod.rods.me` | ❌ namespace `n8n` |
+> | `VECTOR_BASE_URL` | `vector.prod.rods.me` | ❌ namespace `inference` |
+> | `NEON_DATABASE_URL` | Neon | ✅ external managed |
+> | `CRAFTMYPDF_API_KEY` | CraftMyPDF | ✅ external API |
+>
+> So in a cluster outage a Prefect run can read Neon and *decide*, then cannot query Gmail, cannot
+> send mail, cannot classify, and — the one that matters — **cannot record a milestone**, because
+> the ingest gateway it POSTs to is Vector. It would stall at the first `await` gate or fail on the
+> ingest POST. **The cluster is the single point of failure, not Prefect.**
+>
+> What the backstop genuinely buys is the class where **the schedule is broken while the cluster is
+> fine**: a misconfigured `CronWorkflow`, a crashed controller, a bad reconciler image. That is a
+> large share of realistic failures and it was demonstrated within hours of the move — the
+> `spec.schedule`/`spec.schedules` bug below meant neither cron fired at all on a completely healthy
+> cluster, and the 06:17 Prefect run would have advanced the invoice regardless.
+>
+> True I/O independence would mean moving the n8n relays and the ingest gateway off the cluster,
+> which trades away the whole no-external-infra position. Not worth it — but the resilience claim
+> has to be stated as what it is.
+
+**`open` is the one act with a single owner, and that is structural.** The monthly opener stays on
+Prefect and only on Prefect. Twelve runs a year is quota-irrelevant, but the real reason is that
+**`open` is the only non-idempotent operation in the tier.** Everything else is a pure function of
+recorded events, which is exactly what lets two runners fire it safely; `open` *creates* state, and
+there is deliberately no "already opened this month" guard because more than one invoice can exist
+in a month (a bonus is a second one) — so the reconciler genuinely cannot distinguish a duplicate
+scheduled open from an intentional second invoice. Two triggers would mint two cycles with two
+invoice numbers.
+
+Consequences worth knowing rather than rediscovering:
+
+- **Recovery is cheap and correct even when late.** `previous_month(today)` returns the month that
+  just ended, so opening by hand on the 5th still invoices the 1st–31st, and `app.next_sequence`
+  derives the number itself.
+- **Detection is the actual weakness.** A missed open is silent — a month with no cycle, visible on
+  the board only if somebody looks. Nothing alerts.
+- **The fix, if it is ever wanted, is idempotence rather than redundancy:** guard the *scheduled*
+  open on "a cycle already exists for this worked period with genesis `schedule`". Then both runners
+  may fire and the second is a no-op, while a manual bonus open stays unguarded. A `src/reconciler`
+  change, in the additive seam.
 
 The monthly opener **stays on Prefect and only on Prefect**. Twelve runs a year is
 quota-irrelevant; it is the only act that *creates* a cycle, so a single owner is a property worth

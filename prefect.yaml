@@ -10,11 +10,19 @@
 #
 # The consequence worth carrying: making a flow FASTER saved nothing. Only fewer runs did.
 #
-# Prefect is kept rather than removed, and not out of sentiment — it is an INDEPENDENT
-# EXECUTION PATH. Different infrastructure, different network, different credentials, so it
-# catches the one failure the cluster cannot report on its own: the cluster being down. A
-# backstop sharing the primary's infrastructure would be decoration. At ~61 runs/month it
-# costs about 12% of the quota.
+# Prefect is kept rather than removed, and what it actually covers is narrower than the first
+# version of this comment claimed. Its COMPUTE is independent; its I/O IS NOT. Four of the
+# reconciler's six dependencies are in-cluster — the three n8n relays (Gmail query, mail, LLM)
+# and the Vector ingest gateway — so in a cluster outage a run here can read Neon and decide,
+# then cannot query Gmail, cannot send mail, and cannot RECORD a milestone. The cluster is the
+# single point of failure, not this. (Corrected 2026-09-04; see ADR 0012's amendment for the
+# dependency table.)
+#
+# What it does cover is the class where THE SCHEDULE IS BROKEN WHILE THE CLUSTER IS FINE — a
+# misconfigured CronWorkflow, a crashed controller, a bad image. Demonstrated within hours of
+# the move: a `spec.schedule` (singular, removed in Argo v4) meant neither cron fired at all on
+# a healthy cluster, and the 06:17 run here would have advanced the invoice anyway. At ~61
+# runs/month it costs about 12% of the quota.
 #
 # WHAT STAYED HERE: the monthly opener, unchanged. Twelve runs a year is quota-irrelevant, it
 # is the only thing that CREATES a cycle (so exactly one owner is a feature, not a gap), and
