@@ -22,7 +22,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 # processes.json is read by /api/processes (generated; see scripts/emit_process_graph.py).
-COPY app.py logical_levels.json processes.json ./
+# EVERY top-level .py must be listed — this COPY is an allow-list, not a directory copy, so a
+# new module is absent from the image and `app.py`'s import of it fails at container start,
+# long after every local test has passed. `tests/test_dashboard_image.py` asserts the two agree.
+COPY app.py places.py logical_levels.json processes.json ./
 COPY --from=web /web/dist ./web/dist
 
 # Run as a non-root user — the deploy chart enforces runAsNonRoot + a read-only root
