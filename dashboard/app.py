@@ -8,13 +8,18 @@ Serves the built single-page app (``web/dist``) and a handful of JSON endpoints:
   PUT  /api/preferences?user_id=… — persist that user's config (the one write path)
   GET  /api/tasks?user_id=…     — email todo tasks (open, plus recently closed)
   POST /api/tasks/close         — tick one off: drop the Gmail label, record the close
+  GET  /api/places?user_id=…    — this user's POI rows (the place book)
+  GET  /api/places/search       — candidate names near a stay's centroid, via Nominatim
+  POST /api/places?user_id=…    — name a place: one POI row at a stay's centroid
   GET  /api/processes           — process definitions as graphs (ADR 0012's process tier)
   GET  /api/processes/{name}/cycles?user_id=… — that process's recent cycles + milestones
   GET  /api/stream?user_id=…    — SSE seam for the (deferred) live view; stubbed for now
   GET  /healthz                 — liveness
 
-Reads come from the Neon ``events`` table (the inference runtime is its sole writer);
-the only thing the dashboard writes is its own ``dashboard_prefs`` table. Connection
+Reads come from the Neon ``events`` table (the inference runtime is its sole writer).
+The dashboard writes two tables and neither is that one: its own ``dashboard_prefs``, and
+``regions`` when you name a place — reference data the runtime reads back on a TTL, so a
+new POI labels future stays without a restart (and relabels none of the past). Connection
 comes from DATABASE_URL (a Neon Postgres URL, sslmode=require). Stateless pod — all
 state lives in Neon.
 """
@@ -26,8 +31,10 @@ import json
 import logging
 import os
 import secrets
+import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -35,8 +42,11 @@ from pathlib import Path
 from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+import psycopg
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
+
+import places
 
 log = logging.getLogger("aware-dashboard")
 
@@ -94,6 +104,28 @@ VALUES (%s, %s, %s, now())
 ON CONFLICT (user_id) DO UPDATE
   SET level = EXCLUDED.level, hidden = EXCLUDED.hidden, updated_at = now()
 """
+
+# Naming a stay writes one POI row (ADR 0007's place registry). `kind='poi'` is spelled out
+# rather than left to the column default, which is still the historical `'zone'` — the zone half
+# of the table was removed in 2026-08 and the default was never changed, so relying on it would
+# write a row nothing loads.
+#
+# No upsert. `regions` carries UNIQUE (user_id, name), and a clash means the name is already
+# taken by a row at *different coordinates* — which is either the same shop already named (so
+# nothing to do) or a second branch that needs a distinguishing name. Silently moving the
+# existing row to this stay's centroid would be wrong in both readings, so the insert fails and
+# the UI says so.
+POI_INSERT_SQL = """
+INSERT INTO regions (user_id, name, lat, lon, radius_m, kind, enabled, everyday, categories)
+VALUES (%(user_id)s, %(name)s, %(lat)s, %(lon)s, %(radius_m)s, 'poi', true,
+        %(everyday)s, %(categories)s)
+RETURNING id
+"""
+
+# Every POI this user already has, so the naming panel can say "you already call somewhere
+# nearby X" before a second row is minted for the same shop.
+POI_LIST_SQL = ("SELECT id, name, lat, lon, radius_m, everyday, categories FROM regions "
+                "WHERE user_id = %s AND kind = 'poi' AND enabled = true ORDER BY name")
 
 # The Money module's aggregate (portal P2, issue #64) — the first module-owned route: it
 # ships with dashboards/money/* and the frame never learns its shape. One round trip, all
@@ -379,6 +411,68 @@ def _emit_event(base_url: str, payload: dict) -> None:
         raise HTTPException(502, f"label removed, but recording it failed ({e.reason}); "
                                  "the hourly sweep will reconcile this") from e
 
+# --- outbound: the geocoder ------------------------------------------------------------------
+# Nominatim, called from here rather than from the browser. Three reasons, in order of how much
+# they'd hurt: its usage policy wants a real User-Agent and no more than one request a second,
+# which a debounced autocomplete typing straight from the page breaks on both counts; the
+# throttle has to be shared across callers to mean anything, and the server is the only place
+# that is; and same-origin keeps CORS out of it.
+#
+# NOT an n8n relay. ADR 0008's connector tier exists for *authenticated* third-party sources —
+# it holds a credential so we don't. Nominatim needs none, so a relay would add a hop, a second
+# thing to be down, and nothing else. The boundary the ADR draws still holds either way: this
+# fetches and renames fields, it decides nothing.
+NOMINATIM_URL = os.environ.get("NOMINATIM_URL", "https://nominatim.openstreetmap.org/search")
+NOMINATIM_UA = os.environ.get(
+    "NOMINATIM_USER_AGENT", "aware-dashboard (personal life-event dashboard; one user)")
+_GEOCODE_MIN_INTERVAL = 1.0          # seconds between outbound calls — Nominatim's stated limit
+_geocode_gate = threading.Lock()
+_geocode_last = 0.0
+
+
+def _throttle_geocode() -> None:
+    """Hold the caller until at least `_GEOCODE_MIN_INTERVAL` has passed since the last call.
+
+    Deliberately a wait rather than a rejection: the caller is one person typing, so the
+    contention is a keystroke arriving early, and making them retry a search that was merely
+    *soon* would be a worse answer than making them wait 400ms for it. The lock is held across
+    the sleep so waiters serialise instead of all waking at once and firing together.
+    """
+    global _geocode_last
+    with _geocode_gate:
+        wait = _GEOCODE_MIN_INTERVAL - (time.monotonic() - _geocode_last)
+        if wait > 0:
+            time.sleep(wait)
+        _geocode_last = time.monotonic()
+
+
+def _geocode(query: str, lat: float, lon: float, limit: int) -> list[dict]:
+    """Search Nominatim for `query`, bounded to a box around (lat, lon). Raw hits."""
+    params = urllib.parse.urlencode({
+        "q": query,
+        "format": "jsonv2",
+        "viewbox": places.viewbox(lat, lon),
+        "bounded": 1,                    # a hit outside the box is never the place you stood in
+        "limit": max(limit * 2, 10),     # over-fetch: de-duplication below drops node/way pairs
+        "addressdetails": 0,
+    })
+    request = urllib.request.Request(
+        f"{NOMINATIM_URL}?{params}",
+        headers={"User-Agent": NOMINATIM_UA, "Accept": "application/json"},
+    )
+    _throttle_geocode()
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            hits = json.loads(response.read().decode())
+    except urllib.error.HTTPError as e:
+        raise HTTPException(502, f"geocoder rejected the search: HTTP {e.code}") from e
+    except urllib.error.URLError as e:
+        raise HTTPException(502, f"geocoder unreachable: {e.reason}") from e
+    except (ValueError, UnicodeDecodeError) as e:
+        raise HTTPException(502, "geocoder returned something that isn't JSON") from e
+    return hits if isinstance(hits, list) else []
+
+
 def _db_url() -> str:
     url = os.environ.get("DATABASE_URL")
     if not url:
@@ -615,6 +709,98 @@ def close_task(user_id: str = Query(...), body: dict = Body(...)):
     }
     _emit_event(ingest, {k: values[k] for k in TASK_CLOSED_FIELDS})
     return JSONResponse({"ok": True, "closed_epoch": now})
+
+
+@app.get("/api/places")
+def list_places(user_id: str = Query(...)):
+    """This user's POI rows — the place book as the dashboard can see it."""
+    with app.state.pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(POI_LIST_SQL, (user_id,))
+        cols = [c.name for c in cur.description]
+        rows = [dict(zip(cols, values)) for values in cur.fetchall()]
+    return JSONResponse(rows)
+
+
+@app.get("/api/places/search")
+def search_places(q: str = Query(..., min_length=2), lat: float = Query(..., ge=-90, le=90),
+                  lon: float = Query(..., ge=-180, le=180), limit: int = Query(8, ge=1, le=20)):
+    """Candidate names for a place at (lat, lon), from what the user typed.
+
+    `lat`/`lon` are the *stay's* centroid and they bound the search rather than seed a guess:
+    every hit must fall inside a 500m box around where the phone actually sat. Typing "Coop"
+    from a Zug pavement offers the Coop you are standing in, not the 400 others in the country —
+    and since picking one writes a permanent row, an out-of-area hit is not a lesser answer, it
+    is a wrong one.
+
+    Suggestions only. What comes back contributes a *name* and *categories*; the row is written
+    at the centroid the caller already holds (see `places.py`).
+    """
+    hits = _geocode(q.strip(), lat, lon, limit)
+    return JSONResponse(places.candidates(hits, lat, lon, limit))
+
+
+@app.post("/api/places")
+def create_place(user_id: str = Query(...), body: dict = Body(...)):
+    """Name a place: one `regions` POI row at the coordinates the caller supplies.
+
+    **The dashboard's second write, and its first to reference data.** That is a bigger step
+    than the task tick, so it is worth being precise about what it is not: this adds a row to
+    the place book, it does not label any event. Labels are stamped at derive time (ADR 0007,
+    invariant 19), so the stay that prompted this keeps reading "Stay" until it is re-derived —
+    the runtime picks the new row up within `PLACE_BOOK_TTL_SECONDS` and labels stays *from
+    here on*. The response says so rather than leaving the UI to imply otherwise.
+
+    Coordinates come from the client because they are the stay's own centroid, which the client
+    already has on the event. The server does not re-derive it, and deliberately does not accept
+    the geocoder's position either — see `places.py` for why the measured point beats the
+    canonical one.
+    """
+    name = places.clean_name(str((body or {}).get("name") or ""))
+    if not name:
+        raise HTTPException(422, "name is required")
+    try:
+        lat, lon = float(body["lat"]), float(body["lon"])
+    except (KeyError, TypeError, ValueError) as e:
+        raise HTTPException(422, "lat and lon are required numbers") from e
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        raise HTTPException(422, "lat/lon out of range")
+
+    radius = body.get("radius_m", places.DEFAULT_RADIUS_MIN_M)
+    try:
+        radius = float(radius)
+    except (TypeError, ValueError) as e:
+        raise HTTPException(422, "radius_m must be a number") from e
+    if not (places.RADIUS_MIN_M <= radius <= places.RADIUS_MAX_M):
+        raise HTTPException(
+            422, f"radius_m must be between {places.RADIUS_MIN_M:g} and {places.RADIUS_MAX_M:g}")
+
+    categories = (body or {}).get("categories") or []
+    if not isinstance(categories, list) or not all(isinstance(c, str) for c in categories):
+        raise HTTPException(422, "categories must be a list of strings")
+    # Order carries meaning (primary first drives the glyph), so it is preserved rather than
+    # sorted or set-ified; blanks are dropped and the list is capped so a malformed client
+    # cannot write an unbounded array into reference data.
+    categories = [places.clean_name(c) for c in categories if places.clean_name(c)][:8]
+
+    everyday = (body or {}).get("everyday", False)
+    if not isinstance(everyday, bool):
+        raise HTTPException(422, "everyday must be a boolean")
+
+    row = {"user_id": user_id, "name": name, "lat": lat, "lon": lon, "radius_m": radius,
+           "everyday": everyday, "categories": categories or None}
+    try:
+        with app.state.pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(POI_INSERT_SQL, row)
+            place_id = cur.fetchone()[0]
+    except psycopg.errors.UniqueViolation as e:
+        # 409 rather than 422: the request is well-formed, the world already disagrees with it.
+        raise HTTPException(409, f"you already have a place called “{name}”") from e
+
+    log.info("named place %s (%s) at %.6f,%.6f r=%.0fm", place_id, name, lat, lon, radius)
+    return JSONResponse({"ok": True, "id": place_id, "name": name,
+                         "radius_m": radius, "categories": categories,
+                         # The UI's honesty line: what this did and did not change.
+                         "labels_from_now": True}, status_code=201)
 
 
 @app.get("/api/stream")

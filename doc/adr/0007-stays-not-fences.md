@@ -190,3 +190,46 @@ Removing `geofence` is that conclusion carried to its end rather than a reversal
 Consequence worth noting: the `regions` table now has exactly one consumer (`runtime/places.py`,
 POI labels), which makes the whole reference-data path hot-swappable — nothing left in it shapes the
 topology, so nothing left in it requires a restart.
+
+---
+
+## Amendment — 2026-09-06: naming a stay from the dashboard
+
+This ADR left the naming half as an instruction to a human with a SQL client — the worked example
+in §Consequences ends `(unknown — name it and re-derive)`. That instruction has a UI now: an
+unnamed stay's modal offers a search box, and picking a result writes the `regions` POI row.
+
+Three things about it follow directly from what this ADR already decided, and one is new.
+
+**The offer is keyed on `placeUnknown`, not on `name === "stay"`.** The dashboard has drawn an
+unresolved stay as a hollow capsule since 2026-08, with a comment saying the weaker drawing "reads
+as *not named yet*, which is an invitation, not an error". Making the invitation clickable is the
+same predicate gaining a second consumer, so the next event carrying `place` inherits both the
+drawing and the offer without a code change.
+
+**The geocoder suggests, the stay decides where.** What you type is a free-text name or address; it
+is searched against Nominatim, bounded to a 500m box around the stay's own centroid, and the hits
+contribute a **name and categories only** — the row is written at the centroid. OSM's position for a
+shop is wherever its building polygon's centre falls, metres to tens of metres from where a phone
+actually sat and biased the same way on every visit; the centroid is the thing we measured. The
+box matters for a second reason: picking a hit writes a permanent row, so a same-named branch in
+the next town is not a worse answer, it is a wrong one.
+
+**Labelling is still not detection, and the panel says so.** Saving teaches the place book; it does
+not touch a single event. The stay you just named keeps reading "Stay" until it is re-derived,
+because a label is frozen at derive time (invariant 19), and the confirmation states the two halves
+separately rather than merging them into "Saved!" — merging would let the UI imply a relabelling
+that visibly did not happen, since the capsule behind the panel is still hollow.
+
+**New, and the reason backfill is deliberately absent.** Re-deriving is a *fleet* operation — it
+replaces every `stay` in a window and its lineage rows, holds the `history` lock, and needs Kafka
+credentials the dashboard pod does not have. Naming is a *single-row* operation the user does while
+looking at one event. Putting a "and fix the past" button next to it would couple a safe, instant,
+idempotent write to a slow one that can double history if repeated (`rederive.py` refuses a second
+produce into the same window for exactly this reason). So the UI does the half it can do honestly
+and names the other half in the confirmation; the backfill stays a deliberate, out-of-band act.
+
+One consequence to keep in view: the `regions` table now has a second **writer** (the dashboard)
+while still having one *reader*. That does not reintroduce the two-authored-copies failure — there
+is still exactly one row per place and one loader — but it does mean the place book can now change
+between two stays in the same session, which the TTL refresher already handles by design.

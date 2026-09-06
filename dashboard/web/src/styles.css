@@ -490,6 +490,66 @@ kbd { font-family: var(--mono); font-size: 10px; background: var(--chip); border
 .dkids { margin-left: 15px; padding-left: 16px; border-left: 2px solid var(--hair); }
 .dleaf-note { font-family: var(--mono); font-size: 11px; color: var(--muted); padding: 4px 0 0 14px; }
 
+/* ── naming a place (NamePlace.tsx) ───────────────────────────────────────────────
+   The one panel in the modal that WRITES. It sits between the header and the lineage
+   tree because that is where the question arises — you opened an unnamed stay to find
+   out where you were — and it is drawn as an inset card rather than a row so it reads as
+   a different kind of thing from the evidence below it: those describe the past, this
+   changes the future. The dotted top edge echoes the hollow capsule that led you here. */
+.np { margin: 16px 0 4px; padding: 14px 15px; border-radius: 14px; background: var(--card-2); border: 1px solid var(--hair-2); }
+.np-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 11px; }
+.np-title { font-family: var(--rounded); font-size: 14px; font-weight: 700; letter-spacing: -0.01em; }
+.np-coords { font-family: var(--mono); font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; margin-left: auto; }
+.np-q { width: 100%; box-sizing: border-box; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--hair-2); background: var(--card); color: var(--ink); font: inherit; font-size: 13.5px; }
+.np-q::placeholder { color: var(--muted-2); }
+.np-q:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+.np-note, .np-err { font-family: var(--mono); font-size: 11px; margin-top: 9px; }
+.np-note { color: var(--muted); }
+.np-err { color: var(--accent); }
+
+/* the candidate list — one row per suggestion, distance on the right because that is the
+   column that settles which one you were actually standing in */
+.np-hits { display: flex; flex-direction: column; gap: 5px; margin-top: 10px; }
+.np-hit { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 8px 10px; border-radius: 10px; background: var(--card); border: 1px solid var(--hair); font: inherit; color: inherit; cursor: pointer; transition: border-color 0.12s, background 0.12s; }
+.np-hit:hover { border-color: var(--muted-2); }
+.np-hit:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.np-hit-icon { width: 24px; height: 24px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; background: var(--chip); color: var(--ink-2); font-family: var(--rounded); font-weight: 700; }
+.np-hit-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.np-hit-name { font-family: var(--rounded); font-size: 13px; font-weight: 600; }
+.np-hit-sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-hit-d { font-family: var(--mono); font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+/* the escape hatch: a place OSM has never heard of is still a place you stopped at */
+.np-hit-typed { border-style: dashed; background: transparent; }
+
+.np-cats { display: flex; gap: 4px; flex-wrap: wrap; flex: none; }
+.np-cat { font-family: var(--mono); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--l2-fg); background: var(--l2-bg); border-radius: 5px; padding: 2px 6px; }
+/* a category the glyph vocabulary can't draw yet — shown, not hidden: it is what will be
+   stored, and it is how you notice PLACE_ICON needs a new entry */
+.np-cat-plain { color: var(--muted); background: var(--chip); }
+
+/* the confirm form, once a candidate is picked */
+.np-form { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--hair-2); display: flex; flex-wrap: wrap; gap: 10px 12px; align-items: flex-end; }
+.np-field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 140px; }
+.np-field > span { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.np-field input { padding: 8px 10px; border-radius: 9px; border: 1px solid var(--hair-2); background: var(--card); color: var(--ink); font: inherit; font-size: 13px; width: 100%; box-sizing: border-box; }
+.np-field input:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+.np-field-r { flex: 0 0 118px; min-width: 0; position: relative; }
+.np-field-r .np-unit { position: absolute; right: 10px; bottom: 9px; font-family: var(--mono); font-size: 11px; color: var(--muted); pointer-events: none; }
+.np-check { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-2); flex: 1 0 100%; cursor: pointer; }
+.np-preview { display: flex; align-items: center; gap: 7px; color: var(--muted); flex: 1 0 100%; min-height: 18px; }
+.np-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.np-cancel { font-family: var(--mono); font-size: 11px; color: var(--muted); background: none; border: 0; cursor: pointer; padding: 0; }
+.np-cancel:hover:not(:disabled) { color: var(--ink-2); text-decoration: underline; }
+.np-save { font-family: var(--rounded); font-size: 13px; font-weight: 650; color: var(--on-accent); background: var(--accent); border: 0; border-radius: 10px; padding: 9px 16px; cursor: pointer; }
+.np-save:hover:not(:disabled) { background: var(--accent-2); }
+.np-save:disabled, .np-cancel:disabled { opacity: 0.5; cursor: default; }
+.np-save:focus-visible, .np-cancel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* the confirmation. Two lines because they are two different facts, and merging them would
+   let the panel imply a relabelling that did not happen (the stay behind it is still hollow) */
+.np-saved-h { font-family: var(--rounded); font-size: 13.5px; font-weight: 650; color: var(--good); }
+.np-saved-b { font-size: 12px; color: var(--ink-2); margin-top: 5px; line-height: 1.5; }
+
 /* raw event JSON (collapsible) */
 .rawbox { margin-top: 16px; border-top: 1px solid var(--hair); padding-top: 14px; }
 .rawbox summary { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; }

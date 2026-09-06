@@ -372,6 +372,26 @@ check("the modal counts contributors collapsed below the altitude", /↓ 2 below
 check("nothing is 'below' when the lineage is fully revealed", !modalOf("e8", 1).includes("below"));
 check("the modal flags a lifted type", /ovrflag up[\s\S]{0,80}↑ L1/.test(modalOf("e5", 1)));
 
+// Naming a stay (NamePlace.tsx). The panel needs the context — it reads `userId` to write the
+// row — so it renders through the provider, which is also the check that it doesn't throw
+// there: `useAware()` outside a DataProvider is a hard error, and the modal is rendered from
+// several boards.
+const namedModalOf = (id: string) => strip(renderToString(
+  <AwareContext.Provider value={ctx}>
+    <EventModal event={E(id)} byId={byId} levelOf={levelOf} derivLevel={prepared.derivLevel}
+      defaultOf={defaultOf} revealOf={() => 1} onClose={() => {}} />
+  </AwareContext.Provider>));
+const mUnnamed = namedModalOf("e15");
+check("an unnamed stay is offered a name", mUnnamed.includes("Name this place"));
+check("the panel shows the centroid the row would be written at", /47\.20000, 8\.57000/.test(mUnnamed));
+// The offer is keyed on the missing LABEL, not on the event type — same rule as the hollow
+// capsule — so a stay that matched a place must not be asked to be named again.
+check("a named stay is not asked to be renamed", !namedModalOf("e14").includes("Name this place"));
+// …and neither is an event with no place capability at all: there'd be nothing to attach a row
+// to, and a form that can only fail is worse than no form.
+check("an event with no place capability gets no naming panel",
+  !namedModalOf("e8").includes("Name this place"));
+
 console.log("\n— levels board —");
 const html = strip(renderToString(<AwareContext.Provider value={ctx}><LevelsDashboard /></AwareContext.Provider>));
 check("one rail per lane", (html.match(/class="lane-rail"/g) || []).length === 3,

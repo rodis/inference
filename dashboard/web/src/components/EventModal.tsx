@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import type { AwareEvent } from "../types";
-import { catOf, fmtTime, fmtTimeSec, humanDur, iconOf, inkOn, labelOf, typeLabel } from "../view";
+import { catOf, fmtTime, fmtTimeSec, humanDur, iconOf, inkOn, labelOf, placeUnknown, typeLabel } from "../view";
 import LevelChip, { OverrideFlag } from "./LevelChip";
+import NamePlace from "./NamePlace";
 
 /** A contributor type that floods the tree (a `stay` derives from *dozens* of location pings,
  *  issue #32) collapses into one summary row per type. The rule is structural — any type at or
@@ -160,6 +161,11 @@ export default function EventModal({ event, byId, levelOf, derivLevel, defaultOf
               <>A <b>raw signal</b> — derivation level <b>D1</b>. Nothing precedes it; it's what the phone actually sensed.</>
             )}
           </p>
+          {/* The one place the modal *acts*: an event that knows where it happened but not what
+              that place is (`placeUnknown` — the hollow capsule on the board behind us) offers
+              to name it. Keyed on the capability, like every other place-aware treatment, so
+              the next event carrying `place` inherits it without a code change. */}
+          {placeUnknown(e) && <NamePlace key={e.id} event={e} />}
           {kids.length ? (
             <div className="dtree"><DKidList kids={kids} byId={byId} levelOf={levelOf} derivLevel={derivLevel} onOpen={open} /></div>
           ) : (
