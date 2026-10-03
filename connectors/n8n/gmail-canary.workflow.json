@@ -22,7 +22,9 @@
     "the owner, with the same value as op://watcher/n8n-gmail-canary/token.",
     "",
     "Successful executions are not saved (one an hour, all identical); failed ones are, so a",
-    "failure can be read in n8n afterwards."
+    "failure can be read in n8n afterwards.",
+    "",
+    "Workflow ID: ZAdBPhZPs7yERgnj — deployed and activated 2026-10-03; refuses no token and a wrong token (403)."
   ],
   "name": "Canary: gmail credential",
   "settings": {
@@ -35,7 +37,10 @@
       "name": "POST /gmail-canary",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [0, 0],
+      "position": [
+        0,
+        0
+      ],
       "parameters": {
         "httpMethod": "POST",
         "path": "gmail-canary",
@@ -43,46 +48,95 @@
         "responseMode": "responseNode",
         "options": {}
       },
-      "credentials": {"httpHeaderAuth": {"name": "Watcher gmail canary"}}
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Watcher gmail canary"
+        }
+      }
     },
     {
       "name": "List labels",
       "type": "n8n-nodes-base.gmail",
       "typeVersion": 2.1,
-      "position": [260, 0],
+      "position": [
+        260,
+        0
+      ],
       "onError": "continueErrorOutput",
       "alwaysOutputData": false,
-      "parameters": {"resource": "label", "operation": "getAll", "returnAll": true},
-      "credentials": {"gmailOAuth2": {"name": "Gmail account"}}
+      "parameters": {
+        "resource": "label",
+        "operation": "getAll",
+        "returnAll": true
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "Gmail account"
+        }
+      }
     },
     {
       "name": "Respond ok",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [520, -100],
+      "position": [
+        520,
+        -100
+      ],
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ JSON.stringify({ ok: true, labels: $input.all().length }) }}",
-        "options": {"responseCode": 200}
+        "options": {
+          "responseCode": 200
+        }
       }
     },
     {
       "name": "Respond gmail failed",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [520, 100],
+      "position": [
+        520,
+        100
+      ],
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ JSON.stringify({ ok: false, error: String(($json.error && ($json.error.message || $json.error.description)) || 'gmail call failed').slice(0, 300) }) }}",
-        "options": {"responseCode": 503}
+        "options": {
+          "responseCode": 503
+        }
       }
     }
   ],
   "connections": {
-    "POST /gmail-canary": {"main": [[{"node": "List labels", "type": "main", "index": 0}]]},
-    "List labels": {"main": [
-      [{"node": "Respond ok", "type": "main", "index": 0}],
-      [{"node": "Respond gmail failed", "type": "main", "index": 0}]
-    ]}
+    "POST /gmail-canary": {
+      "main": [
+        [
+          {
+            "node": "List labels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List labels": {
+      "main": [
+        [
+          {
+            "node": "Respond ok",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond gmail failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   }
 }
