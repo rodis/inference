@@ -143,6 +143,29 @@ list than first claimed.
 The lesson generalises past OAuth: **a credential's existence is not its validity.** Test a
 connector's auth before treating it as a reason to prefer one design over another.
 
+**Update 2026-10-03: the same cause struck again, and the consent screen is now "In production".**
+The diagnosis above was right and was never acted on. On 2026-10-03 at 13:00 UTC n8n's
+`gmailOAuth2` refresh started failing on every call — almost exactly 7 days after the credential
+was last connected — and took down, at once, the invoice process's approval gate ("Query: gmail
+search" answered HTTP 500), the email-todo connector and the parking connector. SMTP sending was
+unaffected (it is a separate credential).
+
+Fixed by publishing the OAuth client's consent screen (*Google Auth Platform → Audience →
+Publishing status: In production*) and **then reconnecting** the n8n credential: a refresh token
+issued while the client was in Testing keeps its 7-day expiry, so publishing alone fixes nothing
+until the next consent. Publishing required the Branding page to carry a privacy-policy and a
+terms-of-service link on an authorised domain (`rods.me`); both are served by n8n itself, as
+workflows `QYYmMkevrFf3alND` (`/webhook/privacy`) and `1KaRxBmHQsvi2uLc` (`/webhook/terms`).
+The app is unverified, which is fine for a single user: consent shows Google's "unverified app"
+warning, and Gmail's restricted scopes cap it at 100 users.
+
+**Keep it in production.** Switching it back to Testing, or creating a new OAuth client in
+Testing for this credential, reinstates a 7-day outage on a timer. The token's actual lifetime
+cannot be read back (n8n stores the OAuth response encrypted), so it is proven only by surviving
+past 2026-10-10 — and, from 2026-10-03, by an hourly watcher canary that exercises this credential
+(`infra-automation/watcher`, objective `gmail-healthy`), so the next failure is an alert within
+the hour rather than a missed invoice.
+
 **True Gmail push is a deliberate Stage 3.** `users.watch` + Cloud Pub/Sub → an n8n Webhook
 node gives seconds. It costs the GCP project and OAuth setup n8n was chosen to avoid, plus a
 renewal job — a watch **expires silently after 7 days**, which is the classic way such a
