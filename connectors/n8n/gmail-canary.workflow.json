@@ -1,0 +1,88 @@
+{
+  "_comment": [
+    "Canary: gmail credential  (watcher objective gmail-healthy, infra-objectives/objectives)",
+    "",
+    "Proves that n8n's Gmail OAuth credential works, and NOTHING else. The watcher on the DreamHost",
+    "VPS calls it hourly; DreamHost has root on that box, so the token it holds must not amount to",
+    "access to the mailbox. Hence: no input is read from the request, the Gmail call is fixed (list",
+    "labels), and the response carries only a count — no label names, no message data.",
+    "",
+    "Same credential ('Gmail account') as 'Query: gmail search', the email-todo and the parking",
+    "connectors, so it fails exactly when they do. On 2026-10-03 that credential died at 13:00 UTC",
+    "(a 7-day Testing-mode expiry, ADR 0008) and took down the invoice approval gate unnoticed.",
+    "",
+    "The Gmail error is caught on the node's error output and answered as 503 {ok:false}, so the",
+    "watcher can tell 'the credential is broken' (503 with a body) from 'n8n is down' (no answer,",
+    "or Traefik's 502). An UNHANDLED failure (n8n's own 500) means the canary itself is broken.",
+    "",
+    "JSON rather than @n8n/workflow-sdk TypeScript like its neighbours: deployed through n8n's public",
+    "REST API from infra-objectives (agent.env N8N_API_*), not the MCP tooling. Credentials are",
+    "referenced by NAME; the deploy step resolves names to ids, so this file holds no id and no",
+    "secret. 'Watcher gmail canary' is a Header Auth credential (header X-Canary-Token) created by",
+    "the owner, with the same value as op://watcher/n8n-gmail-canary/token.",
+    "",
+    "Successful executions are not saved (one an hour, all identical); failed ones are, so a",
+    "failure can be read in n8n afterwards."
+  ],
+  "name": "Canary: gmail credential",
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all"
+  },
+  "nodes": [
+    {
+      "name": "POST /gmail-canary",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "gmail-canary",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "credentials": {"httpHeaderAuth": {"name": "Watcher gmail canary"}}
+    },
+    {
+      "name": "List labels",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [260, 0],
+      "onError": "continueErrorOutput",
+      "alwaysOutputData": false,
+      "parameters": {"resource": "label", "operation": "getAll", "returnAll": true},
+      "credentials": {"gmailOAuth2": {"name": "Gmail account"}}
+    },
+    {
+      "name": "Respond ok",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [520, -100],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, labels: $input.all().length }) }}",
+        "options": {"responseCode": 200}
+      }
+    },
+    {
+      "name": "Respond gmail failed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [520, 100],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, error: String(($json.error && ($json.error.message || $json.error.description)) || 'gmail call failed').slice(0, 300) }) }}",
+        "options": {"responseCode": 503}
+      }
+    }
+  ],
+  "connections": {
+    "POST /gmail-canary": {"main": [[{"node": "List labels", "type": "main", "index": 0}]]},
+    "List labels": {"main": [
+      [{"node": "Respond ok", "type": "main", "index": 0}],
+      [{"node": "Respond gmail failed", "type": "main", "index": 0}]
+    ]}
+  }
+}
