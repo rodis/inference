@@ -47,9 +47,11 @@ TLS_AES_256_GCM_SHA384. Two properties of it shape the code here rather than the
 
 - The certificate is MySQL 8.4's **auto-generated, self-signed** one, so the CA must be pinned
   and `ssl_verify_identity` must stay off — its CN is not the hostname.
-- The account uses **`caching_sha2_password`** (8.4 dropped `mysql_native_password`), which
-  needs TLS to authenticate at all. TLS is a correctness requirement here, not a hardening
-  option, which is why there is no plaintext path.
+- The account uses **`caching_sha2_password`** (8.4 dropped `mysql_native_password`). This
+  does NOT make TLS mandatory — tested, the handshake falls back to an RSA public-key
+  exchange and a plaintext login succeeds. TLS is refused here as **policy**, because the
+  link crosses the public internet, and a CA is **required** because the only concise way
+  to ask PyMySQL for CA-less TLS silently gives you no TLS at all (see `tls_context`).
 
 **Allowable Hosts is enforced before the handshake and matches on reverse DNS.** The three
 current k8s worker IPs are allow-listed. The consequence worth knowing at 3am: a connection
@@ -67,6 +69,7 @@ by hand, bring it along for the one command, the way the tier already borrows Pr
 
 import json
 import logging
+import ssl
 import urllib.parse
 
 from reconciler.core import Cycle, Milestone
@@ -119,19 +122,16 @@ def connection_args(dsn: str, *, ssl_ca: str | None = None) -> dict:
     this connection is encrypted is made here, and a test should be able to read it without a
     database.
 
-    **TLS is mandatory, and not only for privacy.** MySQL 8.4 removed `mysql_native_password`
-    as a built-in, so the account authenticates with `caching_sha2_password`, which requires
-    TLS (or an RSA key exchange) for any login that is not already cached. Without it the
-    connection fails as what reads like a bad password. `?ssl=disable` therefore raises rather
-    than being honoured — it would only ever produce a misleading error.
+    **A CA is required, and there is no CA-less mode.** Not because MySQL demands TLS — it
+    does not, as `caching_sha2_password` falls back to an RSA key exchange — but because the
+    only concise way to express "TLS without a CA" in PyMySQL is `ssl={}`, and PyMySQL
+    branches on truthiness, so an empty dict turns TLS *off*. A mode whose honest description
+    is "silently plaintext" is worse than no mode, so this raises instead. `?ssl=disable`
+    raises too, as policy: the link crosses the public internet.
 
-    Two settings are not interchangeable and both are deliberate:
-
-    - `ssl_ca` **pins** the server's self-signed certificate. Without it the connection is
-      still encrypted but the peer is unauthenticated — eavesdropping is resisted,
-      interception is not — and a warning says so rather than letting the DSN imply more.
-    - `ssl_verify_identity` is **always False**, because the auto-generated certificate's CN
-      is not the hostname (see the comment at the assignment).
+    The resulting `ssl` argument is a built `SSLContext` rather than PyMySQL's
+    `ssl_verify_cert` / `ssl_verify_identity` flags, because those were tried against the live
+    server and could not express what it needs. See `tls_context`.
     """
     parsed = urllib.parse.urlsplit(dsn)
     if parsed.scheme not in {"mysql", "mysql+pymysql"}:
@@ -174,31 +174,70 @@ def connection_args(dsn: str, *, ssl_ca: str | None = None) -> dict:
     }
 
     if query.get("ssl", ["require"])[0] == "disable":
+        # Policy, and only policy — stated plainly because the tempting justification is
+        # false. It was believed for a while that `caching_sha2_password` made TLS mandatory
+        # for authentication; testing against the live server disproved it, since the handshake
+        # falls back to an RSA public-key exchange and a plaintext connection logs in fine.
+        # So nothing *forces* TLS here. It is refused because this link crosses the public
+        # internet carrying invoice amounts, email subjects and sender addresses, and that is
+        # sufficient on its own.
         raise ValueError(
-            "?ssl=disable is not supported. MySQL 8.4 removed mysql_native_password as a "
-            "built-in, so this account authenticates with caching_sha2_password — which "
-            "requires TLS (or an RSA key exchange) for any login that is not already cached. "
-            "TLS is load-bearing for the connection to work at all, not only for privacy, and "
-            "a plaintext attempt fails as what reads like a bad password. There is no useful "
-            "no-TLS path to offer, so there is not one.")
+            "?ssl=disable is not supported. The reconciler reaches prod-mysql.rods.me across "
+            "the public internet carrying invoice amounts and email metadata, so plaintext is "
+            "refused as policy. (MySQL would permit it — caching_sha2_password falls back to "
+            "an RSA key exchange — which is exactly why the refusal has to be explicit.)")
 
     ca = ssl_ca or query.get("ssl_ca", [None])[0]
-    # `ssl={"ca": …}` pins; `ssl={}` is PyMySQL's "negotiate TLS with nothing to check it
-    # against". Either way TLS is negotiated — verified TLSv1.3 / TLS_AES_256_GCM_SHA384.
-    args["ssl"] = {"ca": ca} if ca else {}
-    args["ssl_verify_cert"] = bool(ca)
-    # NEVER True, even with a CA pinned. The server presents MySQL 8.4's auto-generated
-    # certificate, whose CN is `MySQL_Server_8.4.8_Auto_Generated_Server_Certificate` rather
-    # than the hostname, so an identity check cannot pass — it would reject a server we had
-    # just successfully authenticated. Pinning the CA is what authenticates the peer instead,
-    # the same trade the estate already makes for vmauth's self-signed certificate.
-    args["ssl_verify_identity"] = False
-
     if not ca:
-        logger.warning("TLS without ssl_ca: the connection to %s is encrypted but the server "
-                       "is UNAUTHENTICATED. The certificate is self-signed, so only a pinned "
-                       "CA authenticates it.", args["host"])
+        # NO DEGRADED MODE, because the obvious one is a silent downgrade to plaintext.
+        # `ssl={}` reads as "TLS with nothing to verify against", and an earlier version of
+        # this adapter passed exactly that — but PyMySQL branches on the argument's
+        # TRUTHINESS, and an empty dict is falsy, so it disables TLS outright. Measured
+        # against the live server: `SHOW STATUS LIKE 'Ssl_cipher'` came back empty. The
+        # accompanying warning said "encrypted but unauthenticated", which was not a caveat
+        # but a false statement about the wire.
+        raise ValueError(
+            "a CA certificate is required. Set MYSQL_SSL_CA to the mounted path (the "
+            "manifest does this), or put ?ssl_ca=<path> in the DSN for a one-off run. There "
+            "is deliberately no CA-less mode: the only concise way to express one in PyMySQL "
+            "silently connects in plaintext.")
+    args["ssl"] = tls_context(ca)
     return args
+
+
+def tls_context(ca: str) -> ssl.SSLContext:
+    """A context that pins `ca` and connects to *this* server — the one shape that works.
+
+    PyMySQL passes an `SSLContext` through untouched, which is why the context is built here
+    rather than described with `ssl_verify_cert` / `ssl_verify_identity`. Those were tried
+    against the live server and all failed; the two deviations below are each load-bearing,
+    and each would look like something to tidy away.
+    """
+    context = ssl.create_default_context(cafile=ca)
+
+    # The server presents MySQL 8.4's auto-generated certificate, whose CN is
+    # `MySQL_Server_8.4.8_Auto_Generated_Server_Certificate` rather than the hostname, so a
+    # hostname check cannot pass. Verification of the chain is untouched by this —
+    # `verify_mode` stays `CERT_REQUIRED` — so the peer is still authenticated, by the CA
+    # rather than by its name. The same trade the estate already makes for vmauth.
+    context.check_hostname = False
+
+    # DO NOT REMOVE — without this every connection fails with CERTIFICATE_VERIFY_FAILED
+    # ("Missing Authority Key Identifier"), which reads like a trust problem and is not one.
+    #
+    # Python 3.13 turns `VERIFY_X509_STRICT` on by default in `create_default_context`. MySQL
+    # 8.4's auto-generated CA carries only `basicConstraints: CA:TRUE` and omits
+    # `authorityKeyIdentifier`, which RFC 5280 strict validation requires — so the certificate
+    # is rejected for a MISSING EXTENSION, not for anything about its signature or its chain.
+    # Clearing this one flag drops the extension-presence audit and nothing else:
+    # `verify_mode` is still `CERT_REQUIRED`, the signature is still checked against the
+    # pinned CA, and `openssl verify -CAfile` agrees independently.
+    #
+    # Verified on Python 3.13.16 / OpenSSL 3.5.7 against prod-mysql.rods.me: TLSv1.3,
+    # TLS_AES_256_GCM_SHA384, peer authenticated.
+    context.verify_flags &= ~ssl.VERIFY_X509_STRICT
+
+    return context
 
 
 class _Reader:

@@ -10,7 +10,10 @@ connection is encrypted, whether a missing env var names itself, and which store
 configuration actually selects. The row-mapping tests are the cheap half.
 """
 
+import pathlib
 import urllib.parse
+
+import ssl
 
 import pytest
 
@@ -21,7 +24,13 @@ from reconciler.core import Cycle
 from reconciler.definition import GENESIS_STAGE
 
 DSN = "mysql://bob:s3cret@db.example.com:3307/reconciler"
-ENV_VARS = ("RECONCILER_STORE", "NEON_DATABASE_URL", "MYSQL_DATABASE_URL")
+
+# The real committed CA, so these tests exercise the certificate that is actually shipped —
+# a fabricated one would not catch the MySQL-auto-cert quirks that shaped `tls_context`.
+CA = str(pathlib.Path(__file__).resolve().parents[1]
+         / "deploy/inference/kustomize/base/reconciler/mysql-ca.pem")
+CA_DSN = f"{DSN}?ssl_ca={CA}"
+ENV_VARS = ("RECONCILER_STORE", "NEON_DATABASE_URL", "MYSQL_DATABASE_URL", "MYSQL_SSL_CA")
 
 
 @pytest.fixture
@@ -34,7 +43,7 @@ def clean_env(monkeypatch):
 
 def reader(cls, rows):
     """One reader whose only database call returns `rows`."""
-    instance = cls(DSN)
+    instance = cls(CA_DSN)
     instance._query = lambda sql, params: rows        # noqa: SLF001 — the seam being faked
     return instance
 
@@ -47,62 +56,87 @@ class Definition:
 
 # --- connection_args: every decision about encryption lives here ------------------------------
 
-def test_tls_is_on_without_being_asked_for():
-    """Plaintext must never be what you get by forgetting something.
-
-    The cluster reaches a managed MySQL VPS across the public internet carrying invoice
-    amounts and email subjects, so "nobody set the flag" and "we decided not to encrypt" have
-    to be distinguishable — which they are only if the default is the safe one.
+def test_a_connection_without_a_ca_is_refused_rather_than_downgraded():
+    """The bug this replaces: `ssl={}` reads as "TLS, nothing to verify against", but PyMySQL
+    branches on TRUTHINESS and an empty dict is falsy — so it disabled TLS outright. Measured
+    against the live server, `SHOW STATUS LIKE 'Ssl_cipher'` came back empty while the adapter
+    logged "encrypted but UNAUTHENTICATED". That was not an understated caveat, it was a false
+    statement about the wire, which is why there is now no CA-less path at all.
     """
-    assert "ssl" in connection_args(DSN)
+    with pytest.raises(ValueError, match="CA certificate is required"):
+        connection_args(DSN)
 
 
 def test_tls_cannot_be_disabled_at_all():
-    """Not a hardening choice — a correctness one.
+    """Refused as POLICY, and the docstring says so rather than claiming MySQL forces it.
 
-    MySQL 8.4 dropped `mysql_native_password`, so the account uses `caching_sha2_password`,
-    which needs TLS (or an RSA key exchange) for an uncached login. A plaintext attempt fails
-    as what reads like a bad password, so honouring `?ssl=disable` would only ever buy a
-    misleading error. It raises instead, and says why.
+    It does not: `caching_sha2_password` falls back to an RSA public-key exchange, and a
+    plaintext login against the real server succeeds. The reason is that this link crosses
+    the public internet carrying invoice amounts and email metadata — which is reason enough
+    without borrowing a false one.
     """
-    with pytest.raises(ValueError, match="caching_sha2_password"):
-        connection_args(DSN + "?ssl=disable")
+    with pytest.raises(ValueError, match="public internet"):
+        connection_args(CA_DSN + "&ssl=disable")
 
 
-def test_a_ca_turns_encryption_into_authentication():
-    """Encrypted-but-unverified and verified are different guarantees, so they are different
-    configurations rather than one flag — without a CA the connection resists eavesdropping
-    and not interception, and nothing should let a DSN imply otherwise."""
-    bare = connection_args(DSN)
-    assert bare["ssl"] == {} and not bare["ssl_verify_cert"]
-
-    verified = connection_args(DSN + "?ssl_ca=/etc/ssl/prod-mysql-ca.pem")
-    assert verified["ssl"] == {"ca": "/etc/ssl/prod-mysql-ca.pem"}
-    assert verified["ssl_verify_cert"]
+def test_the_ca_is_pinned_into_a_real_context():
+    args = connection_args(CA_DSN)
+    assert isinstance(args["ssl"], ssl.SSLContext)
+    # PyMySQL passes an SSLContext through untouched, so the flag pair it would otherwise
+    # consult is deliberately absent — two sources of truth for one decision.
+    assert "ssl_verify_cert" not in args and "ssl_verify_identity" not in args
 
 
-@pytest.mark.parametrize("dsn", [DSN, DSN + "?ssl_ca=/etc/ssl/prod-mysql-ca.pem"])
-def test_the_hostname_is_never_checked_against_the_certificate(dsn):
-    """`ssl_verify_identity` must stay off even when the CA is pinned.
+def test_the_peer_is_still_authenticated():
+    """The two deviations in `tls_context` are narrow, and this is what says so: the hostname
+    check is off and the strict-extension audit is off, but certificate verification against
+    the pinned CA is NOT — so loosening either one further would fail here."""
+    context = connection_args(CA_DSN)["ssl"]
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert len(context.get_ca_certs()) == 1
 
-    The server presents MySQL 8.4's auto-generated certificate, whose CN is
-    `MySQL_Server_8.4.8_Auto_Generated_Server_Certificate` rather than `prod-mysql.rods.me`,
-    so an identity check would reject a server we had just authenticated. Pinned-CA-without-
-    identity is the same trade the estate already makes for vmauth's self-signed cert — pinned
-    here so that turning it on "for security" fails a test that explains why it cannot be.
+
+def test_the_hostname_is_not_checked_against_the_certificate():
+    """The CN is `MySQL_Server_8.4.8_Auto_Generated_Server_Certificate`, not
+    `prod-mysql.rods.me`, so an identity check would reject a server the CA had just
+    vouched for."""
+    assert connection_args(CA_DSN)["ssl"].check_hostname is False
+
+
+def test_strict_x509_is_cleared_and_that_is_load_bearing():
+    """Pinned so nobody "hardens" it back on.
+
+    Python 3.13 enables VERIFY_X509_STRICT by default. MySQL 8.4's auto-generated CA carries
+    only `basicConstraints: CA:TRUE` and omits `authorityKeyIdentifier`, which RFC 5280 strict
+    validation requires — so with the flag set, every connection fails as
+    CERTIFICATE_VERIFY_FAILED "Missing Authority Key Identifier", which reads like a trust
+    problem and is not one. The second assertion is the honest other half: the committed CA
+    really does lack the extension, so this is a property of the certificate rather than a
+    blanket loosening.
     """
-    assert connection_args(dsn)["ssl_verify_identity"] is False
+    context = connection_args(CA_DSN)["ssl"]
+    assert not context.verify_flags & ssl.VERIFY_X509_STRICT
+
+    strict = ssl.create_default_context(cafile=CA)
+    assert strict.verify_flags & ssl.VERIFY_X509_STRICT, "3.13 default changed; revisit"
+
+
+def test_a_missing_ca_file_fails_at_wiring_not_at_first_query():
+    """A mount that did not happen should stop the run while the error still names the path,
+    not surface as a TLS failure in the middle of advancing a cycle."""
+    with pytest.raises(FileNotFoundError):
+        connection_args(f"{DSN}?ssl_ca=/no/such/ca.pem")
 
 
 def test_credentials_and_target_are_parsed():
-    args = connection_args(DSN)
+    args = connection_args(CA_DSN)
     assert (args["host"], args["port"]) == ("db.example.com", 3307)
     assert (args["user"], args["password"]) == ("bob", "s3cret")
     assert args["database"] == "reconciler"
 
 
 def test_the_port_defaults_rather_than_being_required():
-    assert connection_args("mysql://u:p@host/db")["port"] == 3306
+    assert connection_args(f"mysql://u:p@host/db?ssl_ca={CA}")["port"] == 3306
 
 
 def test_a_password_with_url_syntax_survives_without_corrupting_the_target():
@@ -119,7 +153,8 @@ def test_a_password_with_url_syntax_survives_without_corrupting_the_target():
     password = "p@ss:w/ord?x#y"
     encoded = urllib.parse.quote(password, safe="")
     args = connection_args(
-        f"mysql://rods_reconciler:{encoded}@prod-mysql.rods.me:3306/rods_reconciler")
+        f"mysql://rods_reconciler:{encoded}@prod-mysql.rods.me:3306/rods_reconciler",
+        ssl_ca=CA)
 
     assert args["password"] == password
     assert args["user"] == "rods_reconciler"
@@ -206,7 +241,7 @@ def test_the_store_cannot_read_awares_event_log():
     `await` names an Aware event fails to wire up instead, which is the failure this tier
     prefers — `world.NotYetImplemented` exists for exactly the same reason.
     """
-    assert not hasattr(MysqlMilestones(DSN), "signals")
+    assert not hasattr(MysqlMilestones(CA_DSN), "signals")
     assert hasattr(NeonMilestones("postgres://x/y"), "signals")
 
 
@@ -256,6 +291,7 @@ def test_neon_is_the_default_because_cutover_follows_a_backfill(clean_env):
 def test_selecting_mysql_switches_both_stores(clean_env):
     clean_env.setenv("RECONCILER_STORE", "mysql")
     clean_env.setenv("MYSQL_DATABASE_URL", DSN)
+    clean_env.setenv("MYSQL_SSL_CA", CA)
     assert isinstance(app.milestone_store(), MysqlMilestones)
     assert isinstance(app.task_store(), MysqlTasks)
 
@@ -286,27 +322,18 @@ def test_the_ca_path_can_come_from_the_manifest_instead_of_the_secret():
     volume became a secret edit — a console change with no diff and no revert, which is the
     shape this tier already rejected for `RECONCILER_STORE`.
     """
-    args = connection_args(DSN, ssl_ca="/etc/ssl/mysql/mysql-ca.pem")
-    assert args["ssl"] == {"ca": "/etc/ssl/mysql/mysql-ca.pem"}
-    assert args["ssl_verify_cert"]
+    assert isinstance(connection_args(DSN, ssl_ca=CA)["ssl"], ssl.SSLContext)
 
 
 def test_the_argument_wins_over_a_ca_in_the_dsn():
     """Both sources stay supported — the query param so a DSN is self-contained for a one-off
-    run from a laptop — but the manifest is the one that governs a deployed pod, so it has to
-    win rather than collide."""
-    args = connection_args(DSN + "?ssl_ca=/stale/from-the-secret.pem",
-                           ssl_ca="/etc/ssl/mysql/mysql-ca.pem")
-    assert args["ssl"] == {"ca": "/etc/ssl/mysql/mysql-ca.pem"}
+    laptop run — but the manifest governs a deployed pod, so it wins rather than collides.
 
-
-def test_no_ca_from_either_source_still_warns(caplog):
-    """Encrypted-but-unauthenticated is a real state and has to be audible: the certificate is
-    self-signed, so without a pinned CA nothing distinguishes the server from anything that can
-    answer on its address."""
-    with caplog.at_level("WARNING"):
-        connection_args(DSN)
-    assert "UNAUTHENTICATED" in caplog.text
+    The DSN here names a path that does not exist, which is what makes the assertion mean
+    something: if the query param won, this would raise FileNotFoundError instead.
+    """
+    args = connection_args(f"{DSN}?ssl_ca=/stale/from-the-secret.pem", ssl_ca=CA)
+    assert args["ssl"].get_ca_certs()[0]["subject"][0][0][1].startswith("MySQL_Server_")
 
 
 def test_the_store_takes_the_ca_path_from_the_environment(clean_env):
@@ -314,16 +341,24 @@ def test_the_store_takes_the_ca_path_from_the_environment(clean_env):
     function of its arguments and the adapter never reaches for os.environ."""
     clean_env.setenv("RECONCILER_STORE", "mysql")
     clean_env.setenv("MYSQL_DATABASE_URL", DSN)
-    clean_env.setenv("MYSQL_SSL_CA", "/etc/ssl/mysql/mysql-ca.pem")
+    clean_env.setenv("MYSQL_SSL_CA", CA)
     for store in (app.milestone_store(), app.task_store()):
-        assert store._args["ssl"] == {"ca": "/etc/ssl/mysql/mysql-ca.pem"}
+        assert isinstance(store._args["ssl"], ssl.SSLContext)
 
 
-def test_an_empty_ca_variable_is_the_same_as_an_unset_one(clean_env):
+def test_an_empty_ca_variable_is_refused_like_an_absent_one(clean_env):
     """A Doppler field that exists but is blank, or a manifest default nobody filled in, must
-    not resolve to a CA path of "" — PyMySQL would take it as a file to open and fail with a
-    path error instead of the honest unauthenticated warning."""
+    not quietly become "no CA" — which, before the fix this pins, meant no TLS."""
     clean_env.setenv("RECONCILER_STORE", "mysql")
     clean_env.setenv("MYSQL_DATABASE_URL", DSN)
     clean_env.setenv("MYSQL_SSL_CA", "")
-    assert app.milestone_store()._args["ssl"] == {}
+    with pytest.raises(ValueError, match="CA certificate is required"):
+        app.milestone_store()
+
+
+def test_the_committed_ca_is_the_one_the_server_presents():
+    """The certificate in `deploy/` is not decoration — it is the trust root, so a truncated
+    or swapped file must fail here rather than at the first connection from a pod."""
+    certs = ssl.create_default_context(cafile=CA).get_ca_certs()
+    assert len(certs) == 1
+    assert "MySQL_Server_8.4.8_Auto_Generated_CA_Certificate" in str(certs[0]["subject"])
