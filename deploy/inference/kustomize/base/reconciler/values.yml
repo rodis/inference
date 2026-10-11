@@ -54,6 +54,17 @@ extraObjects:
       # CronWorkflow overrides this per schedule.
       entrypoint: advance-cycles
 
+      # The MySQL server's CA, for the store the tier is migrating to. Declared at SPEC level
+      # rather than per template: Argo makes `spec.volumes` available to every template, and
+      # both templates share one container anchor, so one declaration covers both.
+      #
+      # The name is unhashed on purpose — see ./kustomization.yml for why a CRD reference
+      # cannot survive kustomize's content hash.
+      volumes:
+        - name: mysql-ca
+          configMap:
+            name: reconciler-mysql-ca
+
       templates:
         - name: advance-cycles
           # Walks every open cycle to its frontier. Creates nothing, ever — `open` is a
@@ -86,6 +97,24 @@ extraObjects:
             envFrom:
               - secretRef:
                   name: reconciler-credentials
+            # Which store the tier READS its own recorded state from. Plain config, not a
+            # secret, so it lives here and not in Doppler — and that is the point rather than
+            # tidiness: the cutover is then a commit with a diff and a revert, not a console
+            # edit. The estate already learned this the expensive way, with Argo schedules as
+            # manifests while Prefect's pause state lived in the console and did not survive a
+            # redeploy.
+            #
+            # `neon` until Phase 3. Flipping it to `mysql` is the cutover, and it must happen
+            # AFTER the backfill: an empty MySQL reads as "nothing is open" rather than as an
+            # error, which would make a sweep re-open every labelled mail. Rollback is this
+            # same word, changed back.
+            env:
+              - name: RECONCILER_STORE
+                value: neon
+            volumeMounts:
+              - name: mysql-ca
+                mountPath: /etc/ssl/mysql
+                readOnly: true
             resources:
               requests:
                 cpu: 50m
