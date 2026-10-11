@@ -142,16 +142,32 @@ def _store_dsn() -> tuple[str, str]:
     return choice, dsn
 
 
+def _mysql_ssl_ca() -> str | None:
+    """Where the MySQL server's CA is mounted — manifest config, not a credential.
+
+    Read here rather than inside the adapter so `connection_args` stays a pure function of its
+    arguments, and kept out of the DSN so Doppler holds a credential and nothing else: moving
+    the mount is then a manifest diff rather than a secret edit with no history. See
+    `deploy/inference/kustomize/base/reconciler/values.yml`, which sets this beside
+    `RECONCILER_STORE` and owns the volume it points at.
+    """
+    return os.environ.get("MYSQL_SSL_CA") or None
+
+
 def milestone_store() -> MilestoneStore:
     """The store a process run reads cycles and milestones from."""
     choice, dsn = _store_dsn()
-    return MysqlMilestones(dsn) if choice == STORE_MYSQL else NeonMilestones(dsn)
+    if choice == STORE_MYSQL:
+        return MysqlMilestones(dsn, ssl_ca=_mysql_ssl_ca())
+    return NeonMilestones(dsn)
 
 
 def task_store() -> tasks.OpenTaskStore:
     """The store the sweep reads open tasks from."""
     choice, dsn = _store_dsn()
-    return MysqlTasks(dsn) if choice == STORE_MYSQL else NeonTasks(dsn)
+    if choice == STORE_MYSQL:
+        return MysqlTasks(dsn, ssl_ca=_mysql_ssl_ca())
+    return NeonTasks(dsn)
 
 
 def finders() -> dict:

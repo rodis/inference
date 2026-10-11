@@ -104,8 +104,16 @@ _OPEN_TASKS_SQL = """
 """
 
 
-def connection_args(dsn: str) -> dict:
+def connection_args(dsn: str, *, ssl_ca: str | None = None) -> dict:
     """Parse `mysql://user:pass@host:port/db` into PyMySQL's keyword arguments.
+
+    `ssl_ca` is passed separately and **wins over** a `?ssl_ca=` in the DSN, because the two
+    carry different kinds of fact. The DSN is a credential, authored in Doppler; the path to a
+    mounted certificate is deploy-time config, authored in the manifest beside the volume that
+    puts it there. Threading it through the secret would mean moving the mount became a secret
+    edit — a console change with no diff and no revert, which is the shape this tier already
+    decided against for `RECONCILER_STORE`. The query param stays supported so a DSN is still
+    usable on its own, for a one-off run from a laptop.
 
     Extracted and public so it can be asserted directly — every decision that governs whether
     this connection is encrypted is made here, and a test should be able to read it without a
@@ -128,7 +136,23 @@ def connection_args(dsn: str) -> dict:
     parsed = urllib.parse.urlsplit(dsn)
     if parsed.scheme not in {"mysql", "mysql+pymysql"}:
         raise ValueError(f"not a mysql DSN: scheme {parsed.scheme!r}")
-    if not parsed.hostname:
+
+    try:
+        host, port = parsed.hostname, parsed.port
+    except ValueError as e:
+        # `urlsplit` raises here only when the authority was cut short, which in a DSN whose
+        # one variable part is a generated password means an unencoded `/`, `?` or `#` in it:
+        # each ends the authority early and leaves a scrap of the password where the port
+        # should be. Its own message talks about a PORT — nowhere near the mistake — so it is
+        # replaced rather than propagated. (`@` and `:` are safe unencoded, because the netloc
+        # splits on the LAST `@` and a password may contain colons; encode anyway.)
+        raise ValueError(
+            "could not read host/port from the mysql DSN. This is almost always an unencoded "
+            "'/', '?' or '#' in the password, which truncates the authority — percent-encode "
+            "the password in MYSQL_DATABASE_URL."
+        ) from e
+
+    if not host:
         raise ValueError("mysql DSN has no host")
 
     database = parsed.path.lstrip("/")
@@ -137,8 +161,8 @@ def connection_args(dsn: str) -> dict:
 
     query = urllib.parse.parse_qs(parsed.query)
     args: dict = {
-        "host": parsed.hostname,
-        "port": parsed.port or DEFAULT_PORT,
+        "host": host,
+        "port": port or DEFAULT_PORT,
         "user": urllib.parse.unquote(parsed.username or ""),
         "password": urllib.parse.unquote(parsed.password or ""),
         "database": database,
@@ -158,7 +182,7 @@ def connection_args(dsn: str) -> dict:
             "a plaintext attempt fails as what reads like a bad password. There is no useful "
             "no-TLS path to offer, so there is not one.")
 
-    ca = query.get("ssl_ca", [None])[0]
+    ca = ssl_ca or query.get("ssl_ca", [None])[0]
     # `ssl={"ca": …}` pins; `ssl={}` is PyMySQL's "negotiate TLS with nothing to check it
     # against". Either way TLS is negotiated — verified TLSv1.3 / TLS_AES_256_GCM_SHA384.
     args["ssl"] = {"ca": ca} if ca else {}
@@ -180,8 +204,8 @@ def connection_args(dsn: str) -> dict:
 class _Reader:
     """A fresh connection per query, and the shared parsing both readers need."""
 
-    def __init__(self, dsn: str):
-        self._args = connection_args(dsn)
+    def __init__(self, dsn: str, ssl_ca: str | None = None):
+        self._args = connection_args(dsn, ssl_ca=ssl_ca)
 
     def _query(self, sql: str, params: dict) -> list[tuple]:
         # pymysql is imported HERE, not at module scope, and that is a CI contract rather than

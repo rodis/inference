@@ -10,6 +10,8 @@ connection is encrypted, whether a missing env var names itself, and which store
 configuration actually selects. The row-mapping tests are the cheap half.
 """
 
+import urllib.parse
+
 import pytest
 
 from reconciler import app
@@ -103,12 +105,37 @@ def test_the_port_defaults_rather_than_being_required():
     assert connection_args("mysql://u:p@host/db")["port"] == 3306
 
 
-def test_a_password_with_url_syntax_in_it_survives():
-    """A generated password containing `@` or `/` is URL-encoded in the DSN, and a reader that
-    forgot to unquote would authenticate with the wrong string and report it as bad
-    credentials — a failure that reads like a permissions problem."""
-    args = connection_args("mysql://u:p%40ss%2Fword@host/db")
-    assert args["password"] == "p@ss/word"
+def test_a_password_with_url_syntax_survives_without_corrupting_the_target():
+    """The credential is ONE field — a whole DSN — so a generated password is percent-encoded
+    into it, and getting that wrong does not fail as "bad password".
+
+    Every URL metacharacter is exercised together because they fail in different places:
+    `@` and `:` are survivable unencoded (the authority splits on the LAST `@`, and a password
+    may contain colons), while `/`, `?` and `#` each end the authority early. So the thing
+    worth pinning is not just that the password round-trips but that the *host, port and
+    database still point where they should* — a DSN that silently aims elsewhere is a
+    credential bug wearing a network bug's clothes.
+    """
+    password = "p@ss:w/ord?x#y"
+    encoded = urllib.parse.quote(password, safe="")
+    args = connection_args(
+        f"mysql://rods_reconciler:{encoded}@prod-mysql.rods.me:3306/rods_reconciler")
+
+    assert args["password"] == password
+    assert args["user"] == "rods_reconciler"
+    assert (args["host"], args["port"]) == ("prod-mysql.rods.me", 3306)
+    assert args["database"] == "rods_reconciler"
+
+
+@pytest.mark.parametrize("char", ["/", "?", "#"])
+def test_an_unencoded_password_says_the_password_is_wrong_not_the_port(char):
+    """`urlsplit` reports this as "Port could not be cast to integer value", which sends you
+    looking at the DSN's port — the one part that is almost certainly fine. The real cause is
+    an unencoded character in the password, and the error has to say so, because the person
+    reading it has a secret they cannot print to compare."""
+    dsn = f"mysql://rods_reconciler:p{char}ss@prod-mysql.rods.me:3306/rods_reconciler"
+    with pytest.raises(ValueError, match="percent-encode the password"):
+        connection_args(dsn)
 
 
 @pytest.mark.parametrize("dsn, missing", [
@@ -248,3 +275,55 @@ def test_an_unknown_store_is_refused_rather_than_defaulted(clean_env):
     clean_env.setenv("NEON_DATABASE_URL", "postgres://x/y")
     with pytest.raises(app.ConfigurationError, match="mysqll"):
         app.milestone_store()
+
+
+# --- where the CA path comes from -------------------------------------------------------------
+
+def test_the_ca_path_can_come_from_the_manifest_instead_of_the_secret():
+    """A mount path is deploy-time config, not a credential.
+
+    Threading it through the DSN would mean Doppler held a filesystem path, so moving the
+    volume became a secret edit — a console change with no diff and no revert, which is the
+    shape this tier already rejected for `RECONCILER_STORE`.
+    """
+    args = connection_args(DSN, ssl_ca="/etc/ssl/mysql/mysql-ca.pem")
+    assert args["ssl"] == {"ca": "/etc/ssl/mysql/mysql-ca.pem"}
+    assert args["ssl_verify_cert"]
+
+
+def test_the_argument_wins_over_a_ca_in_the_dsn():
+    """Both sources stay supported — the query param so a DSN is self-contained for a one-off
+    run from a laptop — but the manifest is the one that governs a deployed pod, so it has to
+    win rather than collide."""
+    args = connection_args(DSN + "?ssl_ca=/stale/from-the-secret.pem",
+                           ssl_ca="/etc/ssl/mysql/mysql-ca.pem")
+    assert args["ssl"] == {"ca": "/etc/ssl/mysql/mysql-ca.pem"}
+
+
+def test_no_ca_from_either_source_still_warns(caplog):
+    """Encrypted-but-unauthenticated is a real state and has to be audible: the certificate is
+    self-signed, so without a pinned CA nothing distinguishes the server from anything that can
+    answer on its address."""
+    with caplog.at_level("WARNING"):
+        connection_args(DSN)
+    assert "UNAUTHENTICATED" in caplog.text
+
+
+def test_the_store_takes_the_ca_path_from_the_environment(clean_env):
+    """`MYSQL_SSL_CA` is read at the composition root, so `connection_args` stays a pure
+    function of its arguments and the adapter never reaches for os.environ."""
+    clean_env.setenv("RECONCILER_STORE", "mysql")
+    clean_env.setenv("MYSQL_DATABASE_URL", DSN)
+    clean_env.setenv("MYSQL_SSL_CA", "/etc/ssl/mysql/mysql-ca.pem")
+    for store in (app.milestone_store(), app.task_store()):
+        assert store._args["ssl"] == {"ca": "/etc/ssl/mysql/mysql-ca.pem"}
+
+
+def test_an_empty_ca_variable_is_the_same_as_an_unset_one(clean_env):
+    """A Doppler field that exists but is blank, or a manifest default nobody filled in, must
+    not resolve to a CA path of "" — PyMySQL would take it as a file to open and fail with a
+    path error instead of the honest unauthenticated warning."""
+    clean_env.setenv("RECONCILER_STORE", "mysql")
+    clean_env.setenv("MYSQL_DATABASE_URL", DSN)
+    clean_env.setenv("MYSQL_SSL_CA", "")
+    assert app.milestone_store()._args["ssl"] == {}
