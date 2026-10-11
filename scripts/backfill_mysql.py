@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["pymysql>=1.1", "psycopg[binary]>=3.1"]
+# dependencies = ["pymysql>=1.1", "psycopg[binary]>=3.1", "pyyaml", "pydantic>=2.6"]
 # ///
 """Rebuild the reconciler's MySQL from Aware's event log in Neon.
 
@@ -36,7 +36,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 
-from reconciler.adapters.mysql import connection_args   # noqa: E402
+from reconciler.adapters.mysql_dsn import connection_args   # noqa: E402
 from reconciler.definition import GENESIS_STAGE         # noqa: E402
 from reconciler.tasks import CLOSED_EVENT, OPENED_EVENT  # noqa: E402
 

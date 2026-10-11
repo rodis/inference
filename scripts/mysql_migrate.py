@@ -14,8 +14,8 @@ better than a reverse migration could.
     MYSQL_DATABASE_URL=mysql://... MYSQL_SSL_CA=deploy/.../mysql-ca.pem \\
         uv run scripts/mysql_migrate.py [--dry-run]
 
-Reuses `reconciler.adapters.mysql.connection_args`, so the TLS story is the one the adapter
-already proves out — a pinned CA, no plaintext path, and the same refusals. A migration runner
+Reuses `reconciler.adapters.mysql_dsn.connection_args`, so the TLS story is the one the
+adapter already proves out — a pinned CA, no plaintext path, and the same refusals. A migration runner
 that connected more loosely than the application would be the wrong place to discover that.
 
 Each file runs in ONE transaction with its `schema_migrations` row, so a half-applied file
@@ -34,7 +34,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 
-from reconciler.adapters.mysql import connection_args   # noqa: E402
+from reconciler.adapters.mysql_dsn import connection_args   # noqa: E402
 
 MIGRATIONS = pathlib.Path(__file__).resolve().parent.parent / "migrations"
 
