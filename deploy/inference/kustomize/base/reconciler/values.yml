@@ -111,6 +111,14 @@ extraObjects:
             env:
               - name: RECONCILER_STORE
                 value: neon
+              # Where the CA below is mounted. HERE and not in the DSN, for the same reason
+              # as RECONCILER_STORE: a filesystem path is deploy-time config, so it belongs
+              # beside the volume that creates it rather than inside a Doppler secret, where
+              # moving the mount would be a console edit with no diff. Doppler then holds a
+              # pure credential. Unset or empty means "no CA", which still negotiates TLS but
+              # cannot authenticate a self-signed server — the adapter warns when that happens.
+              - name: MYSQL_SSL_CA
+                value: /etc/ssl/mysql/mysql-ca.pem
             volumeMounts:
               - name: mysql-ca
                 mountPath: /etc/ssl/mysql
