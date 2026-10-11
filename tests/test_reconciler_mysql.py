@@ -55,8 +55,16 @@ def test_tls_is_on_without_being_asked_for():
     assert "ssl" in connection_args(DSN)
 
 
-def test_tls_can_be_disabled_but_only_by_typing_it():
-    assert "ssl" not in connection_args(DSN + "?ssl=disable")
+def test_tls_cannot_be_disabled_at_all():
+    """Not a hardening choice — a correctness one.
+
+    MySQL 8.4 dropped `mysql_native_password`, so the account uses `caching_sha2_password`,
+    which needs TLS (or an RSA key exchange) for an uncached login. A plaintext attempt fails
+    as what reads like a bad password, so honouring `?ssl=disable` would only ever buy a
+    misleading error. It raises instead, and says why.
+    """
+    with pytest.raises(ValueError, match="caching_sha2_password"):
+        connection_args(DSN + "?ssl=disable")
 
 
 def test_a_ca_turns_encryption_into_authentication():
@@ -64,11 +72,24 @@ def test_a_ca_turns_encryption_into_authentication():
     configurations rather than one flag — without a CA the connection resists eavesdropping
     and not interception, and nothing should let a DSN imply otherwise."""
     bare = connection_args(DSN)
-    assert bare["ssl"] == {} and not bare.get("ssl_verify_identity")
+    assert bare["ssl"] == {} and not bare["ssl_verify_cert"]
 
-    verified = connection_args(DSN + "?ssl_ca=/etc/ssl/dreamhost.pem")
-    assert verified["ssl"] == {"ca": "/etc/ssl/dreamhost.pem"}
-    assert verified["ssl_verify_cert"] and verified["ssl_verify_identity"]
+    verified = connection_args(DSN + "?ssl_ca=/etc/ssl/prod-mysql-ca.pem")
+    assert verified["ssl"] == {"ca": "/etc/ssl/prod-mysql-ca.pem"}
+    assert verified["ssl_verify_cert"]
+
+
+@pytest.mark.parametrize("dsn", [DSN, DSN + "?ssl_ca=/etc/ssl/prod-mysql-ca.pem"])
+def test_the_hostname_is_never_checked_against_the_certificate(dsn):
+    """`ssl_verify_identity` must stay off even when the CA is pinned.
+
+    The server presents MySQL 8.4's auto-generated certificate, whose CN is
+    `MySQL_Server_8.4.8_Auto_Generated_Server_Certificate` rather than `prod-mysql.rods.me`,
+    so an identity check would reject a server we had just authenticated. Pinned-CA-without-
+    identity is the same trade the estate already makes for vmauth's self-signed cert — pinned
+    here so that turning it on "for security" fails a test that explains why it cannot be.
+    """
+    assert connection_args(dsn)["ssl_verify_identity"] is False
 
 
 def test_credentials_and_target_are_parsed():

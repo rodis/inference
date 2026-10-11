@@ -41,6 +41,22 @@ to work.
 mail. That is why the store is selected by an env var that defaults to Neon: flipping it is a
 deliberate act that comes *after* the backfill, never before.
 
+**The target, verified from inside the cluster.** MySQL **8.4.8** at `prod-mysql.rods.me`,
+database `rods_reconciler`, user `rods_reconciler`, negotiating TLSv1.3 /
+TLS_AES_256_GCM_SHA384. Two properties of it shape the code here rather than the deployment:
+
+- The certificate is MySQL 8.4's **auto-generated, self-signed** one, so the CA must be pinned
+  and `ssl_verify_identity` must stay off — its CN is not the hostname.
+- The account uses **`caching_sha2_password`** (8.4 dropped `mysql_native_password`), which
+  needs TLS to authenticate at all. TLS is a correctness requirement here, not a hardening
+  option, which is why there is no plaintext path.
+
+**Allowable Hosts is enforced before the handshake and matches on reverse DNS.** The three
+current k8s worker IPs are allow-listed. The consequence worth knowing at 3am: a connection
+from a new or rebuilt node is refused in a way that looks like an **auth** failure, not a
+network one — so "bad credentials" after a node replacement is the allow-list, not the
+password.
+
 `pymysql` is a dependency of the *runner image* (`workers/reconciler/requirements.txt`) and
 deliberately not of the project, so a local checkout does not have it — `pip install -e .`
 would otherwise put a MySQL driver in the inference runtime's image too. To run this adapter
@@ -95,15 +111,19 @@ def connection_args(dsn: str) -> dict:
     this connection is encrypted is made here, and a test should be able to read it without a
     database.
 
-    **TLS is on unless explicitly disabled.** The reconciler carries invoice amounts, email
-    subjects and sender addresses, and the cluster reaches a managed MySQL VPS across the
-    public internet; defaulting to plaintext would make "nobody set the flag" indistinguishable
-    from "we decided not to encrypt". Opt out with `?ssl=disable`, which has to be typed.
+    **TLS is mandatory, and not only for privacy.** MySQL 8.4 removed `mysql_native_password`
+    as a built-in, so the account authenticates with `caching_sha2_password`, which requires
+    TLS (or an RSA key exchange) for any login that is not already cached. Without it the
+    connection fails as what reads like a bad password. `?ssl=disable` therefore raises rather
+    than being honoured — it would only ever produce a misleading error.
 
-    Note the two are not the same guarantee: with `ssl_ca` the server's certificate is verified,
-    and without it the connection is encrypted but the peer is unauthenticated — so it resists
-    eavesdropping and not interception. A warning says so rather than letting the DSN imply more
-    than it bought.
+    Two settings are not interchangeable and both are deliberate:
+
+    - `ssl_ca` **pins** the server's self-signed certificate. Without it the connection is
+      still encrypted but the peer is unauthenticated — eavesdropping is resisted,
+      interception is not — and a warning says so rather than letting the DSN imply more.
+    - `ssl_verify_identity` is **always False**, because the auto-generated certificate's CN
+      is not the hostname (see the comment at the assignment).
     """
     parsed = urllib.parse.urlsplit(dsn)
     if parsed.scheme not in {"mysql", "mysql+pymysql"}:
@@ -130,20 +150,30 @@ def connection_args(dsn: str) -> dict:
     }
 
     if query.get("ssl", ["require"])[0] == "disable":
-        logger.warning("TLS DISABLED for %s:%s by ?ssl=disable — credentials and process "
-                       "state cross the network in clear", args["host"], args["port"])
-        return args
+        raise ValueError(
+            "?ssl=disable is not supported. MySQL 8.4 removed mysql_native_password as a "
+            "built-in, so this account authenticates with caching_sha2_password — which "
+            "requires TLS (or an RSA key exchange) for any login that is not already cached. "
+            "TLS is load-bearing for the connection to work at all, not only for privacy, and "
+            "a plaintext attempt fails as what reads like a bad password. There is no useful "
+            "no-TLS path to offer, so there is not one.")
 
     ca = query.get("ssl_ca", [None])[0]
-    if ca:
-        args["ssl"] = {"ca": ca}
-        args["ssl_verify_cert"] = True
-        args["ssl_verify_identity"] = True
-    else:
-        # `ssl={}` is PyMySQL's "negotiate TLS with no CA to check it against".
-        args["ssl"] = {}
+    # `ssl={"ca": …}` pins; `ssl={}` is PyMySQL's "negotiate TLS with nothing to check it
+    # against". Either way TLS is negotiated — verified TLSv1.3 / TLS_AES_256_GCM_SHA384.
+    args["ssl"] = {"ca": ca} if ca else {}
+    args["ssl_verify_cert"] = bool(ca)
+    # NEVER True, even with a CA pinned. The server presents MySQL 8.4's auto-generated
+    # certificate, whose CN is `MySQL_Server_8.4.8_Auto_Generated_Server_Certificate` rather
+    # than the hostname, so an identity check cannot pass — it would reject a server we had
+    # just successfully authenticated. Pinning the CA is what authenticates the peer instead,
+    # the same trade the estate already makes for vmauth's self-signed certificate.
+    args["ssl_verify_identity"] = False
+
+    if not ca:
         logger.warning("TLS without ssl_ca: the connection to %s is encrypted but the server "
-                       "is UNAUTHENTICATED (no protection against interception)", args["host"])
+                       "is UNAUTHENTICATED. The certificate is self-signed, so only a pinned "
+                       "CA authenticates it.", args["host"])
     return args
 
 
