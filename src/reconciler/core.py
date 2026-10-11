@@ -109,6 +109,55 @@ class World(Protocol):
         ...
 
 
+class MilestoneStore(Protocol):
+    """Where this tier's own recorded state is read back from — cycles and their milestones.
+
+    The read half of ADR 0012's "a run is a pure function of what is already recorded", and
+    deliberately **read-only**: a milestone is written by POSTing it at the ingest gateway
+    (`World.record`), never by this port, so a store can never become a second writer
+    competing with the persister.
+
+    The task sweep's half of the same idea is `tasks.OpenTaskStore`, declared beside the code
+    that consumes it. Two ports rather than one because **no implementation has ever held
+    both** — a process run needs cycles and milestones, a sweep needs open tasks, and nothing
+    needs all of it.
+    """
+
+    def cycles(self, definition: ProcessDefinition) -> list[Cycle]:
+        """Every cycle ever opened for this process, oldest genesis first.
+
+        Completed and voided cycles included — deciding what to do with them is `reconcile`'s
+        job, and it already skips both cheaply.
+        """
+        ...
+
+    def milestones(self, definition: ProcessDefinition,
+                   cycle: Cycle) -> dict[str, Milestone]:
+        """The milestones recorded for one cycle, keyed by stage name.
+
+        Includes the genesis event under `GENESIS_STAGE`, so a stage may depend on nothing and
+        still have somewhere to look back to. Last write wins: a milestone re-emitted by a
+        retry must not produce two conflicting views of one stage.
+        """
+        ...
+
+
+class EventLog(Protocol):
+    """Raw events of one name, at or after `since` — **Aware's log, not this tier's state**.
+
+    Separate from `MilestoneStore` on purpose, and the separation is the point rather than
+    tidiness: a milestone is a fact this tier recorded about itself, while a signal is a fact
+    recorded by *Aware* that a process is waiting on ("you got home"). They live in different
+    systems the moment this tier owns a store of its own, so a store that cannot see Aware's
+    log should be unable to claim this port rather than implement it and raise.
+
+    Consumed through `finder.NeonEvents`, which adapts it to `finder.CandidateSource`.
+    """
+
+    def signals(self, name: str, since: int) -> list[tuple[int, dict]]:
+        ...
+
+
 def _ready(stage: Stage, milestones: dict[str, Milestone]) -> bool:
     return all(dep in milestones for dep in stage.after)
 

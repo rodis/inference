@@ -27,8 +27,9 @@ from reconciler.adapters.mail import (
     SmtpMailer,
 )
 from reconciler.adapters.ingest import DryRunEvents, GatewayEvents
+from reconciler.adapters.mysql import MysqlMilestones, MysqlTasks
 from reconciler.adapters.neon import NeonMilestones, NeonTasks
-from reconciler.core import Cycle, Milestone, Outcome, reconcile
+from reconciler.core import Cycle, Milestone, MilestoneStore, Outcome, reconcile
 from reconciler.definition import GENESIS_STAGE, ProcessDefinition, load_definitions
 from reconciler import tasks
 from reconciler.tasks import TASK_INGEST_APP
@@ -119,11 +120,38 @@ def sink_for(options: RunOptions, definition: ProcessDefinition):
     return GatewayMilestones(base, definition)
 
 
-def neon() -> NeonMilestones:
-    dsn = os.environ.get("NEON_DATABASE_URL")
+# Which store the tier reads its own recorded state from. Neon is the default because the
+# migration to MySQL is a cutover that happens AFTER a backfill — an empty `tasks` table reads
+# as "nothing is open" rather than as an error, so a sweep run against an unpopulated MySQL
+# would re-open every labelled mail. Flipping this is therefore a deliberate act, and a
+# rollback is the same act in reverse: config, not a deploy.
+STORE_NEON = "neon"
+STORE_MYSQL = "mysql"
+_DSN_VAR = {STORE_NEON: "NEON_DATABASE_URL", STORE_MYSQL: "MYSQL_DATABASE_URL"}
+
+
+def _store_dsn() -> tuple[str, str]:
+    """The selected store and its DSN, or a `ConfigurationError` naming what is missing."""
+    choice = os.environ.get("RECONCILER_STORE", STORE_NEON).strip().lower()
+    if choice not in _DSN_VAR:
+        raise ConfigurationError(
+            f"RECONCILER_STORE={choice!r} is not one of {sorted(_DSN_VAR)}")
+    dsn = os.environ.get(_DSN_VAR[choice])
     if not dsn:
-        raise ConfigurationError("NEON_DATABASE_URL is not set")
-    return NeonMilestones(dsn)
+        raise ConfigurationError(f"{_DSN_VAR[choice]} is not set (RECONCILER_STORE={choice})")
+    return choice, dsn
+
+
+def milestone_store() -> MilestoneStore:
+    """The store a process run reads cycles and milestones from."""
+    choice, dsn = _store_dsn()
+    return MysqlMilestones(dsn) if choice == STORE_MYSQL else NeonMilestones(dsn)
+
+
+def task_store() -> tasks.OpenTaskStore:
+    """The store the sweep reads open tasks from."""
+    choice, dsn = _store_dsn()
+    return MysqlTasks(dsn) if choice == STORE_MYSQL else NeonTasks(dsn)
 
 
 def finders() -> dict:
@@ -200,12 +228,9 @@ def sweep_tasks(*, label: str = tasks.DEFAULT_LABEL, user: str | None = None,
                 options: RunOptions | None = None) -> tasks.SweepPlan:
     """One sweep: reconcile the Gmail label against the recorded task events."""
     options = options or RunOptions()
-    dsn = os.environ.get("NEON_DATABASE_URL")
-    if not dsn:
-        raise ConfigurationError("NEON_DATABASE_URL is not set")
     return tasks.sweep(
         source=task_query(),
-        store=NeonTasks(dsn),
+        store=task_store(),
         sink=task_sink(options),
         user_id=user or os.environ.get("AWARE_USER_ID", "rods"),
         label=label,
@@ -274,7 +299,7 @@ def open_cycle(process: str, *, seq: int | None = None, period: dict | None = No
 
     if seq is None:
         # Only reachable when a schedule opened this cycle; a human always names the number.
-        seq = next_sequence(definition, neon().cycles(definition), year)
+        seq = next_sequence(definition, milestone_store().cycles(definition), year)
         logger.info("no sequence given; next unused for %d is %d", year, seq)
 
     context: dict = {"invoice_number": seq}
@@ -302,7 +327,7 @@ def advance(process: str, *, cycle_key: str | None = None,
     """
     options = options or RunOptions()
     definition = definition_named(process, options.processes_dir)
-    store = neon()
+    store = milestone_store()
     sink = sink_for(options, definition)
 
     cycles = store.cycles(definition)

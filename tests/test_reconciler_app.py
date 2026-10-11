@@ -186,7 +186,7 @@ def test_the_wiring_imports_with_no_third_party_packages_installed():
 
     # Exactly what CI does NOT install: it has pytest, ruff, pydantic and pyyaml,
     # then `pip install -e . --no-deps`. Everything else must be imported lazily.
-    blocked = {"psycopg", "dotenv", "prefect", "anthropic", "quixstreams"}
+    blocked = {"psycopg", "pymysql", "dotenv", "prefect", "anthropic", "quixstreams"}
     saved = {k: v for k, v in sys.modules.items()
              if k.startswith("reconciler") or k.split(".")[0] in blocked}
     try:
