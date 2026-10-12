@@ -74,8 +74,12 @@ class GatewayMilestones:
         self._definition = definition
         self._timeout = timeout
 
-    def record(self, cycle: Cycle, stage: str, payload: dict) -> Milestone:
-        now = event_time(payload, int(datetime.now(UTC).timestamp()))
+    def record(self, cycle: Cycle, stage: str, payload: dict,
+               *, now: int | None = None) -> Milestone:
+        # `now` is passed in when a store already recorded this fact (see `recording.py`), so
+        # the timeline and the store agree to the second rather than each calling the clock.
+        now = now if now is not None else event_time(payload,
+                                                     int(datetime.now(UTC).timestamp()))
         body = milestone_body(self._definition, cycle, stage, payload, now)
         request = urllib.request.Request(
             self._url,
@@ -106,8 +110,12 @@ class DryRunMilestones:
         self._definition = definition
         self.written: list[tuple[str, dict]] = []
 
-    def record(self, cycle: Cycle, stage: str, payload: dict) -> Milestone:
-        now = event_time(payload, int(datetime.now(UTC).timestamp()))
+    def record(self, cycle: Cycle, stage: str, payload: dict,
+               *, now: int | None = None) -> Milestone:
+        # `now` is passed in when a store already recorded this fact (see `recording.py`), so
+        # the timeline and the store agree to the second rather than each calling the clock.
+        now = now if now is not None else event_time(payload,
+                                                     int(datetime.now(UTC).timestamp()))
         self.written.append((self._definition.event_name(stage), payload))
         logger.info("[dry-run] would record %s for %s",
                     self._definition.event_name(stage), cycle.key)

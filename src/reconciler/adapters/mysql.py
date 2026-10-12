@@ -14,7 +14,9 @@ copy, the Aware timeline and both dashboard boards keep working untouched — an
 *reconstructible from the event log*, which is what keeps a store with no backup story from
 being a new single point of data loss.
 
-Reads only, exactly like `adapters.neon`. Nothing here writes.
+**Reads AND writes, unlike `adapters.neon`.** This is the store of record, so the reconciler
+writes it directly — see `recording.py` for the ordering and why the gateway POST that follows
+is best-effort. `adapters.neon` stays read-only because Neon's writer is Vector.
 
 **Two ports, not one** (see `core.MilestoneStore`): `MysqlMilestones` serves this tier's own
 state, `MysqlTasks` serves the sweep. Neither implements `core.EventLog` — `signals()` reads
@@ -74,7 +76,7 @@ import logging
 # migration runner both reach for it), it just no longer lives here — see mysql_dsn.
 from reconciler.adapters.mysql_dsn import connection_args, tls_context  # noqa: F401
 from reconciler.core import Cycle, Milestone
-from reconciler.definition import ProcessDefinition
+from reconciler.definition import GENESIS_STAGE, ProcessDefinition
 from reconciler.tasks import OpenTask
 
 logger = logging.getLogger("reconciler.adapters.mysql")
@@ -126,6 +128,28 @@ class _Reader:
             with connection.cursor() as cur:
                 cur.execute(sql, params)
                 return list(cur.fetchall())
+        finally:
+            connection.close()
+
+    def _execute(self, statements: list[tuple[str, dict]]) -> None:
+        """Run several statements in ONE transaction, or none of them.
+
+        Atomicity matters for exactly one case and it is the important one: opening a cycle
+        writes a `cycles` row *and* its genesis `milestones` row, and a crash between them
+        would leave a cycle whose own opening is not among its milestones — so `reconcile`
+        would see an empty milestone set and try to re-open a cycle that already exists.
+        """
+        import pymysql
+
+        connection = pymysql.connect(**self._args)
+        try:
+            with connection.cursor() as cur:
+                for sql, params in statements:
+                    cur.execute(sql, params)
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
         finally:
             connection.close()
 
@@ -188,3 +212,85 @@ class MysqlTasks(_Reader):
         }
         logger.info("%d open task(s) for %s", len(found), user_id)
         return found
+
+
+# --- writing (the store of record) -------------------------------------------------------------
+#
+# Every statement is an UPSERT rather than an INSERT, and that is the same property the whole
+# tier is built on rather than a convenience: a run is a pure function of recorded state and is
+# always safe to repeat, so a retry that re-records a milestone it already recorded must be a
+# no-op, not a duplicate-key crash.
+
+_PUT_CYCLE_SQL = """
+    INSERT INTO cycles (cycle_key, process, user_id, opened_at, context)
+    VALUES (%(cycle_key)s, %(process)s, %(user_id)s, %(opened_at)s, %(context)s) AS new
+    ON DUPLICATE KEY UPDATE process=new.process, user_id=new.user_id,
+                            opened_at=new.opened_at, context=new.context
+"""
+
+# The primary key (cycle_key, stage) IS the last-write-wins rule the Postgres reader applies in
+# Python; here the upsert expresses it directly.
+_PUT_MILESTONE_SQL = """
+    INSERT INTO milestones (cycle_key, stage, occurred_at, payload)
+    VALUES (%(cycle_key)s, %(stage)s, %(occurred_at)s, %(payload)s) AS new
+    ON DUPLICATE KEY UPDATE occurred_at=new.occurred_at, payload=new.payload
+"""
+
+# REOPENING LIVES HERE. Re-labelling a mail finished last month is a legitimate way to reopen
+# it, so an open must clear `closed_at` rather than be refused — the Postgres version preserves
+# the same rule by comparing latest-open against latest-close instead of testing for absence.
+_OPEN_TASK_SQL = """
+    INSERT INTO tasks (upstream_id, user_id, label, subject, from_name, from_address,
+                       opened_at, closed_at, closed_via)
+    VALUES (%(upstream_id)s, %(user_id)s, %(label)s, %(subject)s, %(from_name)s,
+            %(from_address)s, %(opened_at)s, NULL, NULL) AS new
+    ON DUPLICATE KEY UPDATE user_id=new.user_id, label=new.label, subject=new.subject,
+                            from_name=new.from_name, from_address=new.from_address,
+                            opened_at=new.opened_at, closed_at=NULL, closed_via=NULL
+"""
+
+# Closing a task that is not open is a no-op (zero rows matched), not an error: the sweep
+# derives closes from Gmail's current state, so a close for something already closed is a
+# legitimate repeat rather than a fault.
+_CLOSE_TASK_SQL = """
+    UPDATE tasks SET closed_at = %(closed_at)s, closed_via = %(closed_via)s
+     WHERE upstream_id = %(upstream_id)s
+"""
+
+
+class MysqlWriter(_Reader):
+    """Writes the facts the reconciler reads back. The store-of-record half.
+
+    Deliberately separate from the two readers rather than folded into them: a reader is handed
+    to `core` as a port and must stay incapable of writing, while this is handed to the sink.
+    """
+
+    def put_cycle(self, cycle: Cycle) -> None:
+        """A cycle and its genesis milestone, together or not at all."""
+        body = {"process": cycle.process, "cycle_key": cycle.key,
+                "user_id": cycle.user_id, "timestamp": cycle.opened_at, **cycle.context}
+        self._execute([
+            (_PUT_CYCLE_SQL, {"cycle_key": cycle.key, "process": cycle.process,
+                              "user_id": cycle.user_id, "opened_at": cycle.opened_at,
+                              "context": json.dumps(cycle.context, sort_keys=True)}),
+            (_PUT_MILESTONE_SQL, {"cycle_key": cycle.key, "stage": GENESIS_STAGE,
+                                  "occurred_at": cycle.opened_at,
+                                  "payload": json.dumps(body, sort_keys=True)}),
+        ])
+
+    def put_milestone(self, cycle: Cycle, stage: str, occurred_at: int, body: dict) -> None:
+        self._execute([(_PUT_MILESTONE_SQL, {
+            "cycle_key": cycle.key, "stage": stage, "occurred_at": int(occurred_at),
+            "payload": json.dumps(body, sort_keys=True)})])
+
+    def open_task(self, body: dict) -> None:
+        self._execute([(_OPEN_TASK_SQL, {
+            "upstream_id": body["upstream_id"], "user_id": body["user_id"],
+            "label": body.get("label") or "", "subject": body.get("subject"),
+            "from_name": body.get("from_name"), "from_address": body.get("from"),
+            "opened_at": int(body["timestamp"])})])
+
+    def close_task(self, body: dict) -> None:
+        self._execute([(_CLOSE_TASK_SQL, {
+            "upstream_id": body["upstream_id"], "closed_at": int(body["timestamp"]),
+            "closed_via": body.get("closed_via")})])

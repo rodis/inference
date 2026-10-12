@@ -27,13 +27,18 @@ from reconciler.adapters.mail import (
     SmtpMailer,
 )
 from reconciler.adapters.ingest import DryRunEvents, GatewayEvents
-from reconciler.adapters.mysql import MysqlMilestones, MysqlTasks
+from reconciler.adapters.mysql import MysqlMilestones, MysqlTasks, MysqlWriter
 from reconciler.adapters.neon import NeonMilestones, NeonTasks
 from reconciler.core import Cycle, Milestone, MilestoneStore, Outcome, reconcile
 from reconciler.definition import GENESIS_STAGE, ProcessDefinition, load_definitions
 from reconciler import tasks
 from reconciler.tasks import TASK_INGEST_APP
 from reconciler.finder import SignalFinder
+from reconciler.recording import (
+    DryRunWriter,
+    StoreBackedEvents,
+    StoreBackedMilestones,
+)
 from reconciler.world import NotYetImplemented, RealWorld
 
 logger = logging.getLogger("reconciler.app")
@@ -112,12 +117,38 @@ def services_for(options: RunOptions) -> Services:
 
 
 def sink_for(options: RunOptions, definition: ProcessDefinition):
-    if options.dry_run:
-        return DryRunMilestones(definition)
+    """Where a milestone goes: the store of record, then the gateway.
+
+    Wrapped ONLY when MySQL is selected. On Neon the gateway POST *is* the write — Vector
+    persists it — so wrapping there would make the tier a second writer competing with the
+    persister, which ADR 0012 forbids and which `adapters/neon.py` says in its first paragraph.
+    """
+    downstream = (DryRunMilestones(definition) if options.dry_run
+                  else GatewayMilestones(_vector_base(), definition))
+    writer = _writer(options)
+    return (StoreBackedMilestones(definition, writer, downstream) if writer
+            else downstream)
+
+
+def _vector_base() -> str:
     base = os.environ.get("VECTOR_BASE_URL")
     if not base:
         raise ConfigurationError("VECTOR_BASE_URL is not set (use dry_run to preview)")
-    return GatewayMilestones(base, definition)
+    return base
+
+
+def _writer(options: RunOptions):
+    """The store-of-record writer, or None when the store writes itself.
+
+    None on Neon is the whole point: there the gateway POST already reaches the store, via
+    Kafka and Vector. On MySQL nothing else writes, so the tier must.
+    """
+    if _store_choice() != STORE_MYSQL:
+        return None
+    if options.dry_run:
+        return DryRunWriter()          # before the DSN: a preview needs no connection either
+    _, dsn = _store_dsn()
+    return MysqlWriter(dsn, ssl_ca=_mysql_ssl_ca())
 
 
 # Which store the tier reads its own recorded state from. Neon is the default because the
@@ -130,12 +161,24 @@ STORE_MYSQL = "mysql"
 _DSN_VAR = {STORE_NEON: "NEON_DATABASE_URL", STORE_MYSQL: "MYSQL_DATABASE_URL"}
 
 
-def _store_dsn() -> tuple[str, str]:
-    """The selected store and its DSN, or a `ConfigurationError` naming what is missing."""
+def _store_choice() -> str:
+    """Which store is selected — answerable WITHOUT a DSN, deliberately.
+
+    Separate from `_store_dsn` because `sink_for` needs to know whether a writer is required
+    before it knows whether it can build one, and on Neon the answer is "no writer" — at which
+    point demanding a connection string would make a path that touches no database fail for
+    lack of database configuration. `walk_fresh` is exactly that path, and a test pins it.
+    """
     choice = os.environ.get("RECONCILER_STORE", STORE_NEON).strip().lower()
     if choice not in _DSN_VAR:
         raise ConfigurationError(
             f"RECONCILER_STORE={choice!r} is not one of {sorted(_DSN_VAR)}")
+    return choice
+
+
+def _store_dsn() -> tuple[str, str]:
+    """The selected store and its DSN, or a `ConfigurationError` naming what is missing."""
+    choice = _store_choice()
     dsn = os.environ.get(_DSN_VAR[choice])
     if not dsn:
         raise ConfigurationError(f"{_DSN_VAR[choice]} is not set (RECONCILER_STORE={choice})")
@@ -232,11 +275,14 @@ def task_query() -> "N8nGmailQuery":
 
 def task_sink(options: RunOptions):
     if options.dry_run:
-        return DryRunEvents()
+        writer = _writer(options)
+        return StoreBackedEvents(writer, DryRunEvents()) if writer else DryRunEvents()
     base = os.environ.get("VECTOR_BASE_URL")
     if not base:
         raise ConfigurationError("VECTOR_BASE_URL is not set (use dry_run to preview)")
-    return GatewayEvents(base, app=TASK_INGEST_APP)
+    writer = _writer(options)
+    sink = GatewayEvents(base, app=TASK_INGEST_APP)
+    return StoreBackedEvents(writer, sink) if writer else sink
 
 
 def sweep_tasks(*, label: str = tasks.DEFAULT_LABEL, user: str | None = None,
