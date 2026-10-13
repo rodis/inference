@@ -3,22 +3,25 @@ import { Check, Mail, ExternalLink } from "lucide-react";
 import { useAware } from "../../app/useAware";
 import { useQuery } from "../../app/useQuery";
 import {
-  ageLabel, gmailLink, groupTasks, senderOf, subjectOf, tasksUrl,
+  ageLabel, gmailLink, groupTasks, recentCloses, rememberClose, senderOf, subjectOf, tasksUrl,
   type Task,
 } from "./task";
 
 /** The Tasks board — mail you labelled `aware/todo`, and how long it has been sitting.
  *
- *  **The only board that writes.** Ticking a row calls `/api/tasks/close`, which takes the label
- *  off the message and records an `email_task_closed` event. That makes the dashboard a producer
- *  for the first time — a smaller departure than it sounds, since the decision is the click and
- *  the dashboard is only the input device, the same role the iOS Shortcuts play for
+ *  **The only board that writes.** Ticking a row calls `/api/tasks/close`, which takes the
+ *  `aware/todo` label off the message in Gmail. That is the entire action — the decision is the
+ *  click and the dashboard is only the input device, the same role the iOS Shortcuts play for
  *  `car_lock_state_change`.
  *
- *  Closing is deliberately NOT a local toggle. The task's state lives in the event log, so the
- *  tick has to reach it; what happens locally is only the optimistic redraw, so the row moves
- *  the instant you click instead of after a round trip. If the call fails the row comes back and
- *  says why. */
+ *  Closing is deliberately NOT a local toggle: the task's state lives in Gmail's label and in
+ *  the event log, so the tick has to reach them. But the dashboard no longer *records* the
+ *  close — the sweep does, on its next run, because it is the sole producer of
+ *  `email_task_closed` (two producers would mean two closes once the sweep's store of record
+ *  moved off Neon; see `app.py::close_task`). So for a few minutes the API still truthfully
+ *  reports the task as open, and the overlay below is what covers that window. It is persisted
+ *  rather than held in component state, because the gap now outlives a page reload. If the call
+ *  fails the row stays and says why. */
 
 const stamp = (epoch: number) =>
   new Date(epoch * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" });
@@ -33,7 +36,7 @@ function TaskRow({ task, now, stale, onClose, busy, failed }: {
       <button className="tsk-tick" disabled={busy || done}
         onClick={() => onClose(task)}
         aria-label={done ? "Closed" : `Mark "${subjectOf(task)}" done`}
-        title={done ? `closed ${task.closed_via === "sweep" ? "in Gmail" : "here"}` : "Mark done"}>
+        title={done ? "Closed" : "Mark done"}>
         <Check size={12} strokeWidth={3.5} />
       </button>
 
@@ -66,9 +69,13 @@ export default function TasksDashboard() {
   const { data, error } = useQuery<Task[]>(url);
 
   // Optimistic overlay. Keyed by upstream_id so it survives the list re-sorting under it, and
-  // merged rather than replacing the fetched rows — the server stays the source of truth and a
-  // refetch simply agrees with what is already on screen.
-  const [closedNow, setClosedNow] = useState<Record<string, number>>({});
+  // merged rather than replacing the fetched rows — the server stays the source of truth and
+  // catches up within one sweep, at which point this is simply redundant rather than wrong.
+  //
+  // Seeded from localStorage so a reload inside that window does not resurrect a ticked row.
+  // Lazy initialiser: read once on mount, not on every render.
+  const [closedNow, setClosedNow] = useState<Record<string, number>>(
+    () => recentCloses(Math.floor(Date.now() / 1000)));
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [failed, setFailed] = useState<Record<string, string>>({});
 
@@ -79,7 +86,9 @@ export default function TasksDashboard() {
   const now = Math.floor(Date.now() / 1000);
   const tasks = data.map((t) =>
     closedNow[t.upstream_id]
-      ? { ...t, closed: true, closed_epoch: closedNow[t.upstream_id], closed_via: "dashboard" }
+      // `closed_via` stays null rather than claiming a producer: nothing has recorded this
+      // close yet, and when the sweep does it will land as "sweep" like every other one.
+      ? { ...t, closed: true, closed_epoch: closedNow[t.upstream_id], closed_via: null }
       : t);
   const g = groupTasks(tasks, now);
 
@@ -102,12 +111,14 @@ export default function TasksDashboard() {
         throw new Error(detail.detail || `HTTP ${res.status}`);
       }
       const body = await res.json();
-      setClosedNow((c) => ({ ...c, [task.upstream_id]: body.closed_epoch || now }));
+      const closedEpoch = body.closed_epoch || now;
+      rememberClose(task.upstream_id, closedEpoch, now);
+      setClosedNow((c) => ({ ...c, [task.upstream_id]: closedEpoch }));
       // So the next visit to this board refetches rather than serving the pre-tick list.
       client?.invalidate("/api/tasks");
     } catch (e) {
-      // The row stays open, which is the truthful outcome: if the label came off but recording
-      // it failed, the hourly sweep closes it — and until then it really is still labelled.
+      // The row stays open, which is the truthful outcome: the relay is the only step, so a
+      // failure here means the label really is still on the message.
       setFailed((f) => ({ ...f, [task.upstream_id]: (e as Error).message }));
     } finally {
       setBusy((b) => ({ ...b, [task.upstream_id]: false }));
@@ -126,7 +137,7 @@ export default function TasksDashboard() {
         <div className="eyebrow">Processes</div>
         <h1 className="ptitle">Tasks</h1>
         <div className="psub">
-          mail you labelled <b>aware/todo</b> · {g.open} open · reconciled hourly
+          mail you labelled <b>aware/todo</b> · {g.open} open · reconciled every few minutes
         </div>
       </div>
 

@@ -158,16 +158,26 @@ deployments:
     description: >-
       Reconciles the `aware/todo` Gmail label against the recorded task events: opens anything
       labelled that we have no open for (repairing a dropped Gmail Trigger), and closes anything
-      open that is no longer labelled. This is the only way a task can close from outside the
-      dashboard — Gmail reports a label being ADDED and never one being removed, so a trigger
-      cannot see it at all.
+      open that is no longer labelled. Closing cannot come from a trigger at all — Gmail reports
+      a label being ADDED and never one being removed.
     parameters:
       label: aware/todo
     work_pool: *managed
     schedules:
-      # DAILY since 2026-09-03 — tier 2. Argo's `sweep-tasks` CronWorkflow runs every 15
-      # minutes now, which is what the board actually wanted; this is the repair-of-the-repair.
+      # DAILY since 2026-09-03 — tier 2. Argo's `sweep-tasks` CronWorkflow runs every 5 minutes
+      # now, which is what the board actually wanted; this is the repair-of-the-repair.
       # :37 rather than :17 so it does not queue behind the invoice advance for the same n8n
       # relay and the same Managed-pool slot.
+      #
+      # KNOWN DIVERGENCE since 2026-10-13: Argo's sweep reads MySQL, this one still reads Neon,
+      # because `RECONCILER_STORE` is unset here and Prefect Managed runs outside DreamHost's
+      # network — the MySQL account is granted to a DreamCompute range, so a Prefect worker
+      # cannot connect at all. The backstop is therefore acting on a derived copy (the gateway
+      # POSTs Argo makes) rather than on the store of record. It stays useful: Gmail is the
+      # authority either way, so the events it emits are correct, and Neon learns from its own
+      # POST. What it cannot do is update MySQL, so a close it emits during an Argo outage is
+      # re-emitted by Argo on recovery — one duplicate row on the timeline, which the
+      # latest-open-vs-latest-close join absorbs. Accepted rather than fixed; the alternative
+      # is retiring this deployment, and a backstop that over-reports beats none.
       - cron: "37 6 * * *"
         timezone: Europe/Zurich

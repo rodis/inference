@@ -104,3 +104,47 @@ export const senderOf = (task: Task) =>
 
 export const subjectOf = (task: Task) =>
   task.subject || "(no subject)";
+
+/** How long a locally-remembered tick keeps hiding a row that the server still calls open.
+ *
+ *  The sweep is the only producer of `email_task_closed` (see `app.py::close_task`), so between
+ *  ticking and the next sweep the API honestly still reports the task as open — the label is
+ *  off in Gmail, but nothing has recorded that yet. Without this the row would come back on the
+ *  next reload, which reads as "the tick didn't take".
+ *
+ *  Generous relative to the sweep's five-minute cron. Too long and a row stays hidden after a
+ *  close that genuinely failed to record; too short and a tick appears to undo itself. Half an
+ *  hour is six sweeps — long past the point where a missing
+ *  close means something is broken rather than merely pending, and short enough that it heals
+ *  itself without anyone clearing storage. */
+export const CLOSE_MEMORY_SECONDS = 1800;
+
+const CLOSE_MEMORY_KEY = "aware.tasks.closedNow";
+
+/** Ticks made in this browser that the server has not caught up with yet, pruned on read.
+ *
+ *  Storage is best-effort throughout: Safari's private mode throws on write, and a browser that
+ *  refuses it should still get a working board. A failure here costs the overlay, nothing else.
+ */
+export function recentCloses(now: number): Record<string, number> {
+  let stored: Record<string, number> = {};
+  try {
+    stored = JSON.parse(localStorage.getItem(CLOSE_MEMORY_KEY) || "{}");
+  } catch {
+    return {};
+  }
+  const live = Object.fromEntries(
+    Object.entries(stored).filter(
+      ([, epoch]) => typeof epoch === "number" && now - epoch < CLOSE_MEMORY_SECONDS));
+  if (Object.keys(live).length !== Object.keys(stored).length) {
+    try { localStorage.setItem(CLOSE_MEMORY_KEY, JSON.stringify(live)); } catch { /* ignore */ }
+  }
+  return live;
+}
+
+export function rememberClose(upstreamId: string, epoch: number, now: number): void {
+  try {
+    localStorage.setItem(CLOSE_MEMORY_KEY,
+      JSON.stringify({ ...recentCloses(now), [upstreamId]: epoch }));
+  } catch { /* ignore — the in-memory overlay still covers this session */ }
+}

@@ -7,12 +7,14 @@
  * Applying the label IS the decision, so there is nothing left to interpret.
  *
  * **This connector is an OPTIMISATION, not the source of truth.** `reconciler.tasks` sweeps the
- * same label hourly and emits an open for anything labelled that has no open event — so a
- * message this node drops is repaired within the hour rather than lost. That matters here more
- * than it did for parking: the Gmail Trigger is documented to miss messages, and
+ * same label every five minutes and emits an open for anything labelled that has no open event
+ * — so a message this node drops is repaired on the next sweep rather than lost. That matters
+ * here more than it did for parking: the Gmail Trigger is documented to miss messages, and
  * `gmail-query.workflow.ts`'s own header records why a polling connector could not be trusted
- * as the only witness to a label. What this buys is latency (~60s instead of ~1h), which is
- * exactly what you want between labelling a mail and seeing it on the board.
+ * as the only witness to a label. What this buys is latency (~60s instead of ~5min), which is
+ * exactly what you want between labelling a mail and seeing it on the board — and note the
+ * margin has narrowed a lot since the sweep stopped being hourly, so this node now earns its
+ * keep on reliability more than on speed.
  *
  * The corollary is a duty: **the body below must match `reconciler.tasks.opened_body` field for
  * field.** Two producers emit `email_labeled_todo`, and a consumer that could tell them apart

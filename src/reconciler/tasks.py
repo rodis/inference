@@ -31,10 +31,17 @@ the Gmail Trigger node is documented to drop messages, and `connectors/n8n/gmail
 header records why a polling connector could not be trusted as the only witness. Being a pure
 function of "now" versus "recorded" means the sweep cannot drift — there is no cursor to lose.
 
-The dashboard's tick is the fast path for closing: it removes the label and emits the close
-immediately, so the row goes away at once. The sweep then agrees with it, which is the property
-worth having — two producers of the same fact that cannot disagree, because both are derived
-from the label rather than from each other.
+**The sweep is the SOLE producer of `email_task_closed`** (since 2026-10-13). The dashboard's
+tick used to emit one too, immediately, with the sweep agreeing afterwards — safe while both
+read the same Neon log. It stopped being safe when this sweep's store of record moved to MySQL,
+which the dashboard cannot reach: a close emitted there would never land in the store the sweep
+reads, so the next sweep would find the task open-and-unlabelled and close it a second time,
+every time. The tick now only removes the label, which *is* the close as far as this file is
+concerned — unlabelling from the board and unlabelling from the Gmail app became the same act,
+and there is nothing left for two producers to disagree about. The cost is latency: a tick shows
+up on the Aware timeline on the next sweep rather than at once, which is what the interval buys.
+
+Historical rows still carry `closed_via: "dashboard"`; nothing emits it any more.
 """
 
 import logging
@@ -70,8 +77,10 @@ DEFAULT_LIMIT = 200
 # sends anything that is not `overland` to the standard adapter, so this needs no Vector change.
 TASK_INGEST_APP = "tasks"
 
+# How a close came about. Only one value is ever written now — the sweep is the sole producer
+# (see the header) — but it stays on the wire because recorded rows carry it and because a
+# second producer, if one is ever justified again, must be nameable rather than anonymous.
 CLOSED_VIA_SWEEP = "sweep"
-CLOSED_VIA_DASHBOARD = "dashboard"
 
 
 @dataclass(frozen=True)

@@ -13,7 +13,7 @@ A task is **two raw events**, joined on the Gmail message id:
 | event | meaning | producers |
 |---|---|---|
 | `email_labeled_todo` | the task opened | the n8n connector (fast) and the sweep (authoritative) |
-| `email_task_closed` | the task closed | the dashboard tick, and the sweep |
+| `email_task_closed` | the task closed | **the sweep, and only the sweep** |
 
 Both carry `upstream_id` (the Gmail message id), and the open list is an **anti-join**: labelled
 messages whose latest open is newer than their latest close. Same move the process board makes
@@ -40,30 +40,40 @@ growing table. Comparing timestamps makes reopening work by construction.
 Gmail reports a label being **added** and never one being removed. So no trigger can see a task
 finish, and closing cannot come from a connector at all.
 
-Two paths, and they cannot disagree, because both derive from the label rather than from each
-other:
+So the label is the only thing anyone changes, and **the sweep is the sole producer of
+`email_task_closed`** (`reconciler.tasks`, **every 5 minutes**). It asks Gmail *what is labelled
+right now?* and emits the difference in both directions:
 
-1. **The tick** (`POST /api/tasks/close`) removes the label, then records the close. Instant.
-2. **The sweep** (`reconciler.tasks`, **every 15 minutes**) asks Gmail *what is labelled right
-   now?* and emits the difference in both directions:
+```
+labelled in Gmail, no open event   ->  email_labeled_todo   (repairs a dropped trigger)
+open event, not labelled in Gmail  ->  email_task_closed    (done, however it was done)
+```
 
-   ```
-   labelled in Gmail, no open event   ->  email_labeled_todo   (repairs a dropped trigger)
-   open event, not labelled in Gmail  ->  email_task_closed    (done, however it was done)
-   ```
+Ticking a row on the board (`POST /api/tasks/close`) removes the label and stops there. It is
+therefore not a second path at all — it is the same path, entered from a different button, and
+indistinguishable to the sweep from unlabelling the mail on your phone.
 
-The sweep is what makes unlabelling on your phone work, and it is the repair path for the one
-inconsistency the tick can leave: if the label comes off but recording it fails, Gmail and the log
-disagree until the next sweep settles it.
+**It used to be a second path**, and that is worth recording because the reason it stopped is
+not the reason you would guess. Until 2026-10-13 the tick removed the label *and* POSTed
+`email_task_closed` at the ingest gateway, which made the close instant and left the sweep as a
+repair path. Both producers read the same Neon log, so they could not disagree. Then the sweep's
+store of record moved to MySQL (to stop a 15-minute cron waking a scale-to-zero Postgres — see
+the reconciler's own notes), and the dashboard cannot reach MySQL: a close emitted from the board
+would land in Neon, be invisible to the sweep, and the next run would find the task open-and-
+unlabelled and close it **again**. Two closes on the timeline for every tick.
 
-That interval was **hourly until 2026-09-03**, and not by choice. Prefect Managed bills a
+The fix was not to give the dashboard a second credential. It was to notice that *removing the
+label already is the close*, so there was never a need for two producers — only for one of them
+to be fast. The cost is latency, which is what the interval buys back: the board hides the row
+immediately (an overlay that survives a reload, bounded at 30 minutes), and the timeline catches
+up on the next sweep.
+
+That interval was **hourly until 2026-09-03** and not by choice: Prefect Managed bills a
 60-second minimum per run against a 30,000s/month workspace limit, so 15-minute scheduling was
-2,976 runs = 595% of quota — unavailable at any price on the free tier. Unlabelling a mail on your
-phone and watching it sit on the board for another 50 minutes was the visible cost. Scheduling now
-runs on Argo Workflows on the cluster, where the interval costs a few seconds of a node already
-paid for (ADR 0012's amendment, *scheduling moves to Argo Workflows*). The tick's ordering is load-bearing —
-label first, event only on success — because the reverse would record a close against a mail still
-sitting in the label, hiding a task that is not done.
+2,976 runs = 595% of quota — unavailable at any price on the free tier. Argo Workflows removed
+the per-run floor (ADR 0012's amendment, *scheduling moves to Argo Workflows*) and MySQL removed
+the Neon wake behind it, so what sets the number now is simply how long a ticked task may take to
+reach the timeline.
 
 ### The guard on absence
 
@@ -89,21 +99,24 @@ Ticking a task is the first thing the dashboard does besides read and write its 
   the standard adapter, so `/sensors/tasks` works with no Vector change, no transform and no new
   topic — the same reason the reconciler's milestones needed none.
 
-The three env vars (`GMAIL_LABEL_URL`, `MAIL_RELAY_TOKEN`, `VECTOR_BASE_URL`) are **optional** in
-the deploy manifest. Missing any of them disables the tick with a 503 naming what is unset; the
-board still reads, and closing in Gmail still works, because the sweep is what notices that.
+The two env vars (`GMAIL_LABEL_URL`, `MAIL_RELAY_TOKEN`) are **optional** in the deploy
+manifest. Missing either disables the tick with a 503 naming what is unset; the board still
+reads, and closing in Gmail still works, because the sweep is what notices that. There is no
+`VECTOR_BASE_URL` any more: the dashboard POSTs at no ingest gateway at all.
 
 ## One event name, two producers
 
-`email_labeled_todo` is emitted by both the connector and the sweep, and `email_task_closed` by
-both the tick and the sweep. A consumer able to tell them apart would be reading one of them
-wrong, so their bodies must match field for field.
+`email_labeled_todo` is emitted by both the connector and the sweep. A consumer able to tell
+them apart would be reading one of them wrong, so their bodies must match field for field.
+`email_task_closed` used to have two producers as well and no longer does — see above.
 
 They cannot share a module: the dashboard image is built with `dashboard/` as its Docker context,
 so `src/reconciler` is not importable there — the same build boundary that made
-`dashboard/processes.json` a generated file. `tests/test_task_contract.py` is what stops the
-duplication drifting; it reads `dashboard/app.py` and the connector as text and AST (neither can
-be imported in CI) and compares them against `reconciler.tasks`.
+`dashboard/processes.json` a generated file. `tests/test_task_contract.py` is what holds the
+line; it reads `dashboard/app.py` and the connector as text (neither can be imported in CI),
+checks the connector's fields against `reconciler.tasks`, and asserts that the dashboard POSTs
+at **no** `/sensors/…` endpoint, because a restored second producer would double every close on
+the timeline without failing anything else.
 
 ## What is live, and what is left
 
@@ -127,8 +140,8 @@ or update — the connector files record the exact call.
 Still needed before a task can appear:
 
 1. **Create the `aware/todo` label in Gmail** and apply it to something. Only you can.
-2. **Three Doppler keys** on `neon-credentials-for-dashboard`, or the tick 503s (reading works
-   regardless): `GMAIL_LABEL_URL` (the relay webhook), `MAIL_RELAY_TOKEN`, `VECTOR_BASE_URL`.
+2. **Two Doppler keys** on `neon-credentials-for-dashboard`, or the tick 503s (reading works
+   regardless): `GMAIL_LABEL_URL` (the relay webhook) and `MAIL_RELAY_TOKEN`.
 3. **`GMAIL_LABEL_URL` in the reconciler's Doppler config** is *not* needed — the sweep only
    reads Gmail and emits events; it never removes a label.
 
@@ -140,9 +153,9 @@ connectors/n8n/gmail-label-remove.workflow.ts   the outbound relay: take a label
 src/reconciler/tasks.py                         the pure diff + the sweep
 src/reconciler/adapters/ingest.py               generic raw-event POST
 src/reconciler/adapters/labels.py               the label relay client
-dashboard/app.py                                GET /api/tasks, POST /api/tasks/close
+dashboard/app.py                                GET /api/tasks, POST /api/tasks/close (label only)
 dashboard/web/src/dashboards/tasks/             the board
-deploy/inference/kustomize/base/reconciler/      the CronWorkflow: sweep-tasks, every 15 min
+deploy/inference/kustomize/base/reconciler/      the CronWorkflow: sweep-tasks, every 5 min
 prefect.yaml                                    email-tasks-sweep, the daily backstop at 06:37
 ```
 

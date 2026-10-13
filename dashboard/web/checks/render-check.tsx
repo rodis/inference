@@ -31,7 +31,7 @@ import EventModal from "../src/components/EventModal";
 import LevelsDashboard from "../src/dashboards/levels/LevelsDashboard";
 import ProcessesDashboard from "../src/dashboards/processes/ProcessesDashboard";
 import TasksDashboard from "../src/dashboards/tasks/TasksDashboard";
-import { ageLabel, gmailLink, groupTasks, subjectOf } from "../src/dashboards/tasks/task";
+import { CLOSE_MEMORY_SECONDS, ageLabel, gmailLink, groupTasks, recentCloses, rememberClose, subjectOf } from "../src/dashboards/tasks/task";
 import type { Task } from "../src/dashboards/tasks/task";
 import { chipsOf, cronText, statusOf } from "../src/dashboards/processes/process";
 import type { Cycle, ProcessDef } from "../src/dashboards/processes/process";
@@ -730,7 +730,7 @@ console.log("\n— email todo tasks —");
   // A reopened task (label re-applied after a close) arrives from the API already marked open,
   // because the SQL compares the LATEST open against the LATEST close. If that ever regressed to
   // an IS NULL anti-join it would vanish from the board while sitting labelled in Gmail — and
-  // the hourly sweep would emit a fresh open every hour, forever.
+  // the sweep would emit a fresh open on every run, forever.
   const reopened = groupTasks([task("r", 2, { closed: false, closed_epoch: NOW - 30 * D })], NOW);
   check("a reopened task is open again", reopened.open === 1 && reopened.recent.length === 1);
 
@@ -755,6 +755,44 @@ console.log("\n— email todo tasks —");
     </AwareContext.Provider>,
   );
   check("the tasks board renders", html.length > 0);
+
+  // --- the tick's memory ------------------------------------------------------------------
+  // The sweep is the sole producer of `email_task_closed`, so between a tick and the next
+  // sweep the API still honestly reports the task as open. This overlay is what stops a reload
+  // in that window resurrecting the row — and it is the only part of the board whose
+  // correctness depends on something outside React, so it is worth checking here.
+  const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const store = new Map<string, string>();
+  (globalThis as { localStorage?: unknown }).localStorage = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => { store.set(k, v); },
+    removeItem: (k: string) => { store.delete(k); },
+  };
+
+  check("nothing remembered reads as nothing", Object.keys(recentCloses(NOW)).length === 0);
+  rememberClose("m1", NOW, NOW);
+  check("a tick survives a reload", recentCloses(NOW)["m1"] === NOW);
+  rememberClose("m2", NOW, NOW);
+  check("a second tick does not displace the first",
+    Object.keys(recentCloses(NOW)).sort().join(",") === "m1,m2");
+  // Pruned rather than kept forever: past the window a still-open task is a real problem and
+  // hiding it would be the wrong answer.
+  const later = NOW + CLOSE_MEMORY_SECONDS + 1;
+  check("a stale tick stops hiding its row", Object.keys(recentCloses(later)).length === 0);
+  check("pruning is written back", !(store.get("aware.tasks.closedNow") || "").includes("m1"));
+
+  // Safari's private mode throws on write; a browser that refuses storage must still get a
+  // working board rather than a blank one.
+  (globalThis as { localStorage?: unknown }).localStorage = {
+    getItem: () => { throw new Error("denied"); },
+    setItem: () => { throw new Error("denied"); },
+  };
+  let survived = true;
+  try { rememberClose("m3", NOW, NOW); recentCloses(NOW); } catch { survived = false; }
+  check("storage that throws costs the overlay and nothing else", survived);
+
+  if (original) Object.defineProperty(globalThis, "localStorage", original);
+  else delete (globalThis as { localStorage?: unknown }).localStorage;
 }
 
 if (fails.length) throw new Error(`${fails.length} check(s) failed: ${fails.join("; ")}`);

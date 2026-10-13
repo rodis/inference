@@ -413,3 +413,75 @@ def test_prefect_is_a_daily_backstop_not_an_hourly_runner():
             f"{name} fires hourly ({cron!r}) = 744 runs/month, 149% of the 500-run Prefect "
             f"quota. Frequent scheduling belongs on Argo Workflows; Prefect is the daily "
             f"backstop (ADR 0012 amendment)")
+
+
+# --- the cutover: two entrypoints, two stores ---------------------------------------------------
+
+def _template_env(template: dict) -> dict[str, str]:
+    return {e["name"]: e["value"] for e in template["container"].get("env", [])}
+
+
+def _templates() -> dict[str, dict]:
+    values = yaml.safe_load(RECONCILER_VALUES.read_text())
+    return {t["name"]: t for t in next(o for o in values["extraObjects"]
+                                       if o["kind"] == "WorkflowTemplate")["spec"]["templates"]}
+
+
+def test_both_reconciler_templates_declare_their_store():
+    """`RECONCILER_STORE` has to be written out on every template, not inherited or defaulted.
+
+    Two things make its absence dangerous rather than merely untidy. The code default is
+    `neon` (`app.py::_store_choice`) and it is **silent**, so an omission reads exactly like a
+    deliberate choice. And the templates share a YAML anchor: `<<: *reconciler` followed by its
+    own `env:` REPLACES the merged list, so adding a variable to the anchor's env reaches one
+    template and silently skips the other — which is precisely how the two templates came to
+    read different stores in the first place.
+
+    Being on the wrong store is not a visible failure either. The reconciler would read a
+    store that is merely *behind*, find a stage's milestone missing, and redo the stage — for
+    `invoice_emailed`, by sending the invoice again.
+    """
+    for name, template in _templates().items():
+        env = _template_env(template)
+        assert env.get("RECONCILER_STORE") in {"neon", "mysql"}, (
+            f"WorkflowTemplate template {name!r} does not say which store it reads "
+            f"(got {env.get('RECONCILER_STORE')!r}). The code default is `neon` and it is "
+            f"silent; say it here so the manifest is the record of the cutover")
+        assert env.get("MYSQL_SSL_CA"), (
+            f"template {name!r} has no MYSQL_SSL_CA. There is no CA-less mode — PyMySQL treats "
+            f"an empty `ssl` mapping as falsy and connects in PLAINTEXT — so a template that "
+            f"flips to `mysql` without this would silently stop using TLS")
+
+
+def test_a_sweep_cannot_outlive_the_gap_to_its_next_firing():
+    """`activeDeadlineSeconds` must be shorter than the interval, or `Forbid` stops the clock.
+
+    The two settings drifted apart when the sweep went from `*/15` to `*/5` and its 600-second
+    deadline was left alone: a hung run would then still hold the slot when the next firing
+    came due, `concurrencyPolicy: Forbid` would drop that one, and the one after, for as long
+    as the hang lasted. The schedule would look healthy and fire nothing — the silent stall
+    this tier exists to avoid, reintroduced by a number nobody changed.
+
+    Only checked for `*/n` minute schedules; an hourly cron's gap is obvious and its deadline
+    is set against the work, not the grid.
+    """
+    templates = _templates()
+    for name, cron in _cron_workflows().items():
+        spec = cron["spec"]
+        deadline = spec["workflowSpec"].get("activeDeadlineSeconds")
+        if deadline is None:
+            continue
+        for schedule in spec["schedules"]:
+            minute = schedule.split()[0]
+            if not minute.startswith("*/"):
+                continue
+            gap = int(minute[2:]) * 60
+            assert deadline < gap, (
+                f"CronWorkflow {name!r} fires every {gap}s but lets a run live {deadline}s — a "
+                f"hung run holds the `Forbid` slot past the next firing and the schedule "
+                f"silently stops")
+            assert spec.get("startingDeadlineSeconds", 0) < gap, (
+                f"CronWorkflow {name!r} would catch up a missed firing up to "
+                f"{spec['startingDeadlineSeconds']}s late, which at a {gap}s interval collides "
+                f"with the next one")
+        assert spec["workflowSpec"]["entrypoint"] in templates
