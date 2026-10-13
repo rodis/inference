@@ -68,13 +68,19 @@ controller:
   # THE COUNTERPART TO ARCHIVE-OFF, and the single most load-bearing block in this file.
   #
   # With no archive, the completed `Workflow` object IS the only record of a run — so nothing
-  # reaps it. `sweep-tasks` fires every 15 minutes: unbounded, that is ~2,900 Workflow objects
+  # reaps it. `sweep-tasks` fires every 5 minutes: unbounded, that is ~8,800 Workflow objects
   # and their pods accumulating in etcd every month, and etcd is the one store in this
   # architecture that must not be treated as a data sink.
   #
-  # So: keep three days of history (long enough to debug a weekend's worth of failures, short
-  # enough to stay bounded at ~300 objects), and delete pods once their workflow succeeded —
-  # a FAILED run keeps its pods, because their logs are the whole reason to look.
+  # So: keep three days of history, and delete pods once their workflow succeeded — a FAILED
+  # run keeps its pods, because their logs are the whole reason to look.
+  #
+  # Three days is now the OUTER bound rather than the binding one: each CronWorkflow also sets
+  # `successfulJobsHistoryLimit: 3` / `failedJobsHistoryLimit: 5`, which the cron controller
+  # enforces by deletion, so the steady state is a couple of dozen objects regardless of how
+  # often the sweep fires. That is what makes raising the frequency free here — but the TTL
+  # stays, because it is the only thing covering a Workflow submitted by hand (the
+  # `sweep-tasks-now-` idiom in CLAUDE.md), which no cron owns and no history limit reaps.
   workflowDefaults:
     spec:
       ttlStrategy:

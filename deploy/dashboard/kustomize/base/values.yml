@@ -26,15 +26,20 @@ deployment:
           name: neon-credentials-for-dashboard
           key: DASHBOARD_PASSWORD
     # --- the email todo board's one outbound action ---
-    # Ticking a task off removes the `aware/todo` label in Gmail and records an
-    # `email_task_closed` event. This is the only thing the dashboard writes outside its own
-    # dashboard_prefs table, and it holds no Google credential to do it: the OAuth token stays
-    # in n8n, and this calls a relay that may transmit but never decides.
+    # Ticking a task off removes the `aware/todo` label in Gmail. That is the whole action: the
+    # *recording* of the close belongs to the sweep, which is its sole producer, so ticking
+    # here and unlabelling in the Gmail app are the same act and neither needs this pod to
+    # reach the ingest gateway. (`VECTOR_BASE_URL` was here until 2026-10-13 for exactly that
+    # POST; it went when the sweep's store of record moved to a MySQL the dashboard cannot
+    # reach, which would have made every tick produce two closes.)
     #
-    # All three are OPTIONAL. Missing any of them disables the tick with a 503 that names what
-    # is unset — reading the board still works, so a half-configured deploy degrades to the
-    # read-only view rather than to a broken page. Closing a task in Gmail directly still works
-    # regardless, because the hourly sweep is what notices that.
+    # It holds no Google credential either: the OAuth token stays in n8n, and this calls a
+    # relay that may transmit but never decides.
+    #
+    # Both are OPTIONAL. Missing either disables the tick with a 503 that names what is unset —
+    # reading the board still works, so a half-configured deploy degrades to the read-only view
+    # rather than to a broken page. Closing a task in Gmail directly still works regardless,
+    # because the sweep is what notices that.
     GMAIL_LABEL_URL:
       valueFrom:
         secretKeyRef:
@@ -46,12 +51,6 @@ deployment:
         secretKeyRef:
           name: neon-credentials-for-dashboard
           key: MAIL_RELAY_TOKEN
-          optional: true
-    VECTOR_BASE_URL:
-      valueFrom:
-        secretKeyRef:
-          name: neon-credentials-for-dashboard
-          key: VECTOR_BASE_URL
           optional: true
   ports:
     - name: http
