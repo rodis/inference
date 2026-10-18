@@ -123,25 +123,33 @@ extraObjects:
             # stops saying which store it reads — the code default (`neon`, in app.py) is
             # silent, so an accidental omission would look exactly like a deliberate choice.
             #
-            # STILL `neon` for the invoice advance, deliberately, while `sweep-tasks` runs on
-            # MySQL. This is the risky half to move: an advance reading a store that is behind
-            # cannot see the milestone that gates a stage, so it REDOES the stage — which for
-            # `invoice_emailed` means sending the invoice a second time. The sweep has no such
-            # act: re-closing a task costs a duplicate row on the timeline. So the cheap half
-            # goes first and this one follows once the store has been seen to keep up, after a
-            # fresh backfill (the writer only runs on `mysql`, so cycles and milestones recorded
-            # in the meantime reach Neon and not MySQL).
+            # `mysql` since 2026-10-18 — the SECOND half of the cutover, and the risky one.
+            # An advance reading a store that is behind cannot see the milestone that gates a
+            # stage, so it REDOES the stage, and for `invoice_emailed` that means sending the
+            # invoice a second time. The sweep had no such act (re-closing a task costs one
+            # duplicate row on the timeline), which is why it went first.
+            #
+            # What made this safe was the WINDOW, not elapsed time. At the cutover all three
+            # cycles were `complete`, so there was no incomplete stage left to redo, and the
+            # next cycle does not exist until the monthly Prefect `open` mints it — a cycle is
+            # opened by an event, never by this schedule (ADR 0012). Drift was measured at
+            # zero first: no reconciler-tier event had reached Neon since the backfill, and a
+            # `reconcile --dry-run` replay over every cycle produced byte-identical plans from
+            # both stores. Moving it mid-cycle would have needed a fresh backfill immediately
+            # beforehand, because the writer only runs on `mysql` and anything recorded while
+            # this template still said `neon` reaches Neon alone.
             env:
               - name: RECONCILER_STORE
-                value: neon
+                value: mysql
               # Where the CA is mounted. HERE and not in the DSN, for the same reason as
               # RECONCILER_STORE: a filesystem path is deploy-time config, so it belongs beside
               # the volume that creates it rather than inside a Doppler secret, where moving the
               # mount would be a console edit with no diff. Doppler then holds a pure
-              # credential. Set on BOTH templates even though only one reads MySQL today — the
-              # path is a property of the image and the volume, not of the cutover, so leaving
-              # it off the Neon template would turn its eventual flip into a two-line change
-              # with one line easy to forget.
+              # credential. Set on BOTH templates — it was written on both while only one
+              # read MySQL, because the path is a property of the image and the volume rather
+              # than of the cutover, and leaving it off the Neon template would have made the
+              # flip a two-line change with one line easy to forget. Both read MySQL since
+              # 2026-10-18, so it is now simply required twice (see the anchor TRAP above).
               - name: MYSQL_SSL_CA
                 value: /etc/ssl/mysql/mysql-ca.pem
           retryStrategy: &retries
@@ -185,10 +193,11 @@ extraObjects:
               # RECONCILER_STORE: a filesystem path is deploy-time config, so it belongs beside
               # the volume that creates it rather than inside a Doppler secret, where moving the
               # mount would be a console edit with no diff. Doppler then holds a pure
-              # credential. Set on BOTH templates even though only one reads MySQL today — the
-              # path is a property of the image and the volume, not of the cutover, so leaving
-              # it off the Neon template would turn its eventual flip into a two-line change
-              # with one line easy to forget.
+              # credential. Set on BOTH templates — it was written on both while only one
+              # read MySQL, because the path is a property of the image and the volume rather
+              # than of the cutover, and leaving it off the Neon template would have made the
+              # flip a two-line change with one line easy to forget. Both read MySQL since
+              # 2026-10-18, so it is now simply required twice (see the anchor TRAP above).
               - name: MYSQL_SSL_CA
                 value: /etc/ssl/mysql/mysql-ca.pem
           retryStrategy: *retries
