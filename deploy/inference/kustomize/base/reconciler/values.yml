@@ -115,13 +115,15 @@ extraObjects:
             # manifests while Prefect's pause state lived in the console and did not survive a
             # redeploy.
             #
-            # TRAP, now that the two entrypoints read DIFFERENT stores: this block sits inside
-            # the `&reconciler` anchor, and `<<: *reconciler` followed by its own `env:`
-            # REPLACES this list rather than extending it. So `sweep-tasks` below repeats
-            # MYSQL_SSL_CA, and anything added here has to be added there too.
-            # `test_both_reconciler_templates_declare_their_store` fails if either template
-            # stops saying which store it reads — the code default (`neon`, in app.py) is
-            # silent, so an accidental omission would look exactly like a deliberate choice.
+            # TRAP for any template added later: this block sits inside the `&reconciler`
+            # anchor, and `<<: *reconciler` followed by its own `env:` REPLACES this list
+            # rather than extending it, so such a template must repeat RECONCILER_STORE and
+            # MYSQL_SSL_CA. `test_both_reconciler_templates_declare_their_store` fails if any
+            # template stops saying which store it reads — the code default (`neon`, in
+            # app.py) is silent, so an omission would look exactly like a deliberate choice.
+            #
+            # `sweep-tasks` used to be the second template here. Since 2026-11-02 it runs as
+            # the TaskSweep Kopf operator in the standalone `aware-reconciler` app.
             #
             # `mysql` since 2026-10-18 — the SECOND half of the cutover, and the risky one.
             # An advance reading a store that is behind cannot see the milestone that gates a
@@ -165,43 +167,6 @@ extraObjects:
               duration: "30s"
               factor: 2
 
-        - name: sweep-tasks
-          # Reconciles the `aware/todo` Gmail label against recorded task events. The only way
-          # a task can close from outside the dashboard: Gmail reports a label being ADDED and
-          # never one being removed, so no trigger can see a task finish.
-          container:
-            <<: *reconciler
-            args: ["sweep-tasks"]
-            # WHICH STORE this entrypoint reads its own recorded state from. Plain config,
-            # not a secret, so it lives here and not in Doppler — and that is the point rather
-            # than tidiness: the cutover is a commit with a diff and a revert, not a console
-            # edit. The estate already learned this the expensive way, with Argo schedules as
-            # manifests while Prefect's pause state lived in the console and did not survive a
-            # redeploy.
-            #
-            # `mysql` — THE CUTOVER, and it had to happen after the backfill: an empty MySQL
-            # reads as "nothing is open" rather than as an error, so a sweep against one would
-            # re-open every labelled mail. Rollback is this same word, changed back.
-            #
-            # On `mysql` the tier writes the store first and POSTs at the gateway second,
-            # best-effort (src/reconciler/recording.py). On `neon` it does not wrap the sink at
-            # all, because there the POST *is* the write.
-            env:
-              - name: RECONCILER_STORE
-                value: mysql
-              # Where the CA is mounted. HERE and not in the DSN, for the same reason as
-              # RECONCILER_STORE: a filesystem path is deploy-time config, so it belongs beside
-              # the volume that creates it rather than inside a Doppler secret, where moving the
-              # mount would be a console edit with no diff. Doppler then holds a pure
-              # credential. Set on BOTH templates — it was written on both while only one
-              # read MySQL, because the path is a property of the image and the volume rather
-              # than of the cutover, and leaving it off the Neon template would have made the
-              # flip a two-line change with one line easy to forget. Both read MySQL since
-              # 2026-10-18, so it is now simply required twice (see the anchor TRAP above).
-              - name: MYSQL_SSL_CA
-                value: /etc/ssl/mysql/mysql-ca.pem
-          retryStrategy: *retries
-
   - apiVersion: argoproj.io/v1alpha1
     kind: CronWorkflow
     metadata:
@@ -242,52 +207,3 @@ extraObjects:
         # Bounded so a hung HTTP call cannot hold the `Forbid` slot indefinitely and silently
         # stop the schedule — the exact silent stall this tier exists to avoid.
         activeDeadlineSeconds: 900
-
-  - apiVersion: argoproj.io/v1alpha1
-    kind: CronWorkflow
-    metadata:
-      name: sweep-tasks
-      namespace: inference
-    spec:
-      # EVERY 5 MINUTES — and the interval is no longer a compromise, it is a LATENCY BUDGET.
-      #
-      # Three successive constraints, worth keeping in one place because each one stopped
-      # mattering for a different reason:
-      #
-      #   hourly    — Prefect Managed billed a 60-second minimum against 30,000s/month, so
-      #               15-minute scheduling was 2,976 runs = 595% of quota, unavailable at any
-      #               price. Moving to Argo removed the per-run floor.
-      #   */15      — free compute, but every run woke a scale-to-zero Neon compute for five
-      #               minutes to do ten seconds of work: a 33% duty cycle by construction, on a
-      #               day when nothing happened. Reading MySQL instead removed that too.
-      #   */5       — nothing structural left. What sets it now is that the sweep became the
-      #               SOLE producer of `email_task_closed` (the dashboard's tick only removes
-      #               the label — see dashboard/app.py::close_task), so this interval IS how
-      #               long a ticked task takes to reach the Aware timeline. The board hides the
-      #               row meanwhile; the timeline simply waits.
-      #
-      # Not tighter than five, because every run is a Gmail query through the in-cluster n8n
-      # relay — 288/day at this rate — and the thing being waited on is a human reading mail.
-      #
-      # Plural and a list — see `advance-cycles` above for what the singular form costs.
-      schedules:
-        - "*/5 * * * *"
-      timezone: Europe/Zurich
-      concurrencyPolicy: Forbid
-      # Was 300 — the whole interval, which at `*/5` would let a missed firing be caught up
-      # just as the next one is due, and `Forbid` would then drop the next one instead. A
-      # sweep is a pure function of what is labelled now, so a skipped firing costs five
-      # minutes of latency and nothing else; catching one up late is worth less than keeping
-      # the schedule on its grid.
-      startingDeadlineSeconds: 120
-      successfulJobsHistoryLimit: 3
-      failedJobsHistoryLimit: 5
-      workflowSpec:
-        workflowTemplateRef:
-          name: reconciler
-        entrypoint: sweep-tasks
-        # Deliberately under the interval, so a hung run frees the `Forbid` slot before the
-        # next firing rather than silently stopping the schedule. Moved 600 -> 240 with the
-        # interval: at `*/5` the old value was longer than the gap it was meant to fit inside,
-        # which is the failure it exists to prevent rather than a conservative setting.
-        activeDeadlineSeconds: 240
