@@ -173,6 +173,11 @@ extraObjects:
       name: advance-cycles
       namespace: inference
     spec:
+      # SUSPENDED 2026-11-03: advancing moved to the `Process` Kopf controller in the standalone
+      # aware-reconciler app, which reads MySQL with the real definition at 98/h (this image is
+      # still 96/h). Suspended rather than deleted so this repo's schedule tests stay meaningful
+      # until the whole reconciler deploy is removed from `inference`.
+      suspend: true
       # Hourly, as it was on Prefect — every stage this waits on moves on human timescales (a
       # person applying a label, a bank sending a notification), and a pure function of
       # recorded events loses nothing by being asked less often. Free compute changed the
